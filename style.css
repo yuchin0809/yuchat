@@ -3076,3 +3076,175 @@ button:disabled {
     }
 
 }
+
+
+/* ----- 大富豪 ルール設定 ----- */
+
+.daifugo-rules,
+.daifugo-last-result {
+    margin: 12px 0;
+    padding: 12px 14px;
+
+    border-radius: 14px;
+
+    background: #fff;
+
+    border: 1px solid #ffe1ec;
+}
+
+.daifugo-rules h4,
+.daifugo-last-result h4 {
+    margin: 0 0 8px;
+
+    font-size: 13px;
+}
+
+.daifugo-last-result div {
+    font-size: 13px;
+    line-height: 1.7;
+}
+
+.daifugo-rules-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 6px 12px;
+}
+
+.daifugo-rule {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+
+    font-size: 13px;
+
+    cursor: pointer;
+}
+
+.daifugo-rule input {
+    width: auto;
+    margin: 0;
+}
+
+.daifugo-rule input:disabled + span {
+    color: #888;
+}
+
+.daifugo-rules-summary {
+    margin: 4px 0 8px;
+
+    font-size: 12px;
+    color: #888;
+}
+
+
+/* ----- ゲーム招待（将棋・オセロ） ----- */
+
+.tabs button {
+    position: relative;
+}
+
+.tabs button.has-invite::after {
+    content: "";
+
+    position: absolute;
+    top: 8px;
+    right: calc(50% - 18px);
+
+    width: 8px;
+    height: 8px;
+
+    border-radius: 50%;
+
+    background: #ff4d6d;
+}
+
+.game-invites {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+
+    margin-bottom: 12px;
+}
+
+.game-invite-card,
+.game-invite-panel {
+    padding: 12px 14px;
+
+    border: 1px solid #ffe1ec;
+    border-radius: 12px;
+
+    background: #fff;
+}
+
+.game-invite-text,
+.game-invite-title {
+    font-size: 14px;
+    font-weight: 700;
+
+    margin-bottom: 8px;
+}
+
+.game-invite-actions,
+.game-invite-row {
+    display: flex;
+    gap: 8px;
+}
+
+.game-invite-row select {
+    flex: 1;
+    min-width: 0;
+
+    padding: 10px;
+
+    border: 1px solid #e1e4e8;
+    border-radius: 9px;
+
+    background: #fff;
+
+    font-size: 14px;
+}
+
+.game-invite-actions button,
+.game-invite-row button {
+    padding: 10px 16px;
+
+    border: none;
+    border-radius: 9px;
+
+    font-size: 14px;
+}
+
+.game-invite-actions button {
+    flex: 1;
+}
+
+.game-invite-accept,
+.game-invite-row button {
+    background: #111;
+    color: #fff;
+}
+
+.game-invite-decline {
+    background: #f1f2f4;
+    color: #333;
+}
+
+.game-invite-actions button:disabled,
+.game-invite-row button:disabled {
+    opacity: .5;
+}
+
+.game-invite-note {
+    margin-top: 8px;
+
+    font-size: 12px;
+    color: #888;
+}
+
+#currentGameInvite:empty {
+    display: none;
+}
+
+#currentGameInvite {
+    margin: 8px 0;
+}

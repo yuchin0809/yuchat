@@ -78,6 +78,9 @@ let unsubscribeCurrentGame = null;
 let selectedDaifugoCards = [];
 let selectedShogiPiece = null;
 let currentShogiPlayer = "sente";
+let unsubscribeGameInvites = null;
+let pendingGameInvites = [];
+let gameInvitesInitialized = false;
 
 /* ゆうダービー関連の状態 */
 let myCoins = 0;
@@ -182,6 +185,7 @@ const horseList = document.getElementById("horseList");
 const gameRoomsEl = document.getElementById("gameRooms");
 const gameAreaEl = document.getElementById("gameArea");
 const createGameRoomButton = document.getElementById("createGameRoom");
+const gameInvitesEl = document.getElementById("gameInvites");
 
 const myCoinLarge = document.getElementById("myCoinLarge");
 const myBetCount = document.getElementById("myBetCount");
@@ -623,6 +627,7 @@ async function startApp() {
     listenMyCoins();
     listenMyBetHistory();
     listenIncomingMessageNotifications();
+    listenGameInvites();
     catchUpMissedRaces();
     try { initializeSafeRace(); } catch (e) { console.error("レース初期化エラー:", e); }
   } catch (error) {
@@ -1884,6 +1889,9 @@ logoutButton?.addEventListener("click", async () => {
     if (unsubscribeMessages) { unsubscribeMessages(); unsubscribeMessages = null; }
     if (unsubscribeGameRooms) { unsubscribeGameRooms(); unsubscribeGameRooms = null; }
     if (unsubscribeCurrentGame) { unsubscribeCurrentGame(); unsubscribeCurrentGame = null; }
+    if (unsubscribeGameInvites) { unsubscribeGameInvites(); unsubscribeGameInvites = null; }
+    pendingGameInvites = [];
+    gameInvitesInitialized = false;
     if (unsubscribeMyCoins) { unsubscribeMyCoins(); unsubscribeMyCoins = null; }
     if (unsubscribeLiveRace) { unsubscribeLiveRace(); unsubscribeLiveRace = null; }
     if (unsubscribeWinBets) { unsubscribeWinBets(); unsubscribeWinBets = null; }
@@ -3349,6 +3357,46 @@ function getMaxGamePlayers(type) {
   return 2;
 }
 
+/* =========================================================
+   盤面の保存形式の変換（オセロ・将棋）
+   ・Firestoreは「配列の中の配列」を保存できないため、
+     保存するときは1次元配列（オセロ64マス / 将棋81マス）にする
+   ・アプリ内部のゲーム処理は今まで通り2次元配列で扱う
+========================================================= */
+
+function getBoardSize(type) {
+  if (type === "othello") return 8;
+  if (type === "shogi") return 9;
+  return 0;
+}
+
+function boardToFirestore(board) {
+  if (!Array.isArray(board)) return board;
+  if (!board.every((row) => Array.isArray(row))) return board;
+  return board.flat().map((cell) => cell ?? null);
+}
+
+function boardFromFirestore(board, size) {
+  if (!Array.isArray(board) || !size) return null;
+  /* すでに2次元配列ならそのまま使う */
+  if (board.length === size && board.every((row) => Array.isArray(row) && row.length === size)) return board;
+  if (board.length !== size * size) return null;
+  return Array.from({ length: size }, (_, row) => board.slice(row * size, (row + 1) * size).map((cell) => cell ?? null));
+}
+
+/* 保存用：gameState.board を1次元配列にしたコピーを返す（大富豪などはそのまま） */
+function gameStateToFirestore(type, state) {
+  if (!state || !getBoardSize(type)) return state;
+  return { ...state, board: boardToFirestore(state.board) };
+}
+
+/* 読み込み用：gameState.board を2次元配列に戻したコピーを返す（大富豪などはそのまま） */
+function gameStateFromFirestore(type, state) {
+  const size = getBoardSize(type);
+  if (!state || !size) return state;
+  return { ...state, board: boardFromFirestore(state.board, size) };
+}
+
 const gameTypeButtons = document.querySelectorAll(".game-type");
 
 gameTypeButtons.forEach((button) => {
@@ -3358,8 +3406,11 @@ gameTypeButtons.forEach((button) => {
     gameTypeButtons.forEach((item) => item.classList.remove("active"));
     button.classList.add("active");
     currentGameType = type;
+    renderGameRooms(latestGameRooms);
   });
 });
+
+let latestGameRooms = [];
 
 function loadGameRooms() {
   if (!gameRoomsEl) return;
@@ -3368,8 +3419,8 @@ function loadGameRooms() {
   unsubscribeGameRooms = onSnapshot(
     query(collection(db, "gameRooms"), orderBy("createdAt", "desc")),
     (snapshot) => {
-      const rooms = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
-      renderGameRooms(rooms);
+      latestGameRooms = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
+      renderGameRooms(latestGameRooms);
     },
     (error) => {
       console.error("ゲーム部屋監視エラー:", error);
@@ -3378,12 +3429,15 @@ function loadGameRooms() {
   );
 }
 
-function renderGameRooms(rooms) {
+function renderGameRooms(allRooms) {
   if (!gameRoomsEl) return;
   gameRoomsEl.innerHTML = "";
 
-  if (!rooms || rooms.length === 0) {
-    gameRoomsEl.innerHTML = `<div class="empty-state">参加できるゲームルームはありません</div>`;
+  /* 現在選択しているゲーム種類の部屋だけ表示する */
+  const rooms = (allRooms || []).filter((room) => room.gameType === currentGameType);
+
+  if (rooms.length === 0) {
+    gameRoomsEl.innerHTML = `<div class="empty-state">参加できる${escapeHTML(getGameTypeName(currentGameType))}のルームはありません</div>`;
     return;
   }
 
@@ -3423,7 +3477,8 @@ createGameRoomButton?.addEventListener("click", async () => {
       memberUids: [currentUser.uid],
       maxPlayers: getMaxGamePlayers(type),
       status: "waiting",
-      gameState: createInitialGameState(type),
+      gameState: gameStateToFirestore(type, createInitialGameState(type)),
+      ...(type === "daifugo" ? { rules: { ...DAIFUGO_DEFAULT_RULES } } : {}),
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp()
     });
@@ -3455,12 +3510,12 @@ function createInitialGameState(type) {
 }
 
 async function joinGameRoom(room) {
-  if (!currentUser || !username || !room?.id) return;
+  if (!currentUser || !username || !room?.id) return false;
 
   try {
     const roomRef = doc(db, "gameRooms", room.id);
     const snapshot = await getDoc(roomRef);
-    if (!snapshot.exists()) return alert("このルームは存在しません。");
+    if (!snapshot.exists()) { alert("このルームは存在しません。"); return false; }
 
     const data = snapshot.data();
     const members = Array.isArray(data.members) ? [...data.members] : [];
@@ -3468,20 +3523,28 @@ async function joinGameRoom(room) {
     const maxPlayers = getMaxGamePlayers(data.gameType);
 
     if (!members.includes(username)) {
-      if (data.status === "playing") return alert("このゲームはすでに開始されています。");
-      if (members.length >= maxPlayers) return alert("このルームは満員です。");
+      if (data.status === "playing") { alert("このゲームはすでに開始されています。"); return false; }
+      if (members.length >= maxPlayers) { alert("このルームは満員です。"); return false; }
 
       members.push(username);
       memberUids.push(currentUser.uid);
 
-      await updateDoc(roomRef, { members, memberUids, updatedAt: serverTimestamp() });
+      const updateData = { members, memberUids, updatedAt: serverTimestamp() };
+
+      /* オセロ・将棋は2人そろった時点で対戦開始（大富豪は開始ボタンで切り替えるので対象外） */
+      const isBoardGame = data.gameType === "othello" || data.gameType === "shogi";
+      if (isBoardGame && members.length >= maxPlayers) updateData.status = "playing";
+
+      await updateDoc(roomRef, updateData);
     }
 
     openGameArea(room.id, data.gameType || room.gameType);
     listenSelectedGame(room.id);
+    return true;
   } catch (error) {
     console.error("ゲームルーム参加エラー:", error);
     alert("ゲームルームに参加できませんでした。");
+    return false;
   }
 }
 
@@ -3496,6 +3559,7 @@ function openGameArea(roomId, gameType) {
         <button type="button" id="leaveGameRoomButton">ルームを閉じる</button>
       </div>
       <div id="currentGameStatus" class="game-status">読み込み中...</div>
+      <div id="currentGameInvite"></div>
       <div id="currentGameBoard" class="game-board"></div>
     </div>`;
 
@@ -3509,7 +3573,8 @@ function listenSelectedGame(roomId) {
     doc(db, "gameRooms", roomId),
     (snapshot) => {
       if (!snapshot.exists()) { closeGameArea(); return; }
-      renderCurrentGame({ id: snapshot.id, ...snapshot.data() });
+      const data = snapshot.data();
+      renderCurrentGame({ id: snapshot.id, ...data, gameState: gameStateFromFirestore(data.gameType, data.gameState) });
     },
     (error) => console.error("現在のゲーム監視エラー:", error)
   );
@@ -3564,11 +3629,294 @@ function renderCurrentGame(room) {
     statusEl.textContent = `参加者 ${members.length}/${getMaxGamePlayers(room.gameType)}人`;
   }
 
+  renderGameInvitePanel(room);
+
   if (room.gameType === "othello") return renderOthelloBoard(boardEl, room);
   if (room.gameType === "shogi") return renderShogiBoard(boardEl, room);
   if (room.gameType === "daifugo") return renderDaifugoGame(boardEl, room);
 
   boardEl.innerHTML = `<div class="empty-state">ゲームを準備中です</div>`;
+}
+
+/* =========================================================
+   ゲーム招待（将棋・オセロのみ）
+   ・gameInvites/{roomId}_{招待相手のuid} に保存（同じ部屋・同じ相手は1件だけ）
+   ・gameRooms/{roomId}.invitedUsers に招待中のユーザー名を保存
+   ・参加するときは既存の joinGameRoom() を使う
+========================================================= */
+
+const INVITABLE_GAME_TYPES = ["othello", "shogi"];
+
+function canInviteToGameRoom(room) {
+  if (!room || !INVITABLE_GAME_TYPES.includes(room.gameType)) return false;
+  if (room.ownerUid !== currentUser?.uid) return false;
+  if (room.status === "playing") return false;
+  const members = Array.isArray(room.members) ? room.members : [];
+  return members.length < getMaxGamePlayers(room.gameType);
+}
+
+/* 部屋を作った人に表示する「友達を招待」欄 */
+function renderGameInvitePanel(room) {
+  const panelEl = document.getElementById("currentGameInvite");
+  if (!panelEl) return;
+  panelEl.innerHTML = "";
+  if (!canInviteToGameRoom(room)) return;
+
+  const members = Array.isArray(room.members) ? room.members : [];
+  const invitedUsers = Array.isArray(room.invitedUsers) ? room.invitedUsers : [];
+  const candidates = friendsData
+    .map((f) => f.friend)
+    .filter((name) => name && !members.includes(name) && !invitedUsers.includes(name));
+
+  const panel = document.createElement("div");
+  panel.className = "game-invite-panel";
+
+  const title = document.createElement("div");
+  title.className = "game-invite-title";
+  title.textContent = "👥 友達を招待";
+  panel.appendChild(title);
+
+  if (candidates.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "game-invite-note";
+    empty.textContent = "招待できる友達がいません";
+    panel.appendChild(empty);
+  } else {
+    const row = document.createElement("div");
+    row.className = "game-invite-row";
+
+    const select = document.createElement("select");
+    candidates.forEach((name) => {
+      const option = document.createElement("option");
+      option.value = name;
+      option.textContent = name;
+      select.appendChild(option);
+    });
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = "招待する";
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      await sendGameInvite(room.id, select.value);
+      button.disabled = false;
+    });
+
+    row.append(select, button);
+    panel.appendChild(row);
+  }
+
+  if (invitedUsers.length) {
+    const invited = document.createElement("div");
+    invited.className = "game-invite-note";
+    invited.textContent = `招待中：${invitedUsers.join("、")}`;
+    panel.appendChild(invited);
+  }
+
+  panelEl.appendChild(panel);
+}
+
+async function sendGameInvite(roomId, friendName) {
+  if (!currentUser || !username || !roomId || !friendName) return;
+
+  const roomRef = doc(db, "gameRooms", roomId);
+  const friendUserRef = doc(db, "users", friendName);
+
+  try {
+    await runTransaction(db, async (transaction) => {
+      const roomSnap = await transaction.get(roomRef);
+      if (!roomSnap.exists()) throw new Error("ROOM_NOT_FOUND");
+
+      const room = roomSnap.data();
+      const members = Array.isArray(room.members) ? room.members : [];
+      if (!INVITABLE_GAME_TYPES.includes(room.gameType)) throw new Error("NOT_SUPPORTED");
+      if (room.ownerUid !== currentUser.uid) throw new Error("NOT_HOST");
+      if (room.status === "playing") throw new Error("ROOM_PLAYING");
+      if (members.length >= getMaxGamePlayers(room.gameType)) throw new Error("ROOM_FULL");
+      if (members.includes(friendName)) throw new Error("ALREADY_MEMBER");
+      if (!friendsData.some((f) => f.friend === friendName)) throw new Error("NOT_FRIEND");
+
+      const friendSnap = await transaction.get(friendUserRef);
+      const toUid = friendSnap.exists() ? friendSnap.data().uid : null;
+      if (!toUid) throw new Error("USER_NOT_FOUND");
+
+      const inviteRef = doc(db, "gameInvites", `${roomId}_${toUid}`);
+      const inviteSnap = await transaction.get(inviteRef);
+      if (inviteSnap.exists() && inviteSnap.data().status === "pending") throw new Error("ALREADY_INVITED");
+
+      const invitedUsers = (Array.isArray(room.invitedUsers) ? room.invitedUsers : []).filter((name) => name !== friendName);
+      invitedUsers.push(friendName);
+
+      transaction.set(inviteRef, {
+        roomId,
+        gameType: room.gameType,
+        from: username,
+        fromUid: currentUser.uid,
+        to: friendName,
+        toUid,
+        status: "pending",
+        createdAt: serverTimestamp(),
+        respondedAt: null
+      });
+      transaction.update(roomRef, { invitedUsers, updatedAt: serverTimestamp() });
+    });
+
+    showAppToast("招待しました", `${friendName}さんを招待しました`);
+  } catch (error) {
+    console.error("ゲーム招待エラー:", error);
+    const messages = {
+      ROOM_NOT_FOUND: "このルームは存在しません。",
+      NOT_SUPPORTED: "このゲームでは招待できません。",
+      NOT_HOST: "部屋を作った人だけが招待できます。",
+      ROOM_PLAYING: "ゲームがすでに開始されています。",
+      ROOM_FULL: "このルームは満員です。",
+      ALREADY_MEMBER: "その友達はすでに参加しています。",
+      NOT_FRIEND: "友達だけを招待できます。",
+      USER_NOT_FOUND: "そのユーザーが見つかりません。",
+      ALREADY_INVITED: "その友達はすでに招待中です。"
+    };
+    alert(messages[error.message] || "招待できませんでした。");
+  }
+}
+
+/* 自分あてに届いている保留中の招待を監視する */
+function listenGameInvites() {
+  if (unsubscribeGameInvites) { unsubscribeGameInvites(); unsubscribeGameInvites = null; }
+  if (!currentUser) return;
+
+  gameInvitesInitialized = false;
+
+  unsubscribeGameInvites = onSnapshot(
+    query(collection(db, "gameInvites"), where("toUid", "==", currentUser.uid), where("status", "==", "pending")),
+    (snapshot) => {
+      const previousIds = new Set(pendingGameInvites.map((invite) => invite.id));
+
+      pendingGameInvites = snapshot.docs
+        .map((item) => ({ id: item.id, ...item.data() }))
+        .filter((invite) => INVITABLE_GAME_TYPES.includes(invite.gameType))
+        .sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
+
+      /* ログイン直後の一覧はトーストを出さず、その後に新しく届いた招待だけ知らせる */
+      if (gameInvitesInitialized) {
+        pendingGameInvites
+          .filter((invite) => !previousIds.has(invite.id))
+          .forEach((invite) => showAppToast("🎮 ゲームの招待", `${invite.from}さんから${getGameTypeName(invite.gameType)}に招待されました`));
+      }
+      gameInvitesInitialized = true;
+
+      renderGameInvites();
+    },
+    (error) => console.error("ゲーム招待監視エラー:", error)
+  );
+}
+
+function renderGameInvites() {
+  const gamesTabButton = document.querySelector('.tabs button[data-view="games"]');
+  gamesTabButton?.classList.toggle("has-invite", pendingGameInvites.length > 0);
+
+  if (!gameInvitesEl) return;
+  gameInvitesEl.innerHTML = "";
+  gameInvitesEl.classList.toggle("hidden", pendingGameInvites.length === 0);
+
+  pendingGameInvites.forEach((invite) => {
+    const card = document.createElement("div");
+    card.className = "game-invite-card";
+
+    const text = document.createElement("div");
+    text.className = "game-invite-text";
+    text.textContent = `${invite.from}さんから${getGameTypeName(invite.gameType)}の招待`;
+
+    const actions = document.createElement("div");
+    actions.className = "game-invite-actions";
+
+    const acceptButton = document.createElement("button");
+    acceptButton.type = "button";
+    acceptButton.className = "game-invite-accept";
+    acceptButton.textContent = "参加する";
+
+    const declineButton = document.createElement("button");
+    declineButton.type = "button";
+    declineButton.className = "game-invite-decline";
+    declineButton.textContent = "辞退する";
+
+    acceptButton.addEventListener("click", async () => {
+      acceptButton.disabled = true; declineButton.disabled = true;
+      await acceptGameInvite(invite);
+      acceptButton.disabled = false; declineButton.disabled = false;
+    });
+    declineButton.addEventListener("click", async () => {
+      acceptButton.disabled = true; declineButton.disabled = true;
+      await resolveGameInvite(invite, "declined");
+      acceptButton.disabled = false; declineButton.disabled = false;
+    });
+
+    actions.append(acceptButton, declineButton);
+    card.append(text, actions);
+    gameInvitesEl.appendChild(card);
+  });
+}
+
+/* 招待の状態を更新し、部屋の invitedUsers から自分を外す */
+async function resolveGameInvite(invite, status) {
+  if (!currentUser || !invite?.id) return false;
+
+  const inviteRef = doc(db, "gameInvites", invite.id);
+  const roomRef = doc(db, "gameRooms", invite.roomId);
+
+  try {
+    await runTransaction(db, async (transaction) => {
+      const inviteSnap = await transaction.get(inviteRef);
+      if (!inviteSnap.exists() || inviteSnap.data().status !== "pending") return;
+      const roomSnap = await transaction.get(roomRef);
+
+      transaction.update(inviteRef, { status, respondedAt: serverTimestamp() });
+
+      if (roomSnap.exists()) {
+        const toName = inviteSnap.data().to;
+        const invitedUsers = (roomSnap.data().invitedUsers || []).filter((name) => name !== toName && name !== username);
+        transaction.update(roomRef, { invitedUsers, updatedAt: serverTimestamp() });
+      }
+    });
+    return true;
+  } catch (error) {
+    console.error("ゲーム招待更新エラー:", error);
+    if (status === "declined") alert("招待を辞退できませんでした。");
+    return false;
+  }
+}
+
+async function acceptGameInvite(invite) {
+  if (!currentUser || !username || !invite?.roomId) return;
+
+  try {
+    const roomSnap = await getDoc(doc(db, "gameRooms", invite.roomId));
+    let reason = null;
+
+    if (!roomSnap.exists()) {
+      reason = "この部屋はもうありません。";
+    } else {
+      const room = roomSnap.data();
+      const members = Array.isArray(room.members) ? room.members : [];
+      if (!members.includes(username)) {
+        if (room.status === "playing") reason = "このゲームはすでに開始されています。";
+        else if (members.length >= getMaxGamePlayers(room.gameType)) reason = "このルームは満員です。";
+      }
+    }
+
+    /* 参加できない招待は期限切れにして一覧から消す */
+    if (reason) {
+      await resolveGameInvite(invite, "expired");
+      alert(reason);
+      return;
+    }
+
+    switchView("games");
+    const joined = await joinGameRoom({ id: invite.roomId, gameType: invite.gameType });
+    if (joined) await resolveGameInvite(invite, "accepted");
+  } catch (error) {
+    console.error("ゲーム招待参加エラー:", error);
+    alert("ゲームに参加できませんでした。");
+  }
 }
 
 /* =========================================================
@@ -3704,7 +4052,7 @@ async function playOthelloMove(room, row, col) {
       if (!snapshot.exists()) throw new Error("ルームが存在しません");
 
       const latest = snapshot.data();
-      const state = latest.gameState;
+      const state = gameStateFromFirestore("othello", latest.gameState);
       if (!state?.board) throw new Error("ゲーム状態がありません");
       if (state.winner) throw new Error("すでに終了しています");
 
@@ -3737,7 +4085,7 @@ async function playOthelloMove(room, row, col) {
       const winner = getOthelloWinner(newBoard);
 
       transaction.update(roomRef, {
-        gameState: { ...state, board: newBoard, currentPlayer: nextPlayer, started: true, winner },
+        gameState: gameStateToFirestore("othello", { ...state, board: newBoard, currentPlayer: nextPlayer, started: true, winner }),
         updatedAt: serverTimestamp()
       });
     });
@@ -4023,7 +4371,7 @@ async function executeShogiMove(room, from, to, piece, player, shouldPromote) {
       if (!snapshot.exists()) throw new Error("ルームが存在しません");
 
       const latest = snapshot.data();
-      const state = ensureShogiState(latest.gameState);
+      const state = ensureShogiState(gameStateFromFirestore("shogi", latest.gameState));
       if (state.currentPlayer !== player) throw new Error("現在の手番ではありません");
 
       const board = state.board.map((line) => [...line]);
@@ -4055,7 +4403,7 @@ async function executeShogiMove(room, from, to, piece, player, shouldPromote) {
       if (destination === "王" || destination === "玉") winner = player;
 
       transaction.update(roomRef, {
-        gameState: { ...state, board, captured, currentPlayer: nextPlayer, winner },
+        gameState: gameStateToFirestore("shogi", { ...state, board, captured, currentPlayer: nextPlayer, winner }),
         updatedAt: serverTimestamp()
       });
     });
@@ -4083,15 +4431,92 @@ function applyDaifugoRules(state) {
   return state;
 }
 
-function createDaifugoDeck() {
+/* ----- ルール設定 -----
+   ・部屋作成者が gameRooms/{id}.rules に保存し、開始時に gameState.rules へコピーする
+   ・rules が無い古い部屋・ゲームはデフォルト（今までの動きと同じ）として扱う */
+
+const DAIFUGO_DEFAULT_RULES = {
+  revolution: true, eightCut: true, elevenBack: true, suitLock: true,
+  sequence: true, joker: true, spade3: false, miyakoOchi: false
+};
+
+const DAIFUGO_RULE_LABELS = {
+  revolution: "革命", eightCut: "8切り", elevenBack: "11バック", suitLock: "しばり",
+  sequence: "階段", joker: "ジョーカー", spade3: "スペ3返し", miyakoOchi: "都落ち"
+};
+
+function getDaifugoRules(source) {
+  const saved = source?.rules || {};
+  const rules = {};
+  Object.keys(DAIFUGO_DEFAULT_RULES).forEach((key) => {
+    rules[key] = typeof saved[key] === "boolean" ? saved[key] : DAIFUGO_DEFAULT_RULES[key];
+  });
+  return rules;
+}
+
+function getDaifugoRuleSummary(rules) {
+  const enabled = Object.keys(DAIFUGO_RULE_LABELS).filter((key) => rules[key]).map((key) => DAIFUGO_RULE_LABELS[key]);
+  return enabled.length ? enabled.join(" / ") : "特殊ルールなし";
+}
+
+async function updateDaifugoRule(roomId, key, value) {
+  if (!currentUser || !(key in DAIFUGO_DEFAULT_RULES)) return false;
+  const roomRef = doc(db, "gameRooms", roomId);
+
+  try {
+    await runTransaction(db, async (transaction) => {
+      const snapshot = await transaction.get(roomRef);
+      if (!snapshot.exists()) throw new Error("ROOM_NOT_FOUND");
+
+      const room = snapshot.data();
+      if (room.ownerUid !== currentUser.uid) throw new Error("NOT_HOST");
+      if (room.gameState?.phase === "playing") throw new Error("GAME_PLAYING");
+
+      const rules = getDaifugoRules(room);
+      rules[key] = Boolean(value);
+      transaction.update(roomRef, { rules, updatedAt: serverTimestamp() });
+    });
+    return true;
+  } catch (error) {
+    console.error("大富豪ルール変更エラー:", error);
+    if (error.message === "NOT_HOST") alert("部屋を作った人だけがルールを変更できます。");
+    else if (error.message === "GAME_PLAYING") alert("ゲーム中はルールを変更できません。");
+    else alert("ルールを変更できませんでした。");
+    return false;
+  }
+}
+
+/* 革命と11バックが両方かかっている場合は元に戻る */
+function isDaifugoReversed(game) {
+  return Boolean(game?.revolution) !== Boolean(game?.elevenBack);
+}
+
+function isDaifugoSpade3Return(selectedCards, lastPlayed, rules) {
+  if (!rules.spade3) return false;
+  if (selectedCards.length !== 1 || (lastPlayed || []).length !== 1) return false;
+  const card = selectedCards[0];
+  return Boolean(lastPlayed[0].isJoker) && !card.isJoker && card.suit === "♠" && card.value === 3;
+}
+
+/* まだ使われていない一番上の順位（都落ちで最下位が先に埋まっても正しく数える） */
+function getNextDaifugoRank(players) {
+  const taken = new Set(players.filter((p) => p.finished && p.rank).map((p) => p.rank));
+  let rank = 1;
+  while (taken.has(rank)) rank++;
+  return rank;
+}
+
+function createDaifugoDeck(includeJoker = true) {
   const deck = [];
   DAIHUGO_SUITS.forEach((suit) => {
     Object.keys(DAIHUGO_RANK_LABELS).forEach((rank) => {
       deck.push({ id: `${suit}-${rank}-${Math.random().toString(36).slice(2)}`, suit, value: Number(rank), label: DAIHUGO_RANK_LABELS[rank], isJoker: false });
     });
   });
-  deck.push({ id: `joker1-${Math.random().toString(36).slice(2)}`, suit: "🃏", value: 16, label: "Joker", isJoker: true });
-  deck.push({ id: `joker2-${Math.random().toString(36).slice(2)}`, suit: "🃏", value: 16, label: "Joker", isJoker: true });
+  if (includeJoker) {
+    deck.push({ id: `joker1-${Math.random().toString(36).slice(2)}`, suit: "🃏", value: 16, label: "Joker", isJoker: true });
+    deck.push({ id: `joker2-${Math.random().toString(36).slice(2)}`, suit: "🃏", value: 16, label: "Joker", isJoker: true });
+  }
   return deck;
 }
 
@@ -4129,7 +4554,9 @@ async function startDaifugoGame(roomId) {
       const memberNames = Array.isArray(room.members) ? room.members : [];
       if (memberUids.length < 2) throw new Error("NOT_ENOUGH_PLAYERS");
 
-      const deck = shuffleDaifugoDeck(createDaifugoDeck());
+      /* 開始時点の部屋のルールを gameState に固定する（ゲーム中は変わらない） */
+      const rules = getDaifugoRules(room);
+      const deck = shuffleDaifugoDeck(createDaifugoDeck(rules.joker));
       const hands = dealDaifugoCards(deck, memberUids.length);
       const handsByUid = {};
       memberUids.forEach((uid, index) => { handsByUid[uid] = hands[index]; });
@@ -4138,10 +4565,17 @@ async function startDaifugoGame(roomId) {
         uid, name: memberNames[index] || "プレイヤー", finished: false, rank: null
       }));
 
+      /* 前のゲームが終わっていれば「次のゲーム」として、前回の大富豪（1位）を記録する（都落ち用） */
+      const previous = room.gameState || {};
+      const isNextGame = previous.phase === "finished";
+      const previousDaifugo = isNextGame ? (previous.players || []).find((p) => p.rank === 1) : null;
+      const previousDaifugoUid = previousDaifugo && memberUids.includes(previousDaifugo.uid) ? previousDaifugo.uid : null;
+
       const gameState = applyDaifugoRules({
         phase: "playing", players, hands: handsByUid,
         currentPlayerUid: memberUids[0], lastPlayedCards: [], lastPlayerUid: null,
-        passedPlayers: [], revolution: false, elevenBack: false, lockSuit: null, winner: null
+        passedPlayers: [], revolution: false, elevenBack: false, lockSuit: null, winner: null,
+        rules, round: isNextGame ? (previous.round || 1) + 1 : 1, previousDaifugoUid
       });
 
       transaction.update(roomRef, { status: "playing", gameState, updatedAt: serverTimestamp() });
@@ -4187,11 +4621,11 @@ function isDaifugoValidSequence(cards) {
   return true;
 }
 
-function getDaifugoCombinationType(cards) {
+function getDaifugoCombinationType(cards, rules = DAIFUGO_DEFAULT_RULES) {
   if (!cards.length) return null;
   if (cards.length === 1) return "single";
   if (areSameDaifugoValue(cards)) return "group";
-  if (isDaifugoValidSequence(cards)) return "sequence";
+  if (rules.sequence && isDaifugoValidSequence(cards)) return "sequence";
   return null;
 }
 
@@ -4209,6 +4643,7 @@ function getDaifugoPlayPower(cards, revolution) {
 }
 
 function canUseDaifugoSuitLock(selected, game) {
+  if (!getDaifugoRules(game).suitLock) return true;
   if (!game?.lockSuit) return true;
   const normal = selected.filter((c) => !c.isJoker);
   if (!normal.length) return true;
@@ -4221,18 +4656,23 @@ function isDaifugoEightCut(cards) {
 
 function canPlayDaifugoSelection(selectedCards, game) {
   if (!selectedCards.length || !game) return false;
+  const rules = getDaifugoRules(game);
   if (!canUseDaifugoSuitLock(selectedCards, game)) return false;
 
-  const type = getDaifugoCombinationType(selectedCards);
+  const type = getDaifugoCombinationType(selectedCards, rules);
   if (!type) return false;
 
   const lastPlayed = Array.isArray(game.lastPlayedCards) ? game.lastPlayedCards : [];
   if (lastPlayed.length === 0) return true;
   if (selectedCards.length !== lastPlayed.length) return false;
-  if (isDaifugoEightCut(selectedCards)) return true;
+  /* 場と同じ種類（1枚 / 同じ数字 / 階段）でないと出せない */
+  if (type !== getDaifugoCombinationType(lastPlayed, rules)) return false;
+  if (isDaifugoSpade3Return(selectedCards, lastPlayed, rules)) return true;
+  if (rules.eightCut && isDaifugoEightCut(selectedCards)) return true;
 
-  const selectedPower = getDaifugoPlayPower(selectedCards, Boolean(game.revolution));
-  const lastPower = getDaifugoPlayPower(lastPlayed, Boolean(game.revolution));
+  const reversed = isDaifugoReversed(game);
+  const selectedPower = getDaifugoPlayPower(selectedCards, reversed);
+  const lastPower = getDaifugoPlayPower(lastPlayed, reversed);
   return selectedPower > lastPower;
 }
 
@@ -4257,6 +4697,8 @@ function clearDaifugoTable(game) {
   game.lastPlayerUid = null;
   game.passedPlayers = [];
   game.lockSuit = null;
+  /* 11バックは場が流れるまで */
+  game.elevenBack = false;
 }
 
 function findNextDaifugoPlayer(room, game, fromUid) {
@@ -4302,6 +4744,47 @@ function buildDaifugoCardElement(card, isSelected, interactive) {
   return el;
 }
 
+/* ゲーム開始前のルール設定パネル（部屋作成者だけ変更できる） */
+function buildDaifugoRulesPanel(room) {
+  const rules = getDaifugoRules(room);
+  const isHost = room.ownerUid === currentUser?.uid;
+
+  const panel = document.createElement("div");
+  panel.className = "daifugo-rules";
+
+  const title = document.createElement("h4");
+  title.textContent = isHost ? "ルール設定（開始前に変更できます）" : "この部屋のルール（部屋を作った人が設定します）";
+  panel.appendChild(title);
+
+  const list = document.createElement("div");
+  list.className = "daifugo-rules-list";
+
+  Object.keys(DAIFUGO_RULE_LABELS).forEach((key) => {
+    const label = document.createElement("label");
+    label.className = "daifugo-rule";
+
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = rules[key];
+    input.disabled = !isHost;
+    input.addEventListener("change", async () => {
+      input.disabled = true;
+      const ok = await updateDaifugoRule(room.id, key, input.checked);
+      if (!ok) input.checked = !input.checked;
+      input.disabled = false;
+    });
+
+    const text = document.createElement("span");
+    text.textContent = DAIFUGO_RULE_LABELS[key] + (key === "spade3" ? "（要ジョーカー）" : "");
+
+    label.append(input, text);
+    list.appendChild(label);
+  });
+
+  panel.appendChild(list);
+  return panel;
+}
+
 function renderDaifugoGame(container, room) {
   if (!container) return;
   const game = applyDaifugoRules(room.gameState || createInitialGameState("daifugo"));
@@ -4313,14 +4796,27 @@ function renderDaifugoGame(container, room) {
   if (game.phase !== "playing") {
     const members = Array.isArray(room.members) ? room.members : [];
     const canStart = room.ownerUid === currentUser?.uid && members.length >= 2;
+    const isFinished = game.phase === "finished";
 
     wrapper.innerHTML = `<div class="game-info">参加者 ${members.length}/${getMaxGamePlayers(room.gameType)}人（2人以上でゲーム開始できます）</div>`;
+
+    /* 前のゲームの結果（都落ちの確認用） */
+    if (isFinished && (game.players || []).length) {
+      const result = document.createElement("div");
+      result.className = "daifugo-last-result";
+      const ranked = [...game.players].sort((a, b) => (a.rank || 99) - (b.rank || 99));
+      result.innerHTML = `<h4>前回の結果</h4>` + ranked.map((p) =>
+        `<div>${p.rank || "-"}位　${escapeHTML(p.name)}${p.fallen ? "（都落ち）" : ""}</div>`).join("");
+      wrapper.appendChild(result);
+    }
+
+    wrapper.appendChild(buildDaifugoRulesPanel(room));
 
     if (canStart) {
       const startButton = document.createElement("button");
       startButton.type = "button";
       startButton.className = "primary-button";
-      startButton.textContent = "ゲームを開始する";
+      startButton.textContent = isFinished ? "次のゲームを開始する" : "ゲームを開始する";
       startButton.addEventListener("click", () => startDaifugoGame(room.id));
       wrapper.appendChild(startButton);
     }
@@ -4340,6 +4836,11 @@ function renderDaifugoGame(container, room) {
     status.textContent = `現在の番：${current?.name || ""}　${getDaifugoRuleStatus(game)}`;
   }
   wrapper.appendChild(status);
+
+  const rulesLine = document.createElement("div");
+  rulesLine.className = "daifugo-rules-summary";
+  rulesLine.textContent = `ルール：${getDaifugoRuleSummary(getDaifugoRules(game))}`;
+  wrapper.appendChild(rulesLine);
 
   const field = document.createElement("div");
   field.className = "daifugo-field";
@@ -4423,7 +4924,9 @@ function renderDaifugoGame(container, room) {
     item.className = "daifugo-player";
     if (player.uid === game.currentPlayerUid) item.classList.add("current");
     const handCount = (game.hands?.[player.uid] || []).length;
-    item.textContent = player.finished ? `${player.name}　上がり(${player.rank}位)` : `${player.name}　${handCount}枚`;
+    const crown = player.uid === game.previousDaifugoUid && getDaifugoRules(game).miyakoOchi ? "👑" : "";
+    if (player.fallen) item.textContent = `${crown}${player.name}　都落ち(${player.rank}位)`;
+    else item.textContent = player.finished ? `${crown}${player.name}　上がり(${player.rank}位)` : `${crown}${player.name}　${handCount}枚`;
     playersEl.appendChild(item);
   });
   wrapper.appendChild(playersEl);
@@ -4453,26 +4956,38 @@ async function playDaifugoCards(roomId) {
 
       if (selected.length !== selectedDaifugoCards.length) throw new Error("CARD_NOT_FOUND");
 
-      const isEightCut = isDaifugoEightCut(selected);
-      const isRevolution = selected.length >= 4 && areSameDaifugoValue(selected);
-      const isElevenBack = selected.some((c) => !c.isJoker && c.value === 11);
+      const rules = getDaifugoRules(game);
+      const previousCards = Array.isArray(game.lastPlayedCards) ? [...game.lastPlayedCards] : [];
 
-      if (!isEightCut && !canPlayDaifugoSelection(selected, game)) {
+      /* 8切りも含めて、出せる組み合わせかを必ず確認する */
+      if (!canPlayDaifugoSelection(selected, game)) {
         throw new Error("INVALID_COMBINATION");
       }
 
-      const previousCards = Array.isArray(game.lastPlayedCards) ? [...game.lastPlayedCards] : [];
+      const isEightCut = rules.eightCut && isDaifugoEightCut(selected);
+      const isSpade3Return = isDaifugoSpade3Return(selected, previousCards, rules);
+      const isRevolution = rules.revolution && selected.length >= 4 && areSameDaifugoValue(selected);
+      const isElevenBack = rules.elevenBack && selected.some((c) => !c.isJoker && c.value === 11);
 
       hands[currentUser.uid] = myHand.filter((card) => !selectedDaifugoCards.includes(card.id));
 
       const players = (game.players || []).map((p) => ({ ...p }));
       const myPlayer = players.find((p) => p.uid === currentUser.uid);
-      let finishedOrder = players.filter((p) => p.finished).length;
 
       if (hands[currentUser.uid].length === 0 && myPlayer && !myPlayer.finished) {
+        const isFirstFinisher = !players.some((p) => p.finished && !p.fallen);
         myPlayer.finished = true;
-        myPlayer.rank = finishedOrder + 1;
-        finishedOrder++;
+        myPlayer.rank = getNextDaifugoRank(players);
+
+        /* 都落ち：前回の大富豪以外が最初に上がったら、前回の大富豪はその場で最下位 */
+        if (rules.miyakoOchi && isFirstFinisher && game.previousDaifugoUid && game.previousDaifugoUid !== currentUser.uid) {
+          const fallenPlayer = players.find((p) => p.uid === game.previousDaifugoUid && !p.finished);
+          if (fallenPlayer) {
+            fallenPlayer.finished = true;
+            fallenPlayer.fallen = true;
+            fallenPlayer.rank = players.length;
+          }
+        }
       }
 
       game.hands = hands;
@@ -4482,23 +4997,23 @@ async function playDaifugoCards(roomId) {
 
       if (isRevolution) game.revolution = !game.revolution;
       if (isElevenBack) game.elevenBack = !game.elevenBack;
-      updateDaifugoLock(game, selected, previousCards);
+      if (rules.suitLock) updateDaifugoLock(game, selected, previousCards);
+      else game.lockSuit = null;
 
-      if (isEightCut) {
-        clearDaifugoTable(game);
-        game.currentPlayerUid = currentUser.uid;
-      } else {
-        const activePlayers = players.filter((p) => !p.finished);
-        if (activePlayers.length <= 1) {
-          if (activePlayers.length === 1) {
-            activePlayers[0].finished = true;
-            activePlayers[0].rank = finishedOrder + 1;
-          }
-          game.phase = "finished";
-          game.winner = players.find((p) => p.rank === 1)?.uid || myPlayer?.uid || null;
-        } else {
-          game.currentPlayerUid = findNextDaifugoPlayer(room, game, currentUser.uid);
+      const activePlayers = players.filter((p) => !p.finished);
+      if (activePlayers.length <= 1) {
+        if (activePlayers.length === 1) {
+          activePlayers[0].finished = true;
+          activePlayers[0].rank = getNextDaifugoRank(players);
         }
+        game.phase = "finished";
+        game.winner = players.find((p) => p.rank === 1)?.uid || myPlayer?.uid || null;
+      } else if (isEightCut || isSpade3Return) {
+        /* 場を流して、出した人からもう一度（上がっていたら次の人） */
+        clearDaifugoTable(game);
+        game.currentPlayerUid = myPlayer?.finished ? findNextDaifugoPlayer(room, game, currentUser.uid) : currentUser.uid;
+      } else {
+        game.currentPlayerUid = findNextDaifugoPlayer(room, game, currentUser.uid);
       }
 
       transaction.update(roomRef, { gameState: game, updatedAt: serverTimestamp() });
