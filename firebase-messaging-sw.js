@@ -34,6 +34,61 @@ const messaging =
     firebase.messaging();
 
 
+// ==================================================
+// URLの決め方
+// ・公開URL（GitHub Pages のサブパスなど）は決め打ちせず、
+//   このService Workerのスコープ（= アプリの場所）を基準にする
+// ・data.link は "./?open=chat&..." のような相対URL
+// ・別のサイトへのリンクは開かない
+// ==================================================
+
+const APP_ICON =
+    "./icons/icon-192.png";
+
+
+function getAppScopeUrl() {
+
+    return self.registration.scope;
+
+}
+
+
+function resolveAppUrl(link) {
+
+    const scope =
+        getAppScopeUrl();
+
+    try {
+
+        const url =
+            new URL(
+                link || "./",
+                scope
+            );
+
+        if (url.origin !== self.location.origin) {
+            return scope;
+        }
+
+        return url.href;
+
+    } catch (error) {
+
+        return scope;
+
+    }
+
+}
+
+
+// ==================================================
+// バックグラウンド通知
+// ・Cloud Functions は data だけのメッセージを送る
+//   （notification を付けないので、FCMの自動表示との二重表示が起きない）
+// ・ここで1回だけ showNotification する
+// ・tag が同じ通知は1件にまとまる
+// ==================================================
+
 messaging.onBackgroundMessage(
     payload => {
 
@@ -43,45 +98,53 @@ messaging.onBackgroundMessage(
         );
 
 
-        const notification =
-            payload.notification || {};
-
-
-        const title =
-            notification.title ||
-            payload.data?.title ||
-            "ゆうChat";
-
-
-        const body =
-            notification.body ||
-            payload.data?.body ||
-            "新しいメッセージが届きました。";
-
-
-        // notification payloadの場合は
-        // Firebase側が自動表示するので二重表示を防ぐ
+        // notification payload（Firebaseコンソールのテスト送信など）は
+        // Firebase側が自動表示するので、ここでは表示しない（二重表示防止）
         if (payload.notification) {
             return;
         }
 
 
-        self.registration.showNotification(
-            title,
-            {
-                body: body,
+        const data =
+            payload.data || {};
 
-                icon:
-                    "./icon.png",
 
-                badge:
-                    "./icon.png",
+        const title =
+            data.title ||
+            "ゆうChat";
 
-                data: {
-                    url:
-                        "./"
-                }
+
+        const body =
+            data.body ||
+            "新しい通知があります。";
+
+
+        const options = {
+
+            body: body,
+
+            icon:
+                resolveAppUrl(APP_ICON),
+
+            badge:
+                resolveAppUrl(APP_ICON),
+
+            data: {
+                link:
+                    data.link || "./"
             }
+
+        };
+
+
+        if (data.tag) {
+            options.tag = data.tag;
+        }
+
+
+        return self.registration.showNotification(
+            title,
+            options
         );
 
     }
@@ -90,6 +153,9 @@ messaging.onBackgroundMessage(
 
 // ==================================================
 // 通知を押したとき
+// ・アプリのタブ／PWAがすでに開いていれば、それを前面に出して
+//   開く画面をメッセージで知らせる
+// ・開いていなければ、新しく開く
 // ==================================================
 
 self.addEventListener(
@@ -100,11 +166,12 @@ self.addEventListener(
 
 
         const targetUrl =
-            new URL(
-                event.notification.data?.url ||
-                "./",
-                self.location.origin
-            ).href;
+            resolveAppUrl(
+                event.notification.data?.link
+            );
+
+        const scope =
+            getAppScopeUrl();
 
 
         event.waitUntil(
@@ -118,28 +185,47 @@ self.addEventListener(
                         true
                 }
             ).then(
-                clientList => {
+                async clientList => {
 
-                    for (
-                        const client of clientList
-                    ) {
+                    const appClient =
+                        clientList.find(
+                            client =>
+                                client.url.startsWith(scope)
+                        );
 
-                        if (
-                            client.url ===
-                            targetUrl &&
-                            "focus" in client
-                        ) {
 
-                            return client.focus();
+                    if (appClient) {
+
+                        if ("focus" in appClient) {
+
+                            try {
+                                await appClient.focus();
+                            } catch (error) {
+                                console.warn(
+                                    "タブを前面にできませんでした:",
+                                    error
+                                );
+                            }
 
                         }
+
+
+                        appClient.postMessage(
+                            {
+                                type:
+                                    "yuuchat-open-link",
+
+                                link:
+                                    targetUrl
+                            }
+                        );
+
+                        return;
 
                     }
 
 
-                    if (
-                        clients.openWindow
-                    ) {
+                    if (clients.openWindow) {
 
                         return clients.openWindow(
                             targetUrl
