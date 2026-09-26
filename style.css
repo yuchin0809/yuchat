@@ -3076,3 +3076,62 @@ button:disabled {
     }
 
 }
+
+
+/* ----- 大富豪 ルール設定 ----- */
+
+.daifugo-rules,
+.daifugo-last-result {
+    margin: 12px 0;
+    padding: 12px 14px;
+
+    border-radius: 14px;
+
+    background: #fff;
+
+    border: 1px solid #ffe1ec;
+}
+
+.daifugo-rules h4,
+.daifugo-last-result h4 {
+    margin: 0 0 8px;
+
+    font-size: 13px;
+}
+
+.daifugo-last-result div {
+    font-size: 13px;
+    line-height: 1.7;
+}
+
+.daifugo-rules-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 6px 12px;
+}
+
+.daifugo-rule {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+
+    font-size: 13px;
+
+    cursor: pointer;
+}
+
+.daifugo-rule input {
+    width: auto;
+    margin: 0;
+}
+
+.daifugo-rule input:disabled + span {
+    color: #888;
+}
+
+.daifugo-rules-summary {
+    margin: 4px 0 8px;
+
+    font-size: 12px;
+    color: #888;
+}

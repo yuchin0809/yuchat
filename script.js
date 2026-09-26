@@ -3470,6 +3470,7 @@ createGameRoomButton?.addEventListener("click", async () => {
       maxPlayers: getMaxGamePlayers(type),
       status: "waiting",
       gameState: gameStateToFirestore(type, createInitialGameState(type)),
+      ...(type === "daifugo" ? { rules: { ...DAIFUGO_DEFAULT_RULES } } : {}),
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp()
     });
@@ -4136,15 +4137,92 @@ function applyDaifugoRules(state) {
   return state;
 }
 
-function createDaifugoDeck() {
+/* ----- ルール設定 -----
+   ・部屋作成者が gameRooms/{id}.rules に保存し、開始時に gameState.rules へコピーする
+   ・rules が無い古い部屋・ゲームはデフォルト（今までの動きと同じ）として扱う */
+
+const DAIFUGO_DEFAULT_RULES = {
+  revolution: true, eightCut: true, elevenBack: true, suitLock: true,
+  sequence: true, joker: true, spade3: false, miyakoOchi: false
+};
+
+const DAIFUGO_RULE_LABELS = {
+  revolution: "革命", eightCut: "8切り", elevenBack: "11バック", suitLock: "しばり",
+  sequence: "階段", joker: "ジョーカー", spade3: "スペ3返し", miyakoOchi: "都落ち"
+};
+
+function getDaifugoRules(source) {
+  const saved = source?.rules || {};
+  const rules = {};
+  Object.keys(DAIFUGO_DEFAULT_RULES).forEach((key) => {
+    rules[key] = typeof saved[key] === "boolean" ? saved[key] : DAIFUGO_DEFAULT_RULES[key];
+  });
+  return rules;
+}
+
+function getDaifugoRuleSummary(rules) {
+  const enabled = Object.keys(DAIFUGO_RULE_LABELS).filter((key) => rules[key]).map((key) => DAIFUGO_RULE_LABELS[key]);
+  return enabled.length ? enabled.join(" / ") : "特殊ルールなし";
+}
+
+async function updateDaifugoRule(roomId, key, value) {
+  if (!currentUser || !(key in DAIFUGO_DEFAULT_RULES)) return false;
+  const roomRef = doc(db, "gameRooms", roomId);
+
+  try {
+    await runTransaction(db, async (transaction) => {
+      const snapshot = await transaction.get(roomRef);
+      if (!snapshot.exists()) throw new Error("ROOM_NOT_FOUND");
+
+      const room = snapshot.data();
+      if (room.ownerUid !== currentUser.uid) throw new Error("NOT_HOST");
+      if (room.gameState?.phase === "playing") throw new Error("GAME_PLAYING");
+
+      const rules = getDaifugoRules(room);
+      rules[key] = Boolean(value);
+      transaction.update(roomRef, { rules, updatedAt: serverTimestamp() });
+    });
+    return true;
+  } catch (error) {
+    console.error("大富豪ルール変更エラー:", error);
+    if (error.message === "NOT_HOST") alert("部屋を作った人だけがルールを変更できます。");
+    else if (error.message === "GAME_PLAYING") alert("ゲーム中はルールを変更できません。");
+    else alert("ルールを変更できませんでした。");
+    return false;
+  }
+}
+
+/* 革命と11バックが両方かかっている場合は元に戻る */
+function isDaifugoReversed(game) {
+  return Boolean(game?.revolution) !== Boolean(game?.elevenBack);
+}
+
+function isDaifugoSpade3Return(selectedCards, lastPlayed, rules) {
+  if (!rules.spade3) return false;
+  if (selectedCards.length !== 1 || (lastPlayed || []).length !== 1) return false;
+  const card = selectedCards[0];
+  return Boolean(lastPlayed[0].isJoker) && !card.isJoker && card.suit === "♠" && card.value === 3;
+}
+
+/* まだ使われていない一番上の順位（都落ちで最下位が先に埋まっても正しく数える） */
+function getNextDaifugoRank(players) {
+  const taken = new Set(players.filter((p) => p.finished && p.rank).map((p) => p.rank));
+  let rank = 1;
+  while (taken.has(rank)) rank++;
+  return rank;
+}
+
+function createDaifugoDeck(includeJoker = true) {
   const deck = [];
   DAIHUGO_SUITS.forEach((suit) => {
     Object.keys(DAIHUGO_RANK_LABELS).forEach((rank) => {
       deck.push({ id: `${suit}-${rank}-${Math.random().toString(36).slice(2)}`, suit, value: Number(rank), label: DAIHUGO_RANK_LABELS[rank], isJoker: false });
     });
   });
-  deck.push({ id: `joker1-${Math.random().toString(36).slice(2)}`, suit: "🃏", value: 16, label: "Joker", isJoker: true });
-  deck.push({ id: `joker2-${Math.random().toString(36).slice(2)}`, suit: "🃏", value: 16, label: "Joker", isJoker: true });
+  if (includeJoker) {
+    deck.push({ id: `joker1-${Math.random().toString(36).slice(2)}`, suit: "🃏", value: 16, label: "Joker", isJoker: true });
+    deck.push({ id: `joker2-${Math.random().toString(36).slice(2)}`, suit: "🃏", value: 16, label: "Joker", isJoker: true });
+  }
   return deck;
 }
 
@@ -4182,7 +4260,9 @@ async function startDaifugoGame(roomId) {
       const memberNames = Array.isArray(room.members) ? room.members : [];
       if (memberUids.length < 2) throw new Error("NOT_ENOUGH_PLAYERS");
 
-      const deck = shuffleDaifugoDeck(createDaifugoDeck());
+      /* 開始時点の部屋のルールを gameState に固定する（ゲーム中は変わらない） */
+      const rules = getDaifugoRules(room);
+      const deck = shuffleDaifugoDeck(createDaifugoDeck(rules.joker));
       const hands = dealDaifugoCards(deck, memberUids.length);
       const handsByUid = {};
       memberUids.forEach((uid, index) => { handsByUid[uid] = hands[index]; });
@@ -4191,10 +4271,17 @@ async function startDaifugoGame(roomId) {
         uid, name: memberNames[index] || "プレイヤー", finished: false, rank: null
       }));
 
+      /* 前のゲームが終わっていれば「次のゲーム」として、前回の大富豪（1位）を記録する（都落ち用） */
+      const previous = room.gameState || {};
+      const isNextGame = previous.phase === "finished";
+      const previousDaifugo = isNextGame ? (previous.players || []).find((p) => p.rank === 1) : null;
+      const previousDaifugoUid = previousDaifugo && memberUids.includes(previousDaifugo.uid) ? previousDaifugo.uid : null;
+
       const gameState = applyDaifugoRules({
         phase: "playing", players, hands: handsByUid,
         currentPlayerUid: memberUids[0], lastPlayedCards: [], lastPlayerUid: null,
-        passedPlayers: [], revolution: false, elevenBack: false, lockSuit: null, winner: null
+        passedPlayers: [], revolution: false, elevenBack: false, lockSuit: null, winner: null,
+        rules, round: isNextGame ? (previous.round || 1) + 1 : 1, previousDaifugoUid
       });
 
       transaction.update(roomRef, { status: "playing", gameState, updatedAt: serverTimestamp() });
@@ -4240,11 +4327,11 @@ function isDaifugoValidSequence(cards) {
   return true;
 }
 
-function getDaifugoCombinationType(cards) {
+function getDaifugoCombinationType(cards, rules = DAIFUGO_DEFAULT_RULES) {
   if (!cards.length) return null;
   if (cards.length === 1) return "single";
   if (areSameDaifugoValue(cards)) return "group";
-  if (isDaifugoValidSequence(cards)) return "sequence";
+  if (rules.sequence && isDaifugoValidSequence(cards)) return "sequence";
   return null;
 }
 
@@ -4262,6 +4349,7 @@ function getDaifugoPlayPower(cards, revolution) {
 }
 
 function canUseDaifugoSuitLock(selected, game) {
+  if (!getDaifugoRules(game).suitLock) return true;
   if (!game?.lockSuit) return true;
   const normal = selected.filter((c) => !c.isJoker);
   if (!normal.length) return true;
@@ -4274,18 +4362,23 @@ function isDaifugoEightCut(cards) {
 
 function canPlayDaifugoSelection(selectedCards, game) {
   if (!selectedCards.length || !game) return false;
+  const rules = getDaifugoRules(game);
   if (!canUseDaifugoSuitLock(selectedCards, game)) return false;
 
-  const type = getDaifugoCombinationType(selectedCards);
+  const type = getDaifugoCombinationType(selectedCards, rules);
   if (!type) return false;
 
   const lastPlayed = Array.isArray(game.lastPlayedCards) ? game.lastPlayedCards : [];
   if (lastPlayed.length === 0) return true;
   if (selectedCards.length !== lastPlayed.length) return false;
-  if (isDaifugoEightCut(selectedCards)) return true;
+  /* 場と同じ種類（1枚 / 同じ数字 / 階段）でないと出せない */
+  if (type !== getDaifugoCombinationType(lastPlayed, rules)) return false;
+  if (isDaifugoSpade3Return(selectedCards, lastPlayed, rules)) return true;
+  if (rules.eightCut && isDaifugoEightCut(selectedCards)) return true;
 
-  const selectedPower = getDaifugoPlayPower(selectedCards, Boolean(game.revolution));
-  const lastPower = getDaifugoPlayPower(lastPlayed, Boolean(game.revolution));
+  const reversed = isDaifugoReversed(game);
+  const selectedPower = getDaifugoPlayPower(selectedCards, reversed);
+  const lastPower = getDaifugoPlayPower(lastPlayed, reversed);
   return selectedPower > lastPower;
 }
 
@@ -4310,6 +4403,8 @@ function clearDaifugoTable(game) {
   game.lastPlayerUid = null;
   game.passedPlayers = [];
   game.lockSuit = null;
+  /* 11バックは場が流れるまで */
+  game.elevenBack = false;
 }
 
 function findNextDaifugoPlayer(room, game, fromUid) {
@@ -4355,6 +4450,47 @@ function buildDaifugoCardElement(card, isSelected, interactive) {
   return el;
 }
 
+/* ゲーム開始前のルール設定パネル（部屋作成者だけ変更できる） */
+function buildDaifugoRulesPanel(room) {
+  const rules = getDaifugoRules(room);
+  const isHost = room.ownerUid === currentUser?.uid;
+
+  const panel = document.createElement("div");
+  panel.className = "daifugo-rules";
+
+  const title = document.createElement("h4");
+  title.textContent = isHost ? "ルール設定（開始前に変更できます）" : "この部屋のルール（部屋を作った人が設定します）";
+  panel.appendChild(title);
+
+  const list = document.createElement("div");
+  list.className = "daifugo-rules-list";
+
+  Object.keys(DAIFUGO_RULE_LABELS).forEach((key) => {
+    const label = document.createElement("label");
+    label.className = "daifugo-rule";
+
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = rules[key];
+    input.disabled = !isHost;
+    input.addEventListener("change", async () => {
+      input.disabled = true;
+      const ok = await updateDaifugoRule(room.id, key, input.checked);
+      if (!ok) input.checked = !input.checked;
+      input.disabled = false;
+    });
+
+    const text = document.createElement("span");
+    text.textContent = DAIFUGO_RULE_LABELS[key] + (key === "spade3" ? "（要ジョーカー）" : "");
+
+    label.append(input, text);
+    list.appendChild(label);
+  });
+
+  panel.appendChild(list);
+  return panel;
+}
+
 function renderDaifugoGame(container, room) {
   if (!container) return;
   const game = applyDaifugoRules(room.gameState || createInitialGameState("daifugo"));
@@ -4366,14 +4502,27 @@ function renderDaifugoGame(container, room) {
   if (game.phase !== "playing") {
     const members = Array.isArray(room.members) ? room.members : [];
     const canStart = room.ownerUid === currentUser?.uid && members.length >= 2;
+    const isFinished = game.phase === "finished";
 
     wrapper.innerHTML = `<div class="game-info">参加者 ${members.length}/${getMaxGamePlayers(room.gameType)}人（2人以上でゲーム開始できます）</div>`;
+
+    /* 前のゲームの結果（都落ちの確認用） */
+    if (isFinished && (game.players || []).length) {
+      const result = document.createElement("div");
+      result.className = "daifugo-last-result";
+      const ranked = [...game.players].sort((a, b) => (a.rank || 99) - (b.rank || 99));
+      result.innerHTML = `<h4>前回の結果</h4>` + ranked.map((p) =>
+        `<div>${p.rank || "-"}位　${escapeHTML(p.name)}${p.fallen ? "（都落ち）" : ""}</div>`).join("");
+      wrapper.appendChild(result);
+    }
+
+    wrapper.appendChild(buildDaifugoRulesPanel(room));
 
     if (canStart) {
       const startButton = document.createElement("button");
       startButton.type = "button";
       startButton.className = "primary-button";
-      startButton.textContent = "ゲームを開始する";
+      startButton.textContent = isFinished ? "次のゲームを開始する" : "ゲームを開始する";
       startButton.addEventListener("click", () => startDaifugoGame(room.id));
       wrapper.appendChild(startButton);
     }
@@ -4393,6 +4542,11 @@ function renderDaifugoGame(container, room) {
     status.textContent = `現在の番：${current?.name || ""}　${getDaifugoRuleStatus(game)}`;
   }
   wrapper.appendChild(status);
+
+  const rulesLine = document.createElement("div");
+  rulesLine.className = "daifugo-rules-summary";
+  rulesLine.textContent = `ルール：${getDaifugoRuleSummary(getDaifugoRules(game))}`;
+  wrapper.appendChild(rulesLine);
 
   const field = document.createElement("div");
   field.className = "daifugo-field";
@@ -4476,7 +4630,9 @@ function renderDaifugoGame(container, room) {
     item.className = "daifugo-player";
     if (player.uid === game.currentPlayerUid) item.classList.add("current");
     const handCount = (game.hands?.[player.uid] || []).length;
-    item.textContent = player.finished ? `${player.name}　上がり(${player.rank}位)` : `${player.name}　${handCount}枚`;
+    const crown = player.uid === game.previousDaifugoUid && getDaifugoRules(game).miyakoOchi ? "👑" : "";
+    if (player.fallen) item.textContent = `${crown}${player.name}　都落ち(${player.rank}位)`;
+    else item.textContent = player.finished ? `${crown}${player.name}　上がり(${player.rank}位)` : `${crown}${player.name}　${handCount}枚`;
     playersEl.appendChild(item);
   });
   wrapper.appendChild(playersEl);
@@ -4506,26 +4662,38 @@ async function playDaifugoCards(roomId) {
 
       if (selected.length !== selectedDaifugoCards.length) throw new Error("CARD_NOT_FOUND");
 
-      const isEightCut = isDaifugoEightCut(selected);
-      const isRevolution = selected.length >= 4 && areSameDaifugoValue(selected);
-      const isElevenBack = selected.some((c) => !c.isJoker && c.value === 11);
+      const rules = getDaifugoRules(game);
+      const previousCards = Array.isArray(game.lastPlayedCards) ? [...game.lastPlayedCards] : [];
 
-      if (!isEightCut && !canPlayDaifugoSelection(selected, game)) {
+      /* 8切りも含めて、出せる組み合わせかを必ず確認する */
+      if (!canPlayDaifugoSelection(selected, game)) {
         throw new Error("INVALID_COMBINATION");
       }
 
-      const previousCards = Array.isArray(game.lastPlayedCards) ? [...game.lastPlayedCards] : [];
+      const isEightCut = rules.eightCut && isDaifugoEightCut(selected);
+      const isSpade3Return = isDaifugoSpade3Return(selected, previousCards, rules);
+      const isRevolution = rules.revolution && selected.length >= 4 && areSameDaifugoValue(selected);
+      const isElevenBack = rules.elevenBack && selected.some((c) => !c.isJoker && c.value === 11);
 
       hands[currentUser.uid] = myHand.filter((card) => !selectedDaifugoCards.includes(card.id));
 
       const players = (game.players || []).map((p) => ({ ...p }));
       const myPlayer = players.find((p) => p.uid === currentUser.uid);
-      let finishedOrder = players.filter((p) => p.finished).length;
 
       if (hands[currentUser.uid].length === 0 && myPlayer && !myPlayer.finished) {
+        const isFirstFinisher = !players.some((p) => p.finished && !p.fallen);
         myPlayer.finished = true;
-        myPlayer.rank = finishedOrder + 1;
-        finishedOrder++;
+        myPlayer.rank = getNextDaifugoRank(players);
+
+        /* 都落ち：前回の大富豪以外が最初に上がったら、前回の大富豪はその場で最下位 */
+        if (rules.miyakoOchi && isFirstFinisher && game.previousDaifugoUid && game.previousDaifugoUid !== currentUser.uid) {
+          const fallenPlayer = players.find((p) => p.uid === game.previousDaifugoUid && !p.finished);
+          if (fallenPlayer) {
+            fallenPlayer.finished = true;
+            fallenPlayer.fallen = true;
+            fallenPlayer.rank = players.length;
+          }
+        }
       }
 
       game.hands = hands;
@@ -4535,23 +4703,23 @@ async function playDaifugoCards(roomId) {
 
       if (isRevolution) game.revolution = !game.revolution;
       if (isElevenBack) game.elevenBack = !game.elevenBack;
-      updateDaifugoLock(game, selected, previousCards);
+      if (rules.suitLock) updateDaifugoLock(game, selected, previousCards);
+      else game.lockSuit = null;
 
-      if (isEightCut) {
-        clearDaifugoTable(game);
-        game.currentPlayerUid = currentUser.uid;
-      } else {
-        const activePlayers = players.filter((p) => !p.finished);
-        if (activePlayers.length <= 1) {
-          if (activePlayers.length === 1) {
-            activePlayers[0].finished = true;
-            activePlayers[0].rank = finishedOrder + 1;
-          }
-          game.phase = "finished";
-          game.winner = players.find((p) => p.rank === 1)?.uid || myPlayer?.uid || null;
-        } else {
-          game.currentPlayerUid = findNextDaifugoPlayer(room, game, currentUser.uid);
+      const activePlayers = players.filter((p) => !p.finished);
+      if (activePlayers.length <= 1) {
+        if (activePlayers.length === 1) {
+          activePlayers[0].finished = true;
+          activePlayers[0].rank = getNextDaifugoRank(players);
         }
+        game.phase = "finished";
+        game.winner = players.find((p) => p.rank === 1)?.uid || myPlayer?.uid || null;
+      } else if (isEightCut || isSpade3Return) {
+        /* 場を流して、出した人からもう一度（上がっていたら次の人） */
+        clearDaifugoTable(game);
+        game.currentPlayerUid = myPlayer?.finished ? findNextDaifugoPlayer(room, game, currentUser.uid) : currentUser.uid;
+      } else {
+        game.currentPlayerUid = findNextDaifugoPlayer(room, game, currentUser.uid);
       }
 
       transaction.update(roomRef, { gameState: game, updatedAt: serverTimestamp() });
