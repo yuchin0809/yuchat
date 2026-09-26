@@ -19,8 +19,8 @@ const notifications = require("./notifications");
 
 /* Firestore トリガーの関数は、Firestore データベースと同じリージョンに置く必要がある。
    Firebase コンソール → Firestore → データベースの「ロケーション」を確認して合わせること。
-   （例：東京なら asia-northeast1。マルチリージョン nam5 なら us-central1） */
-const REGION = "asia-northeast1";
+   このプロジェクトの Firestore は asia-northeast2（大阪）なので、それに合わせている。 */
+const REGION = "asia-northeast2";
 
 /* ゆうダービーの開催時刻（script.js の RACE_HOUR = 15 / RACE_MINUTE = 2 と合わせる）。
    アプリは端末の時刻で動くので、利用者の多い日本時間を基準にする */
