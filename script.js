@@ -3349,6 +3349,46 @@ function getMaxGamePlayers(type) {
   return 2;
 }
 
+/* =========================================================
+   盤面の保存形式の変換（オセロ・将棋）
+   ・Firestoreは「配列の中の配列」を保存できないため、
+     保存するときは1次元配列（オセロ64マス / 将棋81マス）にする
+   ・アプリ内部のゲーム処理は今まで通り2次元配列で扱う
+========================================================= */
+
+function getBoardSize(type) {
+  if (type === "othello") return 8;
+  if (type === "shogi") return 9;
+  return 0;
+}
+
+function boardToFirestore(board) {
+  if (!Array.isArray(board)) return board;
+  if (!board.every((row) => Array.isArray(row))) return board;
+  return board.flat().map((cell) => cell ?? null);
+}
+
+function boardFromFirestore(board, size) {
+  if (!Array.isArray(board) || !size) return null;
+  /* すでに2次元配列ならそのまま使う */
+  if (board.length === size && board.every((row) => Array.isArray(row) && row.length === size)) return board;
+  if (board.length !== size * size) return null;
+  return Array.from({ length: size }, (_, row) => board.slice(row * size, (row + 1) * size).map((cell) => cell ?? null));
+}
+
+/* 保存用：gameState.board を1次元配列にしたコピーを返す（大富豪などはそのまま） */
+function gameStateToFirestore(type, state) {
+  if (!state || !getBoardSize(type)) return state;
+  return { ...state, board: boardToFirestore(state.board) };
+}
+
+/* 読み込み用：gameState.board を2次元配列に戻したコピーを返す（大富豪などはそのまま） */
+function gameStateFromFirestore(type, state) {
+  const size = getBoardSize(type);
+  if (!state || !size) return state;
+  return { ...state, board: boardFromFirestore(state.board, size) };
+}
+
 const gameTypeButtons = document.querySelectorAll(".game-type");
 
 gameTypeButtons.forEach((button) => {
@@ -3358,8 +3398,11 @@ gameTypeButtons.forEach((button) => {
     gameTypeButtons.forEach((item) => item.classList.remove("active"));
     button.classList.add("active");
     currentGameType = type;
+    renderGameRooms(latestGameRooms);
   });
 });
+
+let latestGameRooms = [];
 
 function loadGameRooms() {
   if (!gameRoomsEl) return;
@@ -3368,8 +3411,8 @@ function loadGameRooms() {
   unsubscribeGameRooms = onSnapshot(
     query(collection(db, "gameRooms"), orderBy("createdAt", "desc")),
     (snapshot) => {
-      const rooms = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
-      renderGameRooms(rooms);
+      latestGameRooms = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
+      renderGameRooms(latestGameRooms);
     },
     (error) => {
       console.error("ゲーム部屋監視エラー:", error);
@@ -3378,12 +3421,15 @@ function loadGameRooms() {
   );
 }
 
-function renderGameRooms(rooms) {
+function renderGameRooms(allRooms) {
   if (!gameRoomsEl) return;
   gameRoomsEl.innerHTML = "";
 
-  if (!rooms || rooms.length === 0) {
-    gameRoomsEl.innerHTML = `<div class="empty-state">参加できるゲームルームはありません</div>`;
+  /* 現在選択しているゲーム種類の部屋だけ表示する */
+  const rooms = (allRooms || []).filter((room) => room.gameType === currentGameType);
+
+  if (rooms.length === 0) {
+    gameRoomsEl.innerHTML = `<div class="empty-state">参加できる${escapeHTML(getGameTypeName(currentGameType))}のルームはありません</div>`;
     return;
   }
 
@@ -3423,7 +3469,7 @@ createGameRoomButton?.addEventListener("click", async () => {
       memberUids: [currentUser.uid],
       maxPlayers: getMaxGamePlayers(type),
       status: "waiting",
-      gameState: createInitialGameState(type),
+      gameState: gameStateToFirestore(type, createInitialGameState(type)),
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp()
     });
@@ -3474,7 +3520,13 @@ async function joinGameRoom(room) {
       members.push(username);
       memberUids.push(currentUser.uid);
 
-      await updateDoc(roomRef, { members, memberUids, updatedAt: serverTimestamp() });
+      const updateData = { members, memberUids, updatedAt: serverTimestamp() };
+
+      /* オセロ・将棋は2人そろった時点で対戦開始（大富豪は開始ボタンで切り替えるので対象外） */
+      const isBoardGame = data.gameType === "othello" || data.gameType === "shogi";
+      if (isBoardGame && members.length >= maxPlayers) updateData.status = "playing";
+
+      await updateDoc(roomRef, updateData);
     }
 
     openGameArea(room.id, data.gameType || room.gameType);
@@ -3509,7 +3561,8 @@ function listenSelectedGame(roomId) {
     doc(db, "gameRooms", roomId),
     (snapshot) => {
       if (!snapshot.exists()) { closeGameArea(); return; }
-      renderCurrentGame({ id: snapshot.id, ...snapshot.data() });
+      const data = snapshot.data();
+      renderCurrentGame({ id: snapshot.id, ...data, gameState: gameStateFromFirestore(data.gameType, data.gameState) });
     },
     (error) => console.error("現在のゲーム監視エラー:", error)
   );
@@ -3704,7 +3757,7 @@ async function playOthelloMove(room, row, col) {
       if (!snapshot.exists()) throw new Error("ルームが存在しません");
 
       const latest = snapshot.data();
-      const state = latest.gameState;
+      const state = gameStateFromFirestore("othello", latest.gameState);
       if (!state?.board) throw new Error("ゲーム状態がありません");
       if (state.winner) throw new Error("すでに終了しています");
 
@@ -3737,7 +3790,7 @@ async function playOthelloMove(room, row, col) {
       const winner = getOthelloWinner(newBoard);
 
       transaction.update(roomRef, {
-        gameState: { ...state, board: newBoard, currentPlayer: nextPlayer, started: true, winner },
+        gameState: gameStateToFirestore("othello", { ...state, board: newBoard, currentPlayer: nextPlayer, started: true, winner }),
         updatedAt: serverTimestamp()
       });
     });
@@ -4023,7 +4076,7 @@ async function executeShogiMove(room, from, to, piece, player, shouldPromote) {
       if (!snapshot.exists()) throw new Error("ルームが存在しません");
 
       const latest = snapshot.data();
-      const state = ensureShogiState(latest.gameState);
+      const state = ensureShogiState(gameStateFromFirestore("shogi", latest.gameState));
       if (state.currentPlayer !== player) throw new Error("現在の手番ではありません");
 
       const board = state.board.map((line) => [...line]);
@@ -4055,7 +4108,7 @@ async function executeShogiMove(room, from, to, piece, player, shouldPromote) {
       if (destination === "王" || destination === "玉") winner = player;
 
       transaction.update(roomRef, {
-        gameState: { ...state, board, captured, currentPlayer: nextPlayer, winner },
+        gameState: gameStateToFirestore("shogi", { ...state, board, captured, currentPlayer: nextPlayer, winner }),
         updatedAt: serverTimestamp()
       });
     });
