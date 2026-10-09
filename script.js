@@ -107,6 +107,7 @@ let fcmForegroundListenerReady = false;
 let currentGameType = "daifugo";
 let selectedGameRoomId = null;
 let unsubscribeGameRooms = null;
+let messagesListenerFailed = false;
 let unsubscribeCurrentGame = null;
 let selectedDaifugoCards = [];
 let selectedShogiPiece = null;
@@ -1116,17 +1117,26 @@ async function updateProfileImageEverywhere(image) {
   if (!username) return;
 
   try {
-    const snapshot = await getDocs(collection(db, "friends"));
-    const batch = writeBatch(db);
-    let count = 0;
-
-    snapshot.forEach((item) => {
+    /* 自分が入っている友達関係だけを読む（以前は friends を全件読んでいた） */
+    const [asUser1, asUser2] = await Promise.all([
+      getDocs(query(collection(db, "friends"), where("user1", "==", username))),
+      getDocs(query(collection(db, "friends"), where("user2", "==", username)))
+    ]);
+    const updates = new Map();
+    const add = (ref, data) => updates.set(ref.path, { ref, data: { ...(updates.get(ref.path)?.data || {}), ...data } });
+    [...asUser1.docs, ...asUser2.docs].forEach((item) => {
       const data = item.data();
-      if (data.user1 === username) { batch.update(item.ref, { user1Photo: image }); count++; }
-      if (data.user2 === username) { batch.update(item.ref, { user2Photo: image }); count++; }
+      if (data.user1 === username) add(item.ref, { user1Photo: image });
+      if (data.user2 === username) add(item.ref, { user2Photo: image });
     });
 
-    if (count > 0) await batch.commit();
+    /* 1回の書き込みは500件まで */
+    const list = [...updates.values()];
+    for (let i = 0; i < list.length; i += 400) {
+      const batch = writeBatch(db);
+      list.slice(i, i + 400).forEach(({ ref, data }) => batch.update(ref, data));
+      await batch.commit();
+    }
   } catch (error) {
     console.error("プロフィール画像同期エラー:", error);
   }
@@ -1216,66 +1226,18 @@ async function migrateUsername(oldName, newName) {
   if (!oldName || !newName || oldName === newName) return;
 
   try {
-    /* 友達 */
-    const friendsSnapshot = await getDocs(collection(db, "friends"));
-    const friendBatch = writeBatch(db);
-    let friendChanged = false;
+    /* 古い名前が入っている友達・グループ・メッセージだけを読んで書き換える
+       （以前は friends・groups・messages を全件読んでいた。管理者の名前変更と同じ migrateRenamedUserData を使う） */
+    await migrateRenamedUserData(oldName, newName);
 
-    friendsSnapshot.forEach((friendDoc) => {
-      const data = friendDoc.data();
-      const updateData = {};
-      if (data.user1 === oldName) updateData.user1 = newName;
-      if (data.user2 === oldName) updateData.user2 = newName;
-      if (data.requestedBy === oldName) updateData.requestedBy = newName;
-      if (data.acceptedBy === oldName) updateData.acceptedBy = newName;
-
-      if (Object.keys(updateData).length > 0) {
-        updateData.updatedAt = serverTimestamp();
-        friendBatch.update(friendDoc.ref, updateData);
-        friendChanged = true;
-      }
-    });
-    if (friendChanged) await friendBatch.commit();
-
-    /* グループ */
-    const groupsSnapshot = await getDocs(collection(db, "groups"));
-    const groupBatch = writeBatch(db);
-    let groupChanged = false;
-
-    groupsSnapshot.forEach((groupDoc) => {
-      const data = groupDoc.data();
-      const members = Array.isArray(data.members) ? [...data.members] : [];
-      const newMembers = members.map((m) => (m === oldName ? newName : m));
-      const updateData = {};
-
-      if (JSON.stringify(members) !== JSON.stringify(newMembers)) updateData.members = newMembers;
-      if (data.owner === oldName) updateData.owner = newName;
-
-      if (Object.keys(updateData).length > 0) {
-        updateData.updatedAt = serverTimestamp();
-        groupBatch.update(groupDoc.ref, updateData);
-        groupChanged = true;
-      }
-    });
-    if (groupChanged) await groupBatch.commit();
-
-    /* メッセージ */
-    const messagesSnapshot = await getDocs(collection(db, "messages"));
-    const messageBatch = writeBatch(db);
-    let messageChanged = false;
-
-    messagesSnapshot.forEach((messageDoc) => {
-      const data = messageDoc.data();
-      const updateData = {};
-      if (data.sender === oldName) updateData.sender = newName;
-      if (data.receiver === oldName) updateData.receiver = newName;
-
-      if (Object.keys(updateData).length > 0) {
-        messageBatch.update(messageDoc.ref, updateData);
-        messageChanged = true;
-      }
-    });
-    if (messageChanged) await messageBatch.commit();
+    /* メンバーには入っていないが作成者（owner）が古い名前のグループも、以前と同じように書き換える */
+    const ownedSnap = await getDocs(query(collection(db, "groups"), where("owner", "==", oldName)));
+    const owned = ownedSnap.docs.filter((d) => !(Array.isArray(d.data().members) ? d.data().members : []).includes(oldName));
+    for (let i = 0; i < owned.length; i += 400) {
+      const batch = writeBatch(db);
+      owned.slice(i, i + 400).forEach((d) => batch.update(d.ref, { owner: newName, updatedAt: serverTimestamp() }));
+      await batch.commit();
+    }
   } catch (error) {
     console.error("名前変更データ移行エラー:", error);
     throw error;
@@ -1945,8 +1907,16 @@ function renderChatHeaderForGroup(group) {
    チャット選択
 ========================================================= */
 
+/* すでに開いていて、メッセージの監視が正常に動いているチャットか（同じチャットをもう一度選んでも監視を作り直さない） */
+function isMessagesListenerActiveFor(type, chatId, friendshipId = null) {
+  if (!unsubscribeMessages || messagesListenerFailed) return false;
+  if (selectedChatType !== type || selectedChat !== chatId) return false;
+  return type !== "friend" || selectedFriendshipId === friendshipId;
+}
+
 function selectFriendChat(friend) {
   if (!friend) return;
+  const alreadyListening = isMessagesListenerActiveFor("friend", friend.friend, friend.friendshipId);
   selectedChatType = "friend";
   selectedChat = friend.friend;
   selectedFriendshipId = friend.friendshipId;
@@ -1957,11 +1927,13 @@ function selectFriendChat(friend) {
   if (sendButton) sendButton.disabled = false;
   renderFriends();
   renderGroups();
-  listenSelectedChatMessages();
+  if (alreadyListening) markSelectedChatAsRead();
+  else listenSelectedChatMessages();
 }
 
 function selectGroupChat(group) {
   if (!group) return;
+  const alreadyListening = isMessagesListenerActiveFor("group", group.id);
   selectedChatType = "group";
   selectedChat = group.id;
   selectedFriendshipId = null;
@@ -1972,7 +1944,8 @@ function selectGroupChat(group) {
   if (sendButton) sendButton.disabled = false;
   renderFriends();
   renderGroups();
-  listenSelectedChatMessages();
+  if (alreadyListening) markSelectedChatAsRead();
+  else listenSelectedChatMessages();
 }
 
 function resetChat() {
@@ -2028,6 +2001,7 @@ let selectedChatMessages = [];
 
 function listenSelectedChatMessages() {
   if (unsubscribeMessages) { unsubscribeMessages(); unsubscribeMessages = null; }
+  messagesListenerFailed = false;
   selectedChatMessages = [];
   if (!username || !selectedChat) return;
 
@@ -2060,6 +2034,7 @@ function listenSelectedChatMessages() {
     },
     (error) => {
       console.error("チャット読み込みエラー:", error);
+      messagesListenerFailed = true; /* もう一度選んだときは監視を作り直す */
       if (messagesElement) {
         messagesElement.innerHTML = `<div class="empty-state">メッセージの読み込みに失敗しました</div>`;
       }
@@ -3448,7 +3423,9 @@ function switchView(view) {
   if (view === "mypage") loadMyPage();
   if (view === "derby") { refreshDerbySubscriptionsIfNeeded(); renderRaceInfo(); }
   else stopDerbySubscriptions();
+  /* ルーム一覧の監視はゲーム画面を開いている間だけ（戻ったときに最新の一覧を読み直す）。開いているルームの監視は続ける */
   if (view === "games") loadGameRooms();
+  else stopGameRoomsSubscription();
   if (view === "economy") openEconomyView();
   if (view === "announcements") openAnnouncementsView();
   else stopAnnouncementsSubscription();
@@ -6739,6 +6716,10 @@ gameTypeButtons.forEach((button) => {
 });
 
 let latestGameRooms = [];
+
+function stopGameRoomsSubscription() {
+  if (unsubscribeGameRooms) { unsubscribeGameRooms(); unsubscribeGameRooms = null; }
+}
 
 function loadGameRooms() {
   if (!gameRoomsEl) return;
