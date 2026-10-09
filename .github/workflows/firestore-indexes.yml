@@ -1,0 +1,97 @@
+# Firestore の複合インデックス（firestore.indexes.json）のテスト・本番確認・本番への追加
+#
+# ・プルリクエスト（firestore.indexes.json などを変えたとき）
+#     スクリプトのテスト → 本番のインデックスを読んで、firestore.indexes.json と比べる（本番は変えない）
+# ・main に firestore.indexes.json の変更が入ったとき（プルリクエストのマージ）
+#     本番に無いインデックスだけを作り、READY（使える状態）になるまで待ってから、チャットの問い合わせで確かめる
+#     インデックスの削除・変更はしない。Firestore Rules・データ・その他の設定には触れない（Firebase CLI の deploy は使わない）
+# ・手動実行（Actions タブ → Firestore インデックス → Run workflow。main に入った後に使える）
+#     check（確認だけ）/ deploy（無いものだけ作る）/ verify（チャットの問い合わせを確かめる）
+#
+# 鍵は「ゆうダービー自動開催」「Firestore ルール」と同じ FIREBASE_SERVICE_ACCOUNT（Secrets）を使う。新しい鍵は不要。
+# インデックスの作成は無料プラン（Spark）のままで行える。課金や請求先の設定は変えない。
+
+name: Firestore インデックス
+
+on:
+  pull_request:
+    paths:
+      - "firestore.indexes.json"
+      - "firestore-indexes/**"
+      - ".github/workflows/firestore-indexes.yml"
+  push:
+    branches: [main]
+    paths:
+      - "firestore.indexes.json"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "check（確認だけ）/ deploy（無いものだけ作る）/ verify（問い合わせの確認）"
+        type: choice
+        options: [check, deploy, verify]
+        default: check
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firestore-indexes
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: スクリプトのテスト
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: firestore-indexes
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --no-audit --no-fund
+      - run: npm test
+
+  production:
+    name: 本番の確認・追加
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: firestore-indexes
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 鍵が登録されているか確認
+        id: secret
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          if [ -z "$FIREBASE_SERVICE_ACCOUNT" ]; then
+            echo "::warning::FIREBASE_SERVICE_ACCOUNT が使えないため、本番の確認をスキップしました"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.secret.outputs.ready == 'true'
+        with:
+          node-version: 22
+
+      - name: 依存パッケージのインストール
+        if: steps.secret.outputs.ready == 'true'
+        run: npm ci --no-audit --no-fund
+
+      - name: 確認・追加
+        if: steps.secret.outputs.ready == 'true'
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          INDEX_WAIT_MINUTES: "30"
+          MODE: ${{ github.event_name == 'push' && 'deploy' || github.event_name == 'workflow_dispatch' && inputs.mode || 'check' }}
+        run: |
+          echo "モード: $MODE"
+          node indexes.mjs "$MODE"

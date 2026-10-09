@@ -1,0 +1,18 @@
+{
+  "name": "yuuchat-firestore-indexes",
+  "description": "Firestore の複合インデックス（../firestore.indexes.json）の本番確認・追加（GitHub Actions から実行）",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "check": "node indexes.mjs check",
+    "deploy": "node indexes.mjs deploy",
+    "verify": "node indexes.mjs verify"
+  },
+  "dependencies": {
+    "google-auth-library": "^11.1.0"
+  }
+}
