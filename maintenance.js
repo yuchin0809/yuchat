@@ -9,26 +9,16 @@
 
 (function () {
   /* ↓ メンテナンスの ON / OFF はここだけで切り替える */
-  const MAINTENANCE_MODE = false;
+  const MAINTENANCE_MODE = true;
 
-  const MAINTENANCE_TITLE = "緊急メンテナンス中";
+  const MAINTENANCE_TITLE = "緊急メンテナンスのお知らせ";
   const MAINTENANCE_BODY = [
-    "現在、ゆうChatは緊急メンテナンスを実施しています。",
-    "一部機能の修正・改善と動作テストを行っています。",
-    "メンテナンスが終了するまで、ゆうChatをご利用いただけません。",
-    "ご迷惑をおかけしますが、しばらくお待ちください。"
+    "現在、サーバー障害が発生しているため、ゆうChatを一時的にご利用いただけません。",
+    "ご利用の皆様にはご迷惑をおかけしてしまい、誠に申し訳ございません。",
+    "復旧に向けて対応を進めております。メンテナンス終了まで、今しばらくお待ちください。"
   ];
-  const MAINTENANCE_ITEMS = [
-    "グループチャット機能の修正・改善",
-    "既読機能の修正",
-    "未読マークの追加",
-    "受信画像ビューアの改善",
-    "ゲームルーム作成制限の追加",
-    "オセロ盤面の表示修正",
-    "オンライン状態機能の削除",
-    "Firestoreの読み取り・書き込み量の削減",
-    "既存機能を含む全体的な動作テスト"
-  ];
+  /* 「現在のメンテナンス内容」の一覧（空なら見出しごと出さない） */
+  const MAINTENANCE_ITEMS = [];
 
   const currentScript = document.currentScript;
   const appSrc = currentScript && currentScript.dataset.appSrc ? currentScript.dataset.appSrc : "./script.js";
@@ -54,7 +44,8 @@
       .maintenance-icon { font-size: 40px; line-height: 1; margin-bottom: 12px; text-align: center; }
       .maintenance-title { margin: 0 0 14px; font-size: 22px; font-weight: 800; text-align: center; }
       .maintenance-body { margin: 0 0 18px; font-size: 15px; line-height: 1.8; }
-      .maintenance-body p { margin: 0; }
+      .maintenance-body p { margin: 0 0 12px; }
+      .maintenance-body p:last-child { margin-bottom: 0; }
       .maintenance-subtitle { margin: 0 0 8px; font-size: 13px; font-weight: 700; color: #555; }
       .maintenance-list { margin: 0; padding: 12px 14px 12px 30px; background: #f5f6f8; border-radius: 12px; font-size: 14px; line-height: 1.8; }
       .maintenance-footer { margin: 18px 0 0; font-size: 12px; color: #888; text-align: center; }`;
@@ -98,7 +89,9 @@
     footer.className = "maintenance-footer";
     footer.textContent = "ゆうChat";
 
-    card.append(icon, title, body, subtitle, list, footer);
+    card.append(icon, title, body);
+    if (MAINTENANCE_ITEMS.length) card.append(subtitle, list);
+    card.append(footer);
     screen.appendChild(card);
 
     /* 通常の画面（ログイン画面・チャットなど）は表示も操作もできないように取り除く */
