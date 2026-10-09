@@ -131,6 +131,46 @@ test("同じメッセージの通知は1回だけ", async () => {
   assert.equal(sent.length, first, "2回目は送らない");
 });
 
+/* 無料枠（1日2万回の書き込み）を守るため：通知1件あたりの Firestore への書き込みは notificationLogs の作成1回だけ */
+function countLogWrites(deps) {
+  const fs = deps.firestore, counts = { create: 0, update: 0 };
+  const create = fs.createIfAbsent, update = fs.update;
+  fs.createIfAbsent = async (path, data) => { if (path.startsWith("notificationLogs/")) counts.create++; return create(path, data); };
+  fs.update = async (path, data) => { if (path.startsWith("notificationLogs/")) counts.update++; return update(path, data); };
+  return counts;
+}
+
+test("通知の記録の書き込みは1回だけ（作成のみ。送信後に更新しない）：友達・グループ・無効なトークンがあるとき", async () => {
+  for (const [messageId, invalidTokens] of [["m1", []], ["g1m", []], ["m1", ["tokB2"]]]) {
+    const { deps, sent } = makeDeps(baseDocs(), { invalidTokens });
+    const counts = countLogWrites(deps);
+    const r = await json(await handleRequest(request("/notify", { token: "uA", body: { messageId } }), env, deps));
+    assert.equal(r.status, 200);
+    assert.ok(sent.length > 0, "通知は送られる");
+    assert.deepEqual(counts, { create: 1, update: 0 }, messageId);
+    assert.equal(deps.firestore.store.has(`notificationLogs/${messageId}`), true, "二重送信防止の記録は残る");
+  }
+});
+
+test("同じメッセージの通知依頼が同時に2回届いても、送るのは1回だけ（1回は duplicate）", async () => {
+  const { deps, sent } = makeDeps(baseDocs());
+  const counts = countLogWrites(deps);
+  const results = await Promise.all([1, 2].map(async () => json(await handleRequest(request("/notify", { token: "uA", body: { messageId: "m1" } }), env, deps))));
+  assert.deepEqual(sent.map((s) => s.token).sort(), ["tokB1", "tokB2"]);
+  assert.equal(results.filter((r) => r.body.skipped === "duplicate").length, 1);
+  assert.equal(counts.update, 0);
+});
+
+test("送信を取り消したメッセージ（deleted・画像のデータは消してある）は通知しない。記録も作らない", async () => {
+  const docs = baseDocs();
+  docs["messages/m1"] = { ...docs["messages/m1"], deleted: true, deletedAt: "2026-10-08T02:59:50Z" };
+  const { deps, sent } = makeDeps(docs);
+  const r = await json(await handleRequest(request("/notify", { token: "uA", body: { messageId: "m1" } }), env, deps));
+  assert.equal(r.body.skipped, "deleted");
+  assert.equal(sent.length, 0);
+  assert.equal(deps.firestore.store.has("notificationLogs/m1"), false);
+});
+
 test("グループ：送信者以外のメンバー全員へ", async () => {
   const { deps, sent } = makeDeps(baseDocs());
   const r = await json(await handleRequest(request("/notify", { token: "uA", body: { messageId: "g1m" } }), env, deps));
