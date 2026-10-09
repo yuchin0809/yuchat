@@ -2033,8 +2033,7 @@ function renderPagedChat(paging, scrollMode) {
     .filter(isMessageForSelectedChat)
     .sort((a, b) => timestampMillis(a.createdAt, Infinity) - timestampMillis(b.createdAt, Infinity));
   renderSelectedMessages(selectedChatMessages, { scrollMode, olderState: paging.fallback ? null : paging.olderState });
-  /* 端末に残っていたデータだけで描いた段階では既読にしない（サーバーの最新を受け取ってから） */
-  if (paging.fallback || paging.serverSynced) markSelectedChatAsRead();
+  markSelectedChatAsRead();
 }
 
 function listenSelectedChatMessages() {
@@ -3001,6 +3000,9 @@ let lastReadWriteKey = "";
 
 async function markSelectedChatAsRead() {
   if (!currentUser || !username || !selectedChat || !isChatScreenVisible()) return;
+  /* 端末に残っていたデータだけで描いている段階（サーバーの最新をまだ受け取っていない）では既読にしない。
+     同じチャットのタップ・アプリに戻ったとき・チャット画面への切り替えなど、どこから呼ばれても同じ */
+  if (chatPaging && !chatPaging.fallback && !chatPaging.serverSynced) return;
   const chatRef = getSelectedChatRef();
   if (!chatRef) return;
 
