@@ -7138,11 +7138,108 @@ function getOthelloWinner(board) {
   return "draw";
 }
 
-function getOthelloResultText(winner) {
-  if (winner === "black") return "黒の勝ち！";
-  if (winner === "white") return "白の勝ち！";
-  if (winner === "draw") return "引き分け";
-  return "";
+function countOthelloStones(board) {
+  let black = 0, white = 0;
+  (Array.isArray(board) ? board : []).forEach((row) => (Array.isArray(row) ? row : []).forEach((cell) => {
+    if (cell === "black") black++;
+    if (cell === "white") white++;
+  }));
+  return { black, white };
+}
+
+/* 対局終了の表示用：勝敗（自分から見て）・最終枚数・何枚差か
+   勝敗そのものは今まで通り保存された state.winner（getOthelloWinner で決めたもの）を使う。ここでは表示を作るだけ */
+function getOthelloResultSummary(state, room, board) {
+  const { black, white } = countOthelloStones(board);
+  const members = Array.isArray(room?.members) ? room.members : [];
+  const names = { black: members[0] || "", white: members[1] || "" };
+  const myColor = getOthelloPlayerColor(room);
+  const winner = state?.winner;
+  const colorText = { black: "黒", white: "白" };
+  const diff = Math.abs(black - white);
+
+  if (winner === "draw") {
+    return {
+      tone: "draw", black, white, names, myColor, winner, diff: 0,
+      headline: "🤝 引き分け",
+      detail: `黒も白も ${black}枚ずつ、同じ枚数でした`
+    };
+  }
+
+  const winnerName = names[winner] ? `（${names[winner]}）` : "";
+  const winnerLabel = `${colorText[winner] || ""}${winnerName}の勝ち`;
+  const margin = diff > 0 ? `・${diff}枚差` : "";
+  if (myColor) {
+    const iWon = myColor === winner;
+    return {
+      tone: iWon ? "win" : "lose", black, white, names, myColor, winner, diff,
+      headline: iWon ? "🎉 あなたの勝ち！" : "😢 相手の勝ち",
+      detail: iWon ? `${winnerLabel}${diff > 0 ? `・${diff}枚差で勝ちました` : ""}` : `${winnerLabel}${diff > 0 ? `・${diff}枚差で負けました` : ""}`
+    };
+  }
+  return {
+    tone: "neutral", black, white, names, myColor, winner, diff,
+    headline: `🏆 ${winnerLabel}！`,
+    detail: `${winnerLabel}${margin}`
+  };
+}
+
+/* 対局終了の結果（勝者を大きく・黒と白の最終枚数・何枚差か・自分の勝ち／負け／引き分け） */
+function buildOthelloResultElement(summary) {
+  const result = document.createElement("div");
+  result.className = `othello-result othello-result--${summary.tone}`;
+  result.setAttribute("role", "status");
+
+  const headline = document.createElement("div");
+  headline.className = "othello-result-headline";
+  headline.textContent = summary.headline;
+  result.appendChild(headline);
+
+  const detail = document.createElement("div");
+  detail.className = "othello-result-detail";
+  detail.textContent = summary.detail;
+  result.appendChild(detail);
+
+  const score = document.createElement("div");
+  score.className = "othello-score";
+  const side = (color) => {
+    const item = document.createElement("div");
+    const isWinner = summary.winner === color;
+    item.className = `othello-score-side ${color}${isWinner ? " is-winner" : ""}${summary.myColor === color ? " is-me" : ""}`;
+    item.dataset.color = color;
+
+    const stone = document.createElement("span");
+    stone.className = `othello-stone ${color} othello-score-stone`;
+    item.appendChild(stone);
+
+    const label = document.createElement("span");
+    label.className = "othello-score-label";
+    const who = summary.names[color] ? ` ${summary.names[color]}` : "";
+    label.textContent = `${color === "black" ? "黒" : "白"}${who}${summary.myColor === color ? "（あなた）" : ""}`;
+    item.appendChild(label);
+
+    const count = document.createElement("span");
+    count.className = "othello-score-count";
+    count.textContent = `${summary[color]}枚`;
+    item.appendChild(count);
+
+    if (isWinner) {
+      const badge = document.createElement("span");
+      badge.className = "othello-score-badge";
+      badge.textContent = "勝ち";
+      item.appendChild(badge);
+    }
+    return item;
+  };
+  score.appendChild(side("black"));
+  const vs = document.createElement("span");
+  vs.className = "othello-score-vs";
+  vs.textContent = summary.winner === "draw" ? "＝" : "対";
+  score.appendChild(vs);
+  score.appendChild(side("white"));
+  result.appendChild(score);
+
+  return result;
 }
 
 function renderOthelloBoard(container, room) {
@@ -7155,14 +7252,14 @@ function renderOthelloBoard(container, room) {
   const wrapper = document.createElement("div");
   wrapper.className = "othello-wrapper";
 
-  const info = document.createElement("div");
-  info.className = "game-info";
   if (state.winner) {
-    info.textContent = getOthelloResultText(state.winner);
+    wrapper.appendChild(buildOthelloResultElement(getOthelloResultSummary(state, room, board)));
   } else {
+    const info = document.createElement("div");
+    info.className = "game-info";
     info.textContent = (state.currentPlayer || "black") === "black" ? "黒の番" : "白の番";
+    wrapper.appendChild(info);
   }
-  wrapper.appendChild(info);
 
   const boardElement = document.createElement("div");
   boardElement.className = "othello-board";
