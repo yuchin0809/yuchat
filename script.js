@@ -1161,10 +1161,10 @@ changeNameButton?.addEventListener("click", async () => {
       ...(isNotifySetupDoneLocally() ? { notificationSetupDone: true } : {})
     });
 
-    /* コイン・ボーナス受け取り済み・累計賭け金・ゆう銀行（預金・借入）・ゆう株・ログインボーナス・お知らせの既読の状態を新しい名前に引き継ぐ
+    /* コイン・ボーナス受け取り済み・累計賭け金・ゆう銀行（預金・借入）・ゆう株・ログインボーナス・隠しコード・お知らせの既読の状態を新しい名前に引き継ぐ
        （引き継がないと、次に開いたときに初期コインやボーナスがもう一度付いてしまう） */
     const carriedCoinFields = {};
-    ["coins", "bonus500Granted", "bonus500GrantedAt", "totalBetAmount", "bank", "stocks", "lastLoginBonusDate", "lastAnnouncementReadAt"].forEach((key) => {
+    ["coins", "bonus500Granted", "bonus500GrantedAt", "totalBetAmount", "bank", "stocks", "lastLoginBonusDate", "secretCodeBonusGranted", "lastAnnouncementReadAt"].forEach((key) => {
       if (oldUserData[key] !== undefined) carriedCoinFields[key] = oldUserData[key];
     });
     if (Object.keys(carriedCoinFields).length > 0) {
@@ -1406,6 +1406,7 @@ addFriendButton?.addEventListener("click", async () => {
 
   const trimmed = friendName.trim();
   if (!trimmed) return alert("名前を入力してください。");
+  if (await isSecretCode(trimmed)) return redeemSecretCode();
   if (trimmed === username) return alert("自分自身は追加できません。");
 
   try {
@@ -8581,6 +8582,42 @@ async function grantLoginBonusIfNeeded(data) {
     console.warn("ログインボーナスの付与に失敗:", error);
   } finally {
     loginBonusInFlight = false;
+  }
+}
+
+/* ----- 隠しコード（友達追加の入力欄に打つと1000コイン・1人1回だけ） -----
+   コードそのものは書かず、SHA-256 のハッシュ値だけを置く（script.js を見てもコードが分からないように）。
+   入力は全角・半角と大文字・小文字の違いをそろえてから比べる。ユーザー名に「#」は使えないので、友達の名前とはぶつからない */
+const SECRET_CODE_HASH = "124653aa872865dd93a424d958c168bc3a729b53fcf5fe20b5c066d47362c623";
+const SECRET_CODE_BONUS_COINS = 1000;
+
+async function isSecretCode(text) {
+  const normalized = text.normalize("NFKC").toLowerCase();
+  if (!normalized.startsWith("#") || !crypto?.subtle) return false;
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(normalized));
+  const hex = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+  return hex === SECRET_CODE_HASH;
+}
+
+/* 受け取り済みかどうかはトランザクションの中で確かめるので、同時に何回打っても1回だけ */
+async function redeemSecretCode() {
+  if (!currentUser || !username) return alert("ログインしてからもう一度お試しください。");
+  try {
+    const result = await runTransaction(db, async (transaction) => {
+      const userRef = doc(db, "users", username);
+      const snap = await transaction.get(userRef);
+      if (!snap.exists() || typeof snap.data().coins !== "number") return "not_ready";
+      const data = snap.data();
+      if (data.secretCodeBonusGranted === true) return "already";
+      transaction.update(userRef, { coins: data.coins + SECRET_CODE_BONUS_COINS, secretCodeBonusGranted: true });
+      return "granted";
+    });
+    if (result === "granted") showAppToast("🤫 隠しコード", `隠しコードを見つけました！ +${SECRET_CODE_BONUS_COINS}コイン`);
+    else if (result === "already") alert("この隠しコードはもう使われています。");
+    else alert("まだコインの準備ができていません。少し待ってからもう一度お試しください。");
+  } catch (error) {
+    console.error("隠しコードのエラー:", error);
+    alert("隠しコードの受け取りに失敗しました。");
   }
 }
 
