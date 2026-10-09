@@ -1478,6 +1478,166 @@ button {
 }
 
 
+/* ----- オセロ：対局終了の結果 ----- */
+
+.othello-wrapper {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+}
+
+.othello-result {
+    width: 100%;
+    max-width: 560px;
+
+    padding: 16px 14px;
+
+    border-radius: 18px;
+
+    border: 2px solid #d4d8de;
+
+    background: #fff;
+
+    text-align: center;
+
+    box-shadow: 0 4px 14px rgba(0,0,0,.08);
+}
+
+.othello-result--win {
+    border-color: #f2b705;
+    background: linear-gradient(180deg, #fff8db, #fff);
+}
+
+.othello-result--lose {
+    border-color: #9aa5b1;
+    background: linear-gradient(180deg, #eef1f5, #fff);
+}
+
+.othello-result--draw {
+    border-color: #3b82f6;
+    background: linear-gradient(180deg, #e8f1ff, #fff);
+}
+
+.othello-result-headline {
+    font-size: clamp(26px, 7vw, 38px);
+    font-weight: 800;
+    line-height: 1.2;
+
+    color: #111;
+}
+
+.othello-result-detail {
+    margin-top: 6px;
+
+    font-size: 15px;
+    font-weight: 700;
+
+    color: #444;
+}
+
+.othello-score {
+    margin-top: 14px;
+
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: stretch;
+    gap: 8px;
+}
+
+.othello-score-side {
+    min-width: 0;
+
+    padding: 10px 8px;
+
+    border-radius: 14px;
+
+    border: 2px solid #e2e6eb;
+
+    background: #f7f8fa;
+
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+}
+
+.othello-score-side.is-winner {
+    border-color: #f2b705;
+    background: #fff4c2;
+}
+
+.othello-score-stone {
+    width: 30px;
+    flex-shrink: 0;
+}
+
+.othello-score-label {
+    max-width: 100%;
+
+    font-size: 13px;
+    font-weight: 700;
+
+    color: #333;
+
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.othello-score-count {
+    font-size: clamp(28px, 8vw, 40px);
+    font-weight: 800;
+    line-height: 1.1;
+
+    color: #111;
+
+    font-variant-numeric: tabular-nums;
+}
+
+.othello-score-badge {
+    padding: 2px 10px;
+
+    border-radius: 999px;
+
+    background: #111;
+
+    color: #fff;
+
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.othello-score-vs {
+    align-self: center;
+
+    font-size: 16px;
+    font-weight: 800;
+
+    color: #888;
+}
+
+@media (max-width: 700px) {
+    .othello-result {
+        padding: 12px 10px;
+    }
+}
+
+@media (max-width: 360px) {
+    .othello-score {
+        gap: 4px;
+    }
+
+    .othello-score-side {
+        padding: 8px 4px;
+    }
+
+    .othello-score-label {
+        font-size: 12px;
+    }
+}
+
+
 /* ==================================================
    将棋
 ================================================== */
