@@ -701,6 +701,163 @@ button {
 
 
 /* ==================================================
+   選択中の画像（送信前のプレビュー）
+================================================== */
+
+.image-preview-bar {
+    flex-shrink: 0;
+
+    display: flex;
+    align-items: center;
+    gap: 10px;
+
+    padding: 8px 10px;
+
+    background: #eef6ff;
+
+    border-top: 2px solid #3b82f6;
+
+    min-width: 0;
+}
+
+.image-preview-bar.is-error {
+    background: #fff1f1;
+    border-top-color: #e5484d;
+}
+
+.image-preview-thumb {
+    flex-shrink: 0;
+
+    width: 56px;
+    height: 56px;
+
+    border-radius: 10px;
+
+    object-fit: cover;
+
+    background: #dde3ea;
+
+    border: 1px solid #c9d3df;
+}
+
+.image-preview-info {
+    flex: 1;
+
+    min-width: 0;
+
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.image-preview-label {
+    font-size: 13px;
+
+    color: #1d4ed8;
+}
+
+.image-preview-name {
+    font-size: 12px;
+
+    color: #333;
+
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.image-preview-status {
+    font-size: 12px;
+
+    color: #555;
+
+    overflow-wrap: anywhere;
+}
+
+.image-preview-bar.is-error .image-preview-status {
+    color: #c62828;
+    font-weight: bold;
+}
+
+.image-preview-bar.is-sending .image-preview-status {
+    color: #1d4ed8;
+    font-weight: bold;
+}
+
+.image-preview-clear {
+    flex-shrink: 0;
+
+    min-width: 44px;
+    height: 44px;
+
+    padding: 0 12px;
+
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+
+    border: 1px solid #c9d3df;
+
+    border-radius: 22px;
+
+    background: #fff;
+
+    color: #111;
+
+    font-size: 13px;
+    font-weight: bold;
+
+    cursor: pointer;
+}
+
+.image-preview-clear:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+/* 画像を選択中は 🖼️ ボタンにも印を付ける */
+.input-area .small-btn.has-image {
+    background: #dbeafe;
+
+    box-shadow: 0 0 0 2px #3b82f6 inset;
+}
+
+.input-area button.sending {
+    opacity: 0.75;
+}
+
+/* スマホ幅（700px 以下）：下のタブ（高さ 64px・画面に固定）の下に、入力欄・送信ボタン・選択中の画像が隠れないようにする
+   （以前から、チャット画面の下端がタブの裏に入り、入力欄が見えなくなっていた） */
+@media (max-width: 700px) {
+    #chatView {
+        padding-bottom: 64px;
+    }
+}
+
+/* 狭い画面（幅 400px 以下）：プレビューを小さく、「画像を解除」は × だけにする */
+@media (max-width: 400px) {
+    .image-preview-bar {
+        gap: 8px;
+        padding: 6px 8px;
+    }
+
+    .image-preview-thumb {
+        width: 44px;
+        height: 44px;
+    }
+
+    .image-preview-clear {
+        padding: 0;
+        justify-content: center;
+        font-size: 18px;
+    }
+
+    .image-preview-clear-text {
+        display: none;
+    }
+}
+
+/* ==================================================
    入力
 ================================================== */
 
