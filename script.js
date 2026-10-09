@@ -89,7 +89,11 @@ let selectedChatType = null;
 let selectedFriendshipId = null;
 
 let replyingMessage = null;
-let pendingImageData = null;
+/* 送信前に選んだ画像（選択中の表示・解除・送信に使う）
+   { id, name, size, status: "preparing" | "ready" | "error", dataURL, sentBytes, error } */
+let pendingImage = null;
+let pendingImageSeq = 0;
+let isSendingMessage = false;
 
 let unsubscribeFriends = null;
 let unsubscribeFriendsAsUser2 = null;
@@ -199,6 +203,11 @@ const changeNameButton = document.getElementById("changeNameButton");
 
 const imageButton = document.getElementById("imageButton");
 const imageInput = document.getElementById("imageInput");
+const imagePreviewBar = document.getElementById("imagePreviewBar");
+const imagePreviewThumb = document.getElementById("imagePreviewThumb");
+const imagePreviewName = document.getElementById("imagePreviewName");
+const imagePreviewStatus = document.getElementById("imagePreviewStatus");
+const imagePreviewClear = document.getElementById("imagePreviewClear");
 
 const chatView = document.getElementById("chatView");
 const derbyView = document.getElementById("derbyView");
@@ -1976,6 +1985,7 @@ function resetChat() {
   if (chatHeader) chatHeader.textContent = "相手を選択してください";
   if (messageInput) messageInput.disabled = true;
   if (sendButton) sendButton.disabled = true;
+  if (!isSendingMessage) clearPendingImage();
   if (messagesElement) {
     messagesElement.innerHTML = `<div class="empty-state">チャットを選択してください</div>`;
   }
@@ -2405,25 +2415,71 @@ messageInput?.addEventListener("keydown", (event) => {
   }
 });
 
+/* 送信中は「送信中…」を出し、送信ボタン・画像の選択と解除を止める（二重送信を防ぐ） */
+function setSendingState(sending) {
+  isSendingMessage = sending;
+  if (sendButton) {
+    sendButton.textContent = sending ? "送信中…" : "送信";
+    sendButton.disabled = sending || !selectedChat;
+    sendButton.classList.toggle("sending", sending);
+    sendButton.setAttribute("aria-busy", sending ? "true" : "false");
+  }
+  renderImagePreview();
+}
+
+/* 送信の失敗を、ユーザーに分かる言葉にする */
+function describeSendError(error, hasImage) {
+  const code = String(error?.code || "");
+  const message = String(error?.message || "");
+  if (code === "unavailable" || code === "deadline-exceeded" || (typeof navigator !== "undefined" && navigator.onLine === false)) {
+    return "通信できませんでした。電波の良い場所で、もう一度送信してください。";
+  }
+  if (hasImage && (code === "invalid-argument" || /maximum|size|too large|exceeds/i.test(message))) {
+    return "画像が大きすぎて送信できませんでした。別の画像を選んでください。";
+  }
+  if (code === "permission-denied" || code === "unauthenticated") {
+    return "送信する権限がありませんでした。ログインし直してから、もう一度送信してください。";
+  }
+  return hasImage ? "画像を送信できませんでした。もう一度送信してください。" : "メッセージを送信できませんでした。";
+}
+
 async function sendMessage() {
+  if (isSendingMessage) return;
   if (!currentUser || !username) return;
   if (!selectedChat || !selectedChatType) {
     alert("友達またはグループを選択してください。");
     return;
   }
 
+  /* 画像を準備中（小さくしている途中）は送らない。終わったら送れる */
+  if (pendingImage?.status === "preparing") {
+    renderImagePreview("画像を準備しています。少し待ってから送信してください。");
+    return;
+  }
+
   const text = messageInput?.value?.trim() || "";
-  const image = pendingImageData || null;
-  if (!text && !image) return;
+  const sendingImage = pendingImage?.status === "ready" ? pendingImage : null;
+  const image = sendingImage?.dataURL || null;
+  if (!text && !image) {
+    if (pendingImage?.status === "error") renderImagePreview();
+    return;
+  }
+
+  if (image && typeof navigator !== "undefined" && navigator.onLine === false) {
+    sendingImage.error = "通信できませんでした。電波の良い場所で、もう一度送信してください。";
+    renderImagePreview();
+    return;
+  }
 
   /* 入力欄は送信した時点ですぐ空にする（以前は保存が終わってから空にしていたため、
-     続けて打ち始めた次のメッセージが消えてしまうことがあった）。失敗したら元に戻す */
+     続けて打ち始めた次のメッセージが消えてしまうことがあった）。失敗したら元に戻す
+     画像は送信が成功するまで選択したまま（失敗したらそのまま送り直せる） */
   const replyingAtSend = replyingMessage;
   if (messageInput) { messageInput.value = ""; messageInput.placeholder = "メッセージを入力"; }
-  pendingImageData = null;
-  if (imageInput) imageInput.value = "";
+  if (sendingImage) sendingImage.error = "";
   replyingMessage = null;
   updateReplyBar();
+  setSendingState(true);
 
   try {
     const messageData = {
@@ -2471,16 +2527,18 @@ async function sendMessage() {
       batch.set(chatRef.ref, chatUpdate, { merge: true });
     }
     await batch.commit();
+    /* 送信が成功したときだけ、送った画像の選択を解除する（送信中に別の画像を選び直していたら、そちらは残す） */
+    if (sendingImage && pendingImage === sendingImage) clearPendingImage();
+    setSendingState(false);
     requestPushNotification(messageRef.id);
   } catch (error) {
     console.error("メッセージ送信エラー:", error);
+    const errorText = describeSendError(error, Boolean(image));
     if (messageInput && !messageInput.value) messageInput.value = text;
-    if (image && !pendingImageData) {
-      pendingImageData = image;
-      if (messageInput) messageInput.placeholder = "画像を選択しました。送信できます";
-    }
     if (replyingAtSend && !replyingMessage) { replyingMessage = replyingAtSend; updateReplyBar(); }
-    alert("メッセージを送信できませんでした。");
+    if (sendingImage && pendingImage === sendingImage) sendingImage.error = errorText;
+    setSendingState(false);
+    alert(errorText);
   }
 }
 
@@ -2488,30 +2546,160 @@ async function sendMessage() {
    画像送信
 ========================================================= */
 
-imageButton?.addEventListener("click", () => imageInput?.click());
+/* 画像はメッセージ（messages/{id}.image）に data URL のまま保存する（以前からの形。表示側はそのまま）。
+   Firestore の1ドキュメントは 1MiB までなので、大きな画像は送る前に端末の中で小さくする
+   （以前はそのまま保存していたため、約750KBを超える写真は保存できずに送信が失敗していた）
+   ・選べるファイルは今まで通り 5MB まで（制限は緩めない）
+   ・元の画像が十分小さければそのまま送る（GIF のアニメーションなども保つ）
+   ・大きければ長い辺 1600px まで縮めて JPEG にし、data URL が CHAT_IMAGE_MAX_LENGTH 以下になるまで画質・大きさを下げる */
+const CHAT_IMAGE_MAX_FILE_BYTES = 5 * 1024 * 1024;
+const CHAT_IMAGE_MAX_LENGTH = 700 * 1024;
+const CHAT_IMAGE_SIDES = [1600, 1280, 1024, 800, 640];
+const CHAT_IMAGE_QUALITIES = [0.85, 0.75, 0.65, 0.55];
+async function prepareChatImage(file) {
+  const original = await readFileAsDataURL(file);
+  if (original.length <= CHAT_IMAGE_MAX_LENGTH && /^data:image\/(jpeg|png|gif|webp);/.test(original)) return original;
+
+  const url = URL.createObjectURL(file);
+  try {
+    const image = await loadImageElement(url);
+    const width = image.naturalWidth || image.width;
+    const height = image.naturalHeight || image.height;
+    if (!width || !height) throw new Error("IMAGE_LOAD_FAILED");
+    for (const side of CHAT_IMAGE_SIDES) {
+      const scale = Math.min(1, side / Math.max(width, height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(width * scale));
+      canvas.height = Math.max(1, Math.round(height * scale));
+      const context = canvas.getContext("2d");
+      context.fillStyle = "#fff"; // 透明な部分（PNG など）が黒くならないように
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      for (const quality of CHAT_IMAGE_QUALITIES) {
+        const dataURL = canvas.toDataURL("image/jpeg", quality);
+        if (dataURL.length <= CHAT_IMAGE_MAX_LENGTH) return dataURL;
+      }
+    }
+    throw new Error("IMAGE_TOO_LARGE");
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+/* data URL の中身のおおよそのバイト数 */
+function dataURLBytes(dataURL) {
+  const base64 = String(dataURL || "").split(",")[1] || "";
+  return Math.floor(base64.length * 3 / 4);
+}
+
+function formatFileSize(bytes) {
+  if (!Number.isFinite(bytes) || bytes < 0) return "";
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)}KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+}
+
+/* 選択中の画像の表示（プレビュー・ファイル名・サイズ・状態・解除ボタン） */
+function renderImagePreview(notice = "") {
+  if (!imagePreviewBar) return;
+  imageButton?.classList.toggle("has-image", Boolean(pendingImage));
+  imageButton?.setAttribute("title", pendingImage ? "画像を選び直す" : "画像を送る");
+  if (imageButton) imageButton.disabled = isSendingMessage;
+  if (!pendingImage) {
+    imagePreviewBar.classList.add("hidden");
+    imagePreviewBar.classList.remove("is-error", "is-sending");
+    if (imagePreviewThumb) { imagePreviewThumb.removeAttribute("src"); imagePreviewThumb.classList.add("hidden"); }
+    if (imagePreviewName) imagePreviewName.textContent = "";
+    if (imagePreviewStatus) imagePreviewStatus.textContent = "";
+    return;
+  }
+
+  const item = pendingImage;
+  imagePreviewBar.classList.remove("hidden");
+  if (imagePreviewThumb) {
+    if (item.dataURL) {
+      if (imagePreviewThumb.getAttribute("src") !== item.dataURL) imagePreviewThumb.src = item.dataURL;
+      imagePreviewThumb.classList.remove("hidden");
+    } else {
+      imagePreviewThumb.removeAttribute("src");
+      imagePreviewThumb.classList.add("hidden");
+    }
+  }
+  if (imagePreviewName) {
+    const size = formatFileSize(item.size);
+    imagePreviewName.textContent = size ? `${item.name}（${size}）` : item.name;
+    imagePreviewName.title = item.name;
+  }
+
+  let status = "";
+  if (isSendingMessage && item.status === "ready") status = "送信中…";
+  else if (item.error) status = item.error;
+  else if (notice) status = notice;
+  else if (item.status === "preparing") status = "画像を準備中…";
+  else if (item.status === "ready") status = item.sentBytes && item.sentBytes < item.size ? `送信できます（${formatFileSize(item.sentBytes)}に小さくして送ります）` : "送信できます";
+  if (imagePreviewStatus) imagePreviewStatus.textContent = status;
+  imagePreviewBar.classList.toggle("is-error", Boolean(item.error || notice) && !isSendingMessage);
+  imagePreviewBar.classList.toggle("is-sending", isSendingMessage);
+  if (imagePreviewClear) imagePreviewClear.disabled = isSendingMessage;
+}
+
+/* 選んだ画像の選択を解除する（送信済みのメッセージや履歴には触れない） */
+function clearPendingImage() {
+  pendingImageSeq++;
+  pendingImage = null;
+  if (imageInput) imageInput.value = ""; // 同じ画像をもう一度選んでも選び直せるように
+  renderImagePreview();
+}
+
+imagePreviewClear?.addEventListener("click", () => {
+  if (isSendingMessage) return;
+  clearPendingImage();
+});
+
+imageButton?.addEventListener("click", () => {
+  if (isSendingMessage) return;
+  imageInput?.click();
+});
 
 imageInput?.addEventListener("change", async (event) => {
   const file = event.target.files?.[0];
   if (!file) return;
+  if (isSendingMessage) { imageInput.value = ""; return; }
 
   if (!file.type.startsWith("image/")) {
     alert("画像ファイルを選択してください。");
+    imageInput.value = "";
     return;
   }
 
-  if (file.size > 5 * 1024 * 1024) {
+  if (file.size > CHAT_IMAGE_MAX_FILE_BYTES) {
     alert("画像は5MB以下にしてください。");
     imageInput.value = "";
     return;
   }
 
+  /* 新しく選んだ画像に切り替える（準備が終わる前に選び直したら、古い方の結果は使わない） */
+  const seq = ++pendingImageSeq;
+  const item = { id: seq, name: file.name || "画像", size: file.size, status: "preparing", dataURL: "", sentBytes: 0, error: "" };
+  pendingImage = item;
+  imageInput.value = "";
+  renderImagePreview();
+
   try {
-    pendingImageData = await readFileAsDataURL(file);
-    if (messageInput) messageInput.placeholder = "画像を選択しました。送信できます";
+    const dataURL = await prepareChatImage(file);
+    if (pendingImageSeq !== seq) return;
+    item.dataURL = dataURL;
+    item.sentBytes = dataURLBytes(dataURL);
+    item.status = "ready";
   } catch (error) {
     console.error("画像読み込みエラー:", error);
-    pendingImageData = null;
+    if (pendingImageSeq !== seq) return;
+    item.status = "error";
+    item.error = error?.message === "IMAGE_TOO_LARGE"
+      ? "画像を小さくできませんでした。別の画像を選んでください。"
+      : "この画像は読み込めませんでした。別の画像（JPEG / PNG など）を選んでください。";
   }
+  renderImagePreview();
 });
 
 function readFileAsDataURL(file) {

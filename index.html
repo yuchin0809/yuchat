@@ -28,7 +28,7 @@
 
     <link
         rel="stylesheet"
-        href="./style.css?v=20261021-othello-result"
+        href="./style.css?v=20261022-image-othello"
     >
 </head>
 
@@ -743,6 +743,36 @@
                     id="messages"
                     class="messages"
                 ></main>
+
+
+
+                <!-- 選択中の画像（送信前のプレビュー） -->
+
+                <div
+                    id="imagePreviewBar"
+                    class="image-preview-bar hidden"
+                    aria-live="polite"
+                >
+                    <img
+                        id="imagePreviewThumb"
+                        class="image-preview-thumb hidden"
+                        alt="選択中の画像のプレビュー"
+                    >
+                    <div class="image-preview-info">
+                        <b class="image-preview-label">🖼️ 画像を選択中</b>
+                        <div id="imagePreviewName" class="image-preview-name"></div>
+                        <div id="imagePreviewStatus" class="image-preview-status"></div>
+                    </div>
+                    <button
+                        id="imagePreviewClear"
+                        class="image-preview-clear"
+                        type="button"
+                        aria-label="画像を解除"
+                        title="画像を解除"
+                    >
+                        ×<span class="image-preview-clear-text">画像を解除</span>
+                    </button>
+                </div>
 
 
 
@@ -1497,7 +1527,7 @@
      OFF のとき（とテスト環境）は、data-app-src のアプリ本体を読み込む -->
 <script
     src="./maintenance.js?v=20261007-maint"
-    data-app-src="./script.js?v=20261021-othello-result"
+    data-app-src="./script.js?v=20261022-image-othello"
 ></script>
 
 
