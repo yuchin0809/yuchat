@@ -128,7 +128,7 @@ const min = (m) => new Date(Date.now() + m * 60000);
   await ok("messages：メッセージ送信", addDoc(collection(A, "messages"), { sender: "alice", receiver: "bob", text: "hi", createdAt: serverTimestamp() }));
   await ok("messages：既読（他人のメッセージ更新）", (async () => { const r = await addDoc(collection(B, "messages"), { sender: "bob", receiver: "alice", readBy: [] }); await updateDoc(r, { readBy: ["alice"] }); })());
   await ok("gameRooms：部屋作成・更新・削除", (async () => { const r = doc(A, "gameRooms/room1"); await setDoc(r, { host: "alice" }); await updateDoc(doc(B, "gameRooms/room1"), { guest: "bob" }); await deleteDoc(r); })());
-  await ok("gameInvites：招待", setDoc(doc(A, "gameInvites/inv1"), { from: "alice", to: "bob" }));
+  await ng("gameInvites：形の合わない招待は作れない（招待のルールは下の 🎮 で確かめる）", setDoc(doc(A, "gameInvites/inv1"), { from: "alice", to: "bob" }));
   await ok("fcmTokens：トークン保存・削除", (async () => { await setDoc(doc(A, "fcmTokens/tok1"), { uid: "userA" }); await deleteDoc(doc(A, "fcmTokens/tok1")); })());
   await ok("races：自動レースの結果作成（クライアントの抽選）", setDoc(doc(A, "races/2030-01-02"), { raceId: "2030-01-02", resultOrder: [1, 2, 3], status: "finished", generatedBy: "client" }));
   await ok("raceLogs：開催ログ", setDoc(doc(A, "raceLogs/2030-01-02"), { raceId: "2030-01-02" }, { merge: true }));
@@ -324,6 +324,54 @@ const min = (m) => new Date(Date.now() + m * 60000);
   await ng("一般ユーザーが削除の進み具合を書き換える", setDoc(doc(suspendedB, "userDeletions/userB"), { status: "completed" }));
   await ng("管理者でも、ブラウザから削除の進み具合は書けない", setDoc(doc(admin, "userDeletions/userB"), { status: "completed" }));
   await ng("未ログイン：停止の記録の読み取り", getDoc(doc(anon, "suspendedUsers/userB")));
+
+  log.push("--- 🎮 ゲームの招待（gameInvites）：部屋を作った人が友達にだけ送れる・読めるのは本人どうしだけ・返事は招待された人だけ");
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    const d = ctx.firestore();
+    await setDoc(doc(d, "users/いーえー"), { uid: "invA", name: "いーえー" });
+    await setDoc(doc(d, "users/いーびー"), { uid: "invB", name: "いーびー" });
+    await setDoc(doc(d, "users/いーしー"), { uid: "invC", name: "いーしー" });
+    await setDoc(doc(d, "friends/いーえー_いーびー"), { user1: "いーえー", user2: "いーびー", user1Uid: "invA", user2Uid: "invB" });
+    await setDoc(doc(d, "gameRooms/ir1"), { gameType: "daifugo", owner: "いーえー", ownerUid: "invA", members: ["いーえー"], memberUids: ["invA"], status: "waiting" });
+    await setDoc(doc(d, "gameRooms/ir2"), { gameType: "othello", owner: "いーしー", ownerUid: "invC", members: ["いーしー"], memberUids: ["invC"], status: "waiting" });
+  });
+  const IA = env.authenticatedContext("invA").firestore();
+  const IB = env.authenticatedContext("invB").firestore();
+  const IC = env.authenticatedContext("invC").firestore();
+  const inv = (o = {}) => ({ roomId: "ir1", gameType: "daifugo", from: "いーえー", fromUid: "invA", to: "いーびー", toUid: "invB", status: "pending", createdAt: serverTimestamp(), respondedAt: null, ...o });
+  /* アプリと同じ形：招待の作成と部屋の invitedUsers の更新を1つのトランザクションで */
+  await ok("部屋を作った人が友達を招待する（アプリと同じトランザクション）", runTransaction(IA, async (t) => {
+    await t.get(doc(IA, "gameRooms/ir1")); await t.get(doc(IA, "users/いーびー"));
+    const r = doc(IA, "gameInvites/ir1_invB"); await t.get(r);
+    t.set(r, inv()); t.update(doc(IA, "gameRooms/ir1"), { invitedUsers: ["いーびー"] });
+  }));
+  await ok("招待された人は自分あての保留中の招待を一覧できる（アプリの監視と同じ条件）", getDocs(query(collection(IB, "gameInvites"), where("toUid", "==", "invB"), where("status", "==", "pending"))));
+  await ok("招待した人は自分の招待を読める", getDoc(doc(IA, "gameInvites/ir1_invB")));
+  await ok("まだ無い招待を確かめる読み取りはできる（中身が無いので何も分からない）", getDoc(doc(IC, "gameInvites/ir1_invC")));
+  await ng("他人の招待は読めない", getDoc(doc(IC, "gameInvites/ir1_invB")));
+  await ng("他人あての招待を一覧できない", getDocs(query(collection(IC, "gameInvites"), where("toUid", "==", "invB"))));
+  await ng("条件なしで全部の招待を一覧できない", getDocs(collection(IC, "gameInvites")));
+  await ng("他人の名前（from）で招待を作れない（なりすまし）", setDoc(doc(IC, "gameInvites/ir1_invB"), inv({ from: "いーえー", fromUid: "invC" })));
+  await ng("他人の uid（fromUid）で招待を作れない", setDoc(doc(IC, "gameInvites/ir2_invB"), inv({ roomId: "ir2", gameType: "othello", from: "いーしー", fromUid: "invA" })));
+  await ng("自分が作っていない部屋には招待できない", setDoc(doc(IA, "gameInvites/ir2_invB"), inv({ roomId: "ir2", gameType: "othello" })));
+  await ng("友達でない人は招待できない", setDoc(doc(IC, "gameInvites/ir2_invA"), inv({ roomId: "ir2", gameType: "othello", from: "いーしー", fromUid: "invC", to: "いーえー", toUid: "invA" })));
+  await ng("ドキュメントID と部屋・相手が合わない招待は作れない", setDoc(doc(IA, "gameInvites/other_invB"), inv()));
+  await ng("部屋のゲームと違う種類の招待は作れない", setDoc(doc(IA, "gameInvites/ir1_invB"), inv({ gameType: "othello" })));
+  await ng("最初から「参加済み」の招待は作れない", setDoc(doc(IA, "gameInvites/ir1_invB"), inv({ status: "accepted" })));
+  await ng("招待した人が、相手の代わりに返事（参加）できない", updateDoc(doc(IA, "gameInvites/ir1_invB"), { status: "accepted", respondedAt: serverTimestamp() }));
+  await ng("他人が招待を辞退にできない", updateDoc(doc(IC, "gameInvites/ir1_invB"), { status: "declined", respondedAt: serverTimestamp() }));
+  await ng("招待された人でも、招待の中身（部屋・相手）は書き換えられない", updateDoc(doc(IB, "gameInvites/ir1_invB"), { roomId: "ir2" }));
+  await ng("招待はブラウザから消せない", deleteDoc(doc(IB, "gameInvites/ir1_invB")));
+  await ok("招待された人は辞退できる（部屋の invitedUsers からも外す。アプリと同じトランザクション）", runTransaction(IB, async (t) => {
+    const r = doc(IB, "gameInvites/ir1_invB"); await t.get(r); await t.get(doc(IB, "gameRooms/ir1"));
+    t.update(r, { status: "declined", respondedAt: serverTimestamp() }); t.update(doc(IB, "gameRooms/ir1"), { invitedUsers: [] });
+  }));
+  await ng("返事のあとに、もう一度返事を変えられない", updateDoc(doc(IB, "gameInvites/ir1_invB"), { status: "accepted", respondedAt: serverTimestamp() }));
+  await ok("返事のあと、部屋を作った人はもう一度招待できる（上書き）", setDoc(doc(IA, "gameInvites/ir1_invB"), inv()));
+  await ng("保留中の招待を、招待した人が上書きし直すことはできない", setDoc(doc(IA, "gameInvites/ir1_invB"), inv()));
+  await ok("招待された人は参加（accepted）にできる", updateDoc(doc(IB, "gameInvites/ir1_invB"), { status: "accepted", respondedAt: serverTimestamp() }));
+  await ng("未ログイン：招待を読めない", getDoc(doc(anon, "gameInvites/ir1_invB")));
+  await ok("ゲームの部屋（gameRooms）は今まで通り（作成・参加の更新）", (async () => { await setDoc(doc(IC, "gameRooms/ir3"), { gameType: "shogi", ownerUid: "invC", members: ["いーしー"] }); await updateDoc(doc(IB, "gameRooms/ir3"), { members: ["いーしー", "いーびー"] }); })());
 
   log.push("--- 🔔 通知の送信記録（notificationLogs）は、通知サーバー（サービスアカウント）だけが書く（先に作って通知を止められないように）");
   await env.withSecurityRulesDisabled(async (ctx) => {

@@ -3528,6 +3528,26 @@ button:disabled {
     display: none;
 }
 
+/* 招待への返事のボタンは、スマホ・iPad で押しやすい高さにする */
+.game-invite-actions button,
+.game-invite-row button,
+.game-invite-row select {
+    min-height: 44px;
+}
+
+/* 通知から開いた招待を目立たせる */
+.game-invite-card.highlight {
+    border: 2px solid #ff4d6d;
+
+    box-shadow: 0 0 0 4px rgba(255, 77, 109, .15);
+
+    animation: gameInvitePulse 1s ease-in-out 2;
+}
+
+@keyframes gameInvitePulse {
+    50% { box-shadow: 0 0 0 8px rgba(255, 77, 109, .25); }
+}
+
 #currentGameInvite {
     margin: 8px 0;
 }
