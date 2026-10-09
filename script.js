@@ -34,7 +34,8 @@ import {
 import {
   getFirestore, collection, addDoc, getDocs, getDoc, doc, setDoc,
   updateDoc, deleteDoc, query, where, onSnapshot, orderBy, limit, arrayUnion, arrayRemove, deleteField,
-  serverTimestamp, writeBatch, runTransaction, or, and, startAfter
+  serverTimestamp, writeBatch, runTransaction, or, and, startAfter,
+  getAggregateFromServer, count as aggregateCount, sum as aggregateSum
 } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
 /* ゆう銀行の返済期限（Timestamp）に使う */
 import { Timestamp } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
@@ -3697,6 +3698,30 @@ async function loadMyPageStats() {
   const session = appSessionSeq;
   if (!currentUser || !username) return;
 
+  /* 自分の全馬券を読む代わりに、Firestore の集計（件数・合計）だけを読む（集計1回は、1,000件ごとに読み取り1回）。
+     条件は等号だけなので複合インデックスは不要。集計が使えないときは以前と同じく全件を読んで数える */
+  const render = (betCount, hitCount, profit) => {
+    if (myBetCount) myBetCount.textContent = betCount;
+    if (myHitCount) myHitCount.textContent = hitCount;
+    if (myProfit) myProfit.textContent = (profit >= 0 ? "+" : "") + profit;
+  };
+
+  try {
+    const mine = query(collection(db, "raceBets"), where("uid", "==", currentUser.uid));
+    const settled = query(mine, where("settled", "==", true));
+    const [all, totals, hits] = await Promise.all([
+      getAggregateFromServer(mine, { n: aggregateCount() }),
+      getAggregateFromServer(settled, { amount: aggregateSum("amount"), payout: aggregateSum("payout") }),
+      getAggregateFromServer(query(settled, where("win", "==", true)), { n: aggregateCount() })
+    ]);
+    if (session !== appSessionSeq) return;
+    render(all.data().n, hits.data().n, Number(totals.data().payout || 0) - Number(totals.data().amount || 0));
+    return;
+  } catch (error) {
+    if (isInterruptedBySignOut(session)) return;
+    console.warn("マイページ統計の集計に失敗したため、全件を読んで数えます:", error?.code || error);
+  }
+
   try {
     const snapshot = await getDocs(query(collection(db, "raceBets"), where("uid", "==", currentUser.uid)));
     let betCount = 0;
@@ -3712,9 +3737,7 @@ async function loadMyPageStats() {
       }
     });
 
-    if (myBetCount) myBetCount.textContent = betCount;
-    if (myHitCount) myHitCount.textContent = hitCount;
-    if (myProfit) myProfit.textContent = (profit >= 0 ? "+" : "") + profit;
+    render(betCount, hitCount, profit);
   } catch (error) {
     if (isInterruptedBySignOut(session)) return;
     console.error("マイページ統計エラー:", error);
@@ -4604,30 +4627,123 @@ async function catchUpMissedRaces(attempt = 1) {
 /* ----- 自分の投票（すべてのレース分）を一括管理。
    ここから「購入した馬券」「コイン増減」「自分の馬ハイライト」などを組み立てる ----- */
 
-function listenMyBetHistory() {
-  if (unsubscribeMyBetHistory) { unsubscribeMyBetHistory(); unsubscribeMyBetHistory = null; }
-  if (!currentUser) return;
+/* =========================================================
+   自分の馬券（ゆうダービー）
+   ・以前は自分の馬券を全件（過去すべて）購読していた。今は次の2つだけを購読する
+       ① 最近のレース（今日から7日前まで・明日の自動開催の回・読み込み済みの手動レース）の自分の馬券
+          （where uid ＋ where raceId in [...]。等号と in だけなので複合インデックスは不要）
+       ② 未精算の自分の馬券（where uid ＋ where settled == false）… 古いレースの未精算も取りこぼさない
+   ・購読するレースの範囲は、日付が変わった・手動レースが増えたときに作り直す（refreshMyBetHistoryWindow）
+   ・それより前の履歴は「過去の投票履歴をすべて読み込む」を押したときだけ1回読む
+   ・問い合わせが失敗したときは、以前と同じ全件の購読に切り替える
+   ・精算（settleMyBets・catchUpMissedRaces）は今まで通り Firestore を直接確かめるので、この範囲に関係なく取りこぼさない
+========================================================= */
 
-  /* 【重要】where(uid) + orderBy(createdAt) を組み合わせたクエリは、
-     Firestore側で複合インデックスの作成が必要で、それが無いと
-     このリスナーがエラーで止まり、馬券が一切表示されなくなっていた。
-     orderByをやめてJavaScript側で並び替えることで、
-     Firebase Console側の追加設定を一切不要にした。 */
+const BET_HISTORY_RECENT_DAYS = 7;
+const BET_HISTORY_MAX_RACES = 30; /* Firestore の in に渡せる数の上限 */
+let betHistoryParts = { recent: new Map(), unsettled: new Map(), older: new Map() };
+let betHistoryWindowKey = "";
+let betHistoryFullLoaded = false;
+let betHistoryFallback = false;
+
+function getRecentBetRaceIds() {
+  const now = derbyNow();
+  const ids = new Set();
+  for (let d = -1; d < BET_HISTORY_RECENT_DAYS; d++) {
+    const dayId = formatRaceId(new Date(now.getTime() - d * DAY_MS));
+    getRaceContextsForDay(dayId).forEach((c) => ids.add(c.raceId));
+  }
+  /* 新しいレースを優先して、上限までにする */
+  return [...ids].sort().reverse().slice(0, BET_HISTORY_MAX_RACES);
+}
+
+function rebuildMyAllBets() {
+  const merged = new Map();
+  [betHistoryParts.older, betHistoryParts.recent, betHistoryParts.unsettled].forEach((part) => part.forEach((bet, id) => merged.set(id, bet)));
+  myAllBets = [...merged.values()].sort((a, b) => {
+    const at = a.createdAt?.toMillis ? a.createdAt.toMillis() : 0;
+    const bt = b.createdAt?.toMillis ? b.createdAt.toMillis() : 0;
+    return bt - at;
+  });
+  renderBetHistory(myAllBets);
+  renderMyActiveTickets();
+}
+
+function stopMyBetHistory() {
+  if (unsubscribeMyBetHistory) { unsubscribeMyBetHistory(); unsubscribeMyBetHistory = null; }
+}
+
+function listenMyBetHistory() {
+  stopMyBetHistory();
+  betHistoryParts = { recent: new Map(), unsettled: new Map(), older: new Map() };
+  betHistoryWindowKey = "";
+  betHistoryFullLoaded = false;
+  betHistoryFallback = false;
+  if (!currentUser) return;
+  subscribeMyBetHistoryWindow();
+}
+
+function subscribeMyBetHistoryWindow() {
+  if (!currentUser) return;
+  stopMyBetHistory();
+  const uid = currentUser.uid;
+  const raceIds = getRecentBetRaceIds();
+  betHistoryWindowKey = raceIds.join(",");
+  const toBets = (snap) => new Map(snap.docs.map((d) => [d.id, { id: d.id, ...d.data() }]));
+  const onError = (error) => {
+    if (currentUser?.uid !== uid) return;
+    console.warn("馬券の購読（最近の分）に失敗したため、全件の購読に切り替えます:", error?.code || error);
+    listenMyBetHistoryUnlimited();
+  };
+
+  const unsubscribers = [
+    onSnapshot(query(collection(db, "raceBets"), where("uid", "==", uid), where("raceId", "in", raceIds)), (snap) => {
+      betHistoryParts.recent = toBets(snap);
+      rebuildMyAllBets();
+    }, onError),
+    onSnapshot(query(collection(db, "raceBets"), where("uid", "==", uid), where("settled", "==", false)), (snap) => {
+      betHistoryParts.unsettled = toBets(snap);
+      rebuildMyAllBets();
+    }, onError)
+  ];
+  unsubscribeMyBetHistory = () => unsubscribers.forEach((u) => u());
+}
+
+/* 日付が変わった・手動レースが増えたなど、購読するレースの範囲が変わったときだけ作り直す */
+function refreshMyBetHistoryWindow() {
+  if (!currentUser || betHistoryFallback || !unsubscribeMyBetHistory) return;
+  if (getRecentBetRaceIds().join(",") !== betHistoryWindowKey) subscribeMyBetHistoryWindow();
+}
+
+/* 以前と同じ方式（自分の馬券を全件購読）。問い合わせが失敗したときだけ使う */
+function listenMyBetHistoryUnlimited() {
+  stopMyBetHistory();
+  betHistoryFallback = true;
+  betHistoryFullLoaded = true;
+  if (!currentUser) return;
   unsubscribeMyBetHistory = onSnapshot(
     query(collection(db, "raceBets"), where("uid", "==", currentUser.uid)),
     (snap) => {
-      myAllBets = snap.docs
-        .map((d) => ({ id: d.id, ...d.data() }))
-        .sort((a, b) => {
-          const at = a.createdAt?.toMillis ? a.createdAt.toMillis() : 0;
-          const bt = b.createdAt?.toMillis ? b.createdAt.toMillis() : 0;
-          return bt - at;
-        });
-      renderBetHistory(myAllBets);
-      renderMyActiveTickets();
+      betHistoryParts = { recent: new Map(snap.docs.map((d) => [d.id, { id: d.id, ...d.data() }])), unsettled: new Map(), older: new Map() };
+      rebuildMyAllBets();
     },
     (error) => console.error("投票履歴監視エラー:", error)
   );
+}
+
+/* 「過去の投票履歴をすべて読み込む」：それより前の履歴を1回だけ読む */
+async function loadOlderBetHistory() {
+  if (!currentUser || betHistoryFullLoaded) return;
+  betHistoryFullLoaded = true;
+  try {
+    const snap = await getDocs(query(collection(db, "raceBets"), where("uid", "==", currentUser.uid)));
+    betHistoryParts.older = new Map(snap.docs.map((d) => [d.id, { id: d.id, ...d.data() }]));
+    rebuildMyAllBets();
+  } catch (error) {
+    betHistoryFullLoaded = false;
+    console.error("過去の投票履歴の読み込みエラー:", error);
+    alert("過去の投票履歴を読み込めませんでした。");
+  }
 }
 
 function getMyBetsForRace(raceId) {
@@ -4716,8 +4832,9 @@ function renderBetHistory(bets) {
   historyEl.innerHTML = "";
 
   if (bets.length === 0) {
-    historyEl.innerHTML = `<div class="empty-state">まだ投票履歴がありません</div>`;
-    return;
+    historyEl.innerHTML = betHistoryFullLoaded
+      ? `<div class="empty-state">まだ投票履歴がありません</div>`
+      : `<div class="empty-state">最近（7日以内）の投票はありません</div>`;
   }
 
   bets.slice(0, 30).forEach((bet) => {
@@ -4735,6 +4852,15 @@ function renderBetHistory(bets) {
       <div style="font-size:11px; color:#888; margin-top:3px;">${escapeHTML(bet.raceId)}　${escapeHTML(resultText)}</div>`;
     historyEl.appendChild(item);
   });
+
+  if (!betHistoryFullLoaded) {
+    const more = document.createElement("button");
+    more.type = "button";
+    more.className = "secondary history-more";
+    more.textContent = "過去の投票履歴をすべて読み込む";
+    more.addEventListener("click", () => loadOlderBetHistory());
+    historyEl.appendChild(more);
+  }
 }
 
 
@@ -5355,6 +5481,7 @@ function refreshDerbySubscriptionsIfNeeded() {
 
   if (activeId !== lastActiveBettingRaceId) {
     lastActiveBettingRaceId = activeId;
+    refreshMyBetHistoryWindow();
     /* 固定オッズ方式のレースは、オッズのために馬券を購読しない（投票でオッズは変わらない） */
     if (isFixedOddsRace(activeId)) {
       if (unsubscribeWinBets) { unsubscribeWinBets(); unsubscribeWinBets = null; }
@@ -6337,6 +6464,7 @@ function listenManualRaces() {
       });
       manualRaces = next;
       renderManualRaceAdminList();
+      refreshMyBetHistoryWindow();
     },
     (error) => console.error("手動レースの読み込みエラー:", error)
   );
@@ -6909,21 +7037,36 @@ function stopGameRoomsSubscription() {
   if (unsubscribeGameRooms) { unsubscribeGameRooms(); unsubscribeGameRooms = null; }
 }
 
+/* ゲームのルーム一覧（ゲーム画面を開いている間だけ購読する）
+   ・新しいルーム GAME_ROOM_LIST_LIMIT 件（以前は全ルームを購読していた）
+   ・自分が参加しているルーム（memberUids に自分の uid）… 古くても必ず一覧に出す
+   どちらも単一項目の並び替え・条件だけなので、複合インデックスは不要 */
+const GAME_ROOM_LIST_LIMIT = 50;
+
 function loadGameRooms() {
   if (!gameRoomsEl) return;
   if (unsubscribeGameRooms) { unsubscribeGameRooms(); unsubscribeGameRooms = null; }
+  if (!currentUser) return;
 
-  unsubscribeGameRooms = onSnapshot(
-    query(collection(db, "gameRooms"), orderBy("createdAt", "desc")),
-    (snapshot) => {
-      latestGameRooms = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
-      renderGameRooms(latestGameRooms);
-    },
-    (error) => {
-      console.error("ゲーム部屋監視エラー:", error);
-      gameRoomsEl.innerHTML = `<div class="empty-state">ゲーム部屋を読み込めませんでした</div>`;
-    }
-  );
+  const parts = { recent: null, mine: null };
+  const update = () => {
+    if (!parts.recent || !parts.mine) return;
+    const merged = new Map();
+    [...parts.recent, ...parts.mine].forEach((room) => merged.set(room.id, room));
+    latestGameRooms = [...merged.values()].sort((a, b) => timestampMillis(b.createdAt) - timestampMillis(a.createdAt));
+    renderGameRooms(latestGameRooms);
+  };
+  const onError = (error) => {
+    console.error("ゲーム部屋監視エラー:", error);
+    gameRoomsEl.innerHTML = `<div class="empty-state">ゲーム部屋を読み込めませんでした</div>`;
+  };
+  const toRooms = (snapshot) => snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
+
+  const unsubscribers = [
+    onSnapshot(query(collection(db, "gameRooms"), orderBy("createdAt", "desc"), limit(GAME_ROOM_LIST_LIMIT)), (snapshot) => { parts.recent = toRooms(snapshot); update(); }, onError),
+    onSnapshot(query(collection(db, "gameRooms"), where("memberUids", "array-contains", currentUser.uid)), (snapshot) => { parts.mine = toRooms(snapshot); update(); }, onError)
+  ];
+  unsubscribeGameRooms = () => unsubscribers.forEach((u) => u());
 }
 
 function renderGameRooms(allRooms) {
