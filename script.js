@@ -34,7 +34,7 @@ import {
 import {
   getFirestore, collection, addDoc, getDocs, getDoc, doc, setDoc,
   updateDoc, deleteDoc, query, where, onSnapshot, orderBy, limit, arrayUnion, arrayRemove, deleteField,
-  serverTimestamp, writeBatch, runTransaction
+  serverTimestamp, writeBatch, runTransaction, or, and, startAfter
 } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
 /* ゆう銀行の返済期限（Timestamp）に使う */
 import { Timestamp } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
@@ -1949,6 +1949,7 @@ function selectGroupChat(group) {
 }
 
 function resetChat() {
+  chatPaging = null;
   selectedChat = null;
   selectedChatType = null;
   selectedFriendshipId = null;
@@ -1994,42 +1995,171 @@ function isMessageForSelectedChat(message) {
   return false;
 }
 
-/* 選んだチャットのメッセージだけを購読する（以前は messages コレクション全体を購読していた）
-   ・グループ：groupId が一致するもの
-   ・友達：自分→相手、相手→自分 の2つ（どちらも等号だけの条件なので、複合インデックスは不要） */
+/* =========================================================
+   選んだチャットのメッセージ
+   ・開いたときは最新 MESSAGE_PAGE_SIZE 件だけを onSnapshot で購読する（新着・既読・送信取り消しなどはリアルタイムで反映）
+       グループ：groupId が一致するもの
+       友達：「自分→相手」または「相手→自分」（or で1つの問い合わせにまとめる）
+       どちらも createdAt の新しい順＋limit。保存の形は今まで通り
+   ・上へスクロールしたら（または一番上の「過去のメッセージを読み込む」を押したら）、いちばん古い読み込み済みのメッセージより前を
+     MESSAGE_PAGE_SIZE 件ずつ1回だけ読む（getDocs）。それより前が無くなったら、もう問い合わせない
+   ・読み込んだメッセージは ID ごとに1つだけ持つ（同じメッセージを重ねて表示しない）。新着で購読の範囲から外れたメッセージも表示し続ける
+   ・必要な複合インデックス（messages：sender＋receiver＋createdAt 降順／groupId＋createdAt 降順）が無くて問い合わせが失敗したときは、
+     以前と同じ「全件を購読する」方式に自動で切り替える（チャットが表示されなくなることはない）
+========================================================= */
+
+const MESSAGE_PAGE_SIZE = 20;
 let selectedChatMessages = [];
+let chatPaging = null;
+
+function buildChatMessagesQuery(type, chatId, extra = []) {
+  const base = collection(db, "messages");
+  if (type === "group") return query(base, where("groupId", "==", chatId), orderBy("createdAt", "desc"), ...extra);
+  return query(base, or(
+    and(where("sender", "==", username), where("receiver", "==", chatId)),
+    and(where("sender", "==", chatId), where("receiver", "==", username))
+  ), orderBy("createdAt", "desc"), ...extra);
+}
+
+function toChatMessage(snap) {
+  return { id: snap.id, ...snap.data({ serverTimestamps: "estimate" }) };
+}
+
+/* 読み込んだメッセージ（購読分＋過去分）を古い順に並べて描く */
+function renderPagedChat(paging, scrollMode) {
+  if (paging !== chatPaging) return;
+  selectedChatMessages = [...paging.messages.values()]
+    .filter(isMessageForSelectedChat)
+    .sort((a, b) => timestampMillis(a.createdAt, Infinity) - timestampMillis(b.createdAt, Infinity));
+  renderSelectedMessages(selectedChatMessages, { scrollMode, olderState: paging.fallback ? null : paging.olderState });
+  markSelectedChatAsRead();
+}
 
 function listenSelectedChatMessages() {
   if (unsubscribeMessages) { unsubscribeMessages(); unsubscribeMessages = null; }
   messagesListenerFailed = false;
   selectedChatMessages = [];
+  chatPaging = null;
   if (!username || !selectedChat) return;
 
   if (messagesElement) messagesElement.innerHTML = `<div class="loading">読み込み中...</div>`;
 
-  const chatKey = `${selectedChatType}:${selectedChat}`;
-  const queries = selectedChatType === "group"
-    ? [query(collection(db, "messages"), where("groupId", "==", selectedChat))]
+  const paging = {
+    key: `${selectedChatType}:${selectedChat}`,
+    type: selectedChatType,
+    chatId: selectedChat,
+    messages: new Map(),   /* id → メッセージ（購読分と過去分をまとめて1つ） */
+    snaps: new Map(),      /* id → ドキュメント（過去分を読むときの起点に使う） */
+    liveIds: new Set(),    /* いま購読している最新分の id */
+    olderState: "unknown", /* "more"：まだ前がある／"loading"：読み込み中／"none"：もう無い */
+    firstRendered: false,
+    fallback: false
+  };
+  chatPaging = paging;
+
+  const unsubscribe = onSnapshot(
+    buildChatMessagesQuery(paging.type, paging.chatId, [limit(MESSAGE_PAGE_SIZE)]),
+    (snapshot) => {
+      if (chatPaging !== paging) return;
+      paging.liveIds = new Set(snapshot.docs.map((item) => item.id));
+      snapshot.docs.forEach((item) => {
+        paging.messages.set(item.id, toChatMessage(item));
+        paging.snaps.set(item.id, item);
+      });
+      if (!paging.firstRendered && paging.olderState === "unknown") {
+        paging.olderState = snapshot.size < MESSAGE_PAGE_SIZE ? "none" : "more";
+      }
+      renderPagedChat(paging, paging.firstRendered ? "auto" : "bottom");
+      paging.firstRendered = true;
+    },
+    (error) => {
+      if (chatPaging !== paging) return;
+      if (error?.code === "failed-precondition") {
+        /* 複合インデックスがまだ無い：以前と同じ全件の購読に切り替える */
+        console.warn("チャットの最新件数だけの読み込みに必要なインデックスが無いため、全件の読み込みに切り替えます:", error.message);
+        listenSelectedChatMessagesUnlimited(paging);
+        return;
+      }
+      console.error("チャット読み込みエラー:", error);
+      messagesListenerFailed = true; /* もう一度選んだときは監視を作り直す */
+      if (messagesElement) {
+        messagesElement.innerHTML = `<div class="empty-state">メッセージの読み込みに失敗しました</div>`;
+      }
+    }
+  );
+  unsubscribeMessages = () => unsubscribe();
+}
+
+/* いちばん古い読み込み済みのメッセージより前を MESSAGE_PAGE_SIZE 件読む（1回だけ。それ以上前が無ければ以後は読まない） */
+async function loadOlderChatMessages() {
+  const paging = chatPaging;
+  if (!paging || paging.fallback || paging.olderState !== "more") return;
+
+  let oldest = null;
+  paging.snaps.forEach((snap, id) => {
+    const message = paging.messages.get(id);
+    if (!message?.createdAt || snap.metadata?.hasPendingWrites) return;
+    if (!oldest || timestampMillis(message.createdAt) < timestampMillis(paging.messages.get(oldest.id).createdAt)) oldest = snap;
+  });
+  if (!oldest) { paging.olderState = "none"; renderPagedChat(paging, "keep"); return; }
+
+  paging.olderState = "loading";
+  renderPagedChat(paging, "keep");
+  try {
+    const snap = await getDocs(buildChatMessagesQuery(paging.type, paging.chatId, [startAfter(oldest), limit(MESSAGE_PAGE_SIZE)]));
+    if (chatPaging !== paging) return;
+    snap.docs.forEach((item) => {
+      if (!paging.messages.has(item.id)) paging.messages.set(item.id, toChatMessage(item));
+      if (!paging.snaps.has(item.id)) paging.snaps.set(item.id, item);
+    });
+    paging.olderState = snap.size < MESSAGE_PAGE_SIZE ? "none" : "more";
+  } catch (error) {
+    console.error("過去のメッセージの読み込みエラー:", error);
+    if (chatPaging !== paging) return;
+    paging.olderState = "more"; /* もう一度試せるように */
+  }
+  renderPagedChat(paging, "keep");
+}
+
+/* 過去分として読んだメッセージに自分がした変更（送信取り消し・リアクション）は購読で届かないので、そのメッセージだけ読み直す */
+async function refreshLoadedChatMessage(messageId) {
+  const paging = chatPaging;
+  if (!paging || paging.fallback || !paging.messages.has(messageId) || paging.liveIds.has(messageId)) return;
+  try {
+    const snap = await getDoc(doc(db, "messages", messageId));
+    if (chatPaging !== paging || !snap.exists()) return;
+    paging.messages.set(messageId, toChatMessage(snap));
+    renderPagedChat(paging, "keep");
+  } catch (error) {
+    console.warn("メッセージの読み直しエラー:", error);
+  }
+}
+
+/* 以前と同じ方式（そのチャットのメッセージを全件購読する）。インデックスが無いときだけ使う */
+function listenSelectedChatMessagesUnlimited(paging) {
+  if (unsubscribeMessages) { unsubscribeMessages(); unsubscribeMessages = null; }
+  paging.fallback = true;
+  paging.olderState = "none";
+
+  const queries = paging.type === "group"
+    ? [query(collection(db, "messages"), where("groupId", "==", paging.chatId))]
     : [
-      query(collection(db, "messages"), where("sender", "==", username), where("receiver", "==", selectedChat)),
-      query(collection(db, "messages"), where("sender", "==", selectedChat), where("receiver", "==", username))
+      query(collection(db, "messages"), where("sender", "==", username), where("receiver", "==", paging.chatId)),
+      query(collection(db, "messages"), where("sender", "==", paging.chatId), where("receiver", "==", username))
     ];
   const parts = queries.map(() => null);
 
   const update = () => {
-    if (parts.some((part) => part === null)) return;
-    if (`${selectedChatType}:${selectedChat}` !== chatKey) return;
-    selectedChatMessages = parts.flat()
-      .filter(isMessageForSelectedChat)
-      .sort((a, b) => timestampMillis(a.createdAt, Infinity) - timestampMillis(b.createdAt, Infinity));
-    renderSelectedMessages(selectedChatMessages);
-    markSelectedChatAsRead();
+    if (parts.some((part) => part === null) || chatPaging !== paging) return;
+    paging.messages = new Map(parts.flat().map((m) => [m.id, m]));
+    renderPagedChat(paging, paging.firstRendered ? "auto" : "bottom");
+    paging.firstRendered = true;
   };
 
   const unsubscribers = queries.map((q, index) => onSnapshot(
     q,
     (snapshot) => {
-      parts[index] = snapshot.docs.map((item) => ({ id: item.id, ...item.data({ serverTimestamps: "estimate" }) }));
+      parts[index] = snapshot.docs.map(toChatMessage);
       update();
     },
     (error) => {
@@ -2043,15 +2173,47 @@ function listenSelectedChatMessages() {
   unsubscribeMessages = () => unsubscribers.forEach((unsubscribe) => unsubscribe());
 }
 
-function renderSelectedMessages(allMessages) {
+/* 上の端までスクロールしたら、過去のメッセージを読み込む */
+messagesElement?.addEventListener("scroll", () => {
+  if (messagesElement.scrollTop < 60 && chatPaging?.olderState === "more") loadOlderChatMessages();
+}, { passive: true });
+
+/* scrollMode：
+     "bottom"：一番下へ（チャットを開いた最初）
+     "keep"  ：見ていた位置をそのまま（過去のメッセージを上に足したとき）
+     "auto"  ：一番下の近くを見ていたとき・自分が新しく送ったときは一番下へ、上の方を読んでいるときは位置をそのまま
+   olderState：一番上に出す「過去のメッセージを読み込む」の状態（null なら出さない） */
+function renderSelectedMessages(allMessages, { scrollMode = "bottom", olderState = null } = {}) {
   if (!messagesElement) return;
 
   const messages = allMessages.filter(isMessageForSelectedChat);
+
+  /* 描き直す前に、見ていた位置（画面の一番上に見えているメッセージと、そのずれ）を覚えておく */
+  const previousLastId = messagesElement.dataset.lastMessageId || "";
+  const nearBottom = messagesElement.scrollHeight - messagesElement.scrollTop - messagesElement.clientHeight < 150;
+  let anchorId = null, anchorOffset = 0;
+  const viewTop = messagesElement.getBoundingClientRect().top;
+  for (const row of messagesElement.querySelectorAll(".message-row[data-message-id]")) {
+    const rect = row.getBoundingClientRect();
+    if (rect.bottom > viewTop) { anchorId = row.dataset.messageId; anchorOffset = rect.top - viewTop; break; }
+  }
+
   messagesElement.innerHTML = "";
 
   if (messages.length === 0) {
+    messagesElement.dataset.lastMessageId = "";
     messagesElement.innerHTML = `<div class="empty-state">まだメッセージがありません</div>`;
     return;
+  }
+
+  if (olderState === "more" || olderState === "loading") {
+    const loader = document.createElement("button");
+    loader.type = "button";
+    loader.className = "messages-older";
+    loader.disabled = olderState === "loading";
+    loader.textContent = olderState === "loading" ? "読み込み中…" : "↑ 過去のメッセージを読み込む";
+    loader.addEventListener("click", () => loadOlderChatMessages());
+    messagesElement.appendChild(loader);
   }
 
   const readInfo = getSelectedChatReadInfo();
@@ -2061,7 +2223,31 @@ function renderSelectedMessages(allMessages) {
     messagesElement.appendChild(row);
   });
 
-  requestAnimationFrame(() => { messagesElement.scrollTop = messagesElement.scrollHeight; });
+  const last = messages[messages.length - 1];
+  messagesElement.dataset.lastMessageId = last.id || "";
+  const sentByMeNow = last.id !== previousLastId && (last.senderUid ? last.senderUid === currentUser?.uid : last.sender === username);
+  const toBottom = scrollMode === "bottom" || (scrollMode === "auto" && (nearBottom || sentByMeNow || !anchorId));
+
+  const restore = () => {
+    if (toBottom) { messagesElement.scrollTop = messagesElement.scrollHeight; return; }
+    const row = anchorId && messagesElement.querySelector(`.message-row[data-message-id="${CSS.escape(anchorId)}"]`);
+    if (row) messagesElement.scrollTop += (row.getBoundingClientRect().top - messagesElement.getBoundingClientRect().top) - anchorOffset;
+  };
+  restore();
+  requestAnimationFrame(restore);
+
+  /* 画像はあとから読み込まれて高さが変わるので、読み込まれたら位置を合わせ直す（その間にユーザーが動かしていなければ） */
+  const expectedTop = () => messagesElement.scrollTop;
+  let settledTop = null;
+  requestAnimationFrame(() => { settledTop = expectedTop(); });
+  messagesElement.querySelectorAll("img").forEach((img) => {
+    if (img.complete) return;
+    img.addEventListener("load", () => {
+      if (settledTop !== null && Math.abs(messagesElement.scrollTop - settledTop) > 2) return;
+      restore();
+      settledTop = expectedTop();
+    }, { once: true });
+  });
 }
 
 function renderMessage(message, readInfo = getSelectedChatReadInfo()) {
@@ -2347,6 +2533,7 @@ async function toggleReaction(message, emoji) {
     else reactions[emoji] = users;
 
     await updateDoc(messageRef, { reactions });
+    refreshLoadedChatMessage(message.id);
   } catch (error) {
     console.error("リアクションエラー:", error);
   }
@@ -2371,6 +2558,7 @@ async function unsendMessage(messageId) {
     }
 
     await updateDoc(messageRef, { deleted: true, deletedAt: serverTimestamp() });
+    refreshLoadedChatMessage(messageId);
   } catch (error) {
     console.error("送信取り消しエラー:", error);
     alert("送信取り消しに失敗しました。");
