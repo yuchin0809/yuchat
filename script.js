@@ -6656,6 +6656,36 @@ function getMaxGamePlayers(type) {
 }
 
 /* =========================================================
+   ゲームの緊急メンテナンス
+   ・DAIFUGO_MAINTENANCE が true の間、大富豪は「新しいルーム作成・参加・ゲーム開始・カードを出す／パス・ルール変更」ができない
+     （画面の表示だけでなく、それぞれの処理の入口でも止める）
+   ・すでにあるルームと対局のデータ・履歴は消さない。参加中の人はルームを開いて「ルームを閉じる」（退出）だけできる
+   ・オセロ・将棋・チャットなど、ほかの機能には影響しない
+   ・メンテナンスを終えるときは DAIFUGO_MAINTENANCE を false にする
+========================================================= */
+
+const DAIFUGO_MAINTENANCE = true;
+
+function isGameUnderMaintenance(type) {
+  return DAIFUGO_MAINTENANCE && type === "daifugo";
+}
+
+const GAME_MAINTENANCE_ALERT = "大富豪は緊急メンテナンス中のため、現在ご利用いただけません。";
+
+function buildGameMaintenanceNotice() {
+  const notice = document.createElement("div");
+  notice.className = "game-maintenance";
+  notice.setAttribute("role", "alert");
+  notice.innerHTML = `
+    <div class="game-maintenance-title">🛠️ 緊急メンテナンス中</div>
+    <p>現在、ゲームルールの修正を行っているため、大富豪を一時的にご利用いただけません。</p>
+    <p>ご利用の皆様にはご迷惑をおかけし、誠に申し訳ございません。</p>
+    <p>お詫びにつきましては、後日改めて報告させていただきます。</p>
+    <p>ご理解とご協力のほど、よろしくお願いいたします。</p>`;
+  return notice;
+}
+
+/* =========================================================
    盤面の保存形式の変換（オセロ・将棋）
    ・Firestoreは「配列の中の配列」を保存できないため、
      保存するときは1次元配列（オセロ64マス / 将棋81マス）にする
@@ -6731,6 +6761,35 @@ function renderGameRooms(allRooms) {
   if (!gameRoomsEl) return;
   gameRoomsEl.innerHTML = "";
 
+  /* 緊急メンテナンス中のゲームは、ルーム一覧の代わりにお知らせを出し、ルーム作成ボタンを止める */
+  const underMaintenance = isGameUnderMaintenance(currentGameType);
+  if (createGameRoomButton) {
+    createGameRoomButton.disabled = underMaintenance;
+    createGameRoomButton.title = underMaintenance ? "緊急メンテナンス中" : "";
+  }
+  if (underMaintenance) {
+    gameRoomsEl.appendChild(buildGameMaintenanceNotice());
+    /* 参加中のルームだけは開ける（お知らせと「ルームを閉じる」だけの画面。対局はできない） */
+    (allRooms || [])
+      .filter((room) => room.gameType === currentGameType && Array.isArray(room.members) && room.members.includes(username))
+      .forEach((room) => {
+        const card = document.createElement("div");
+        card.className = "room-card";
+        card.innerHTML = `
+          <div class="room-title">${escapeHTML(getGameTypeName(room.gameType))}（参加中）</div>
+          <div class="room-owner">作成者：${escapeHTML(room.owner || "不明")}</div>
+          <div class="room-status">メンテナンス中のため、対局はできません</div>`;
+        const openButton = document.createElement("button");
+        openButton.type = "button";
+        openButton.className = "primary-button";
+        openButton.textContent = "開く（退出のみ）";
+        openButton.addEventListener("click", () => joinGameRoom(room));
+        card.appendChild(openButton);
+        gameRoomsEl.appendChild(card);
+      });
+    return;
+  }
+
   /* 現在選択しているゲーム種類の部屋だけ表示する */
   const rooms = (allRooms || []).filter((room) => room.gameType === currentGameType);
 
@@ -6776,6 +6835,7 @@ createGameRoomButton?.addEventListener("click", async () => {
   if (!currentUser || !username) return alert("ログインしてください。");
 
   const type = currentGameType || "daifugo";
+  if (isGameUnderMaintenance(type)) return alert(GAME_MAINTENANCE_ALERT);
   const gameName = getGameTypeName(type);
   const existing = latestGameRooms.find((room) => isMyOpenRoom(room, type));
   if (existing) {
@@ -6857,6 +6917,12 @@ async function joinGameRoom(room) {
     const members = Array.isArray(data.members) ? [...data.members] : [];
     const memberUids = Array.isArray(data.memberUids) ? [...data.memberUids] : [];
     const maxPlayers = getMaxGamePlayers(data.gameType);
+
+    /* 緊急メンテナンス中：新しく参加はできない（参加中の人は、お知らせと「ルームを閉じる」だけの画面を開ける） */
+    if (isGameUnderMaintenance(data.gameType) && !members.includes(username)) {
+      alert(GAME_MAINTENANCE_ALERT);
+      return false;
+    }
 
     if (!members.includes(username)) {
       if (data.status === "playing") { alert("このゲームはすでに開始されています。"); return false; }
@@ -6963,6 +7029,14 @@ function renderCurrentGame(room) {
   if (statusEl) {
     const members = Array.isArray(room.members) ? room.members : [];
     statusEl.textContent = `参加者 ${members.length}/${getMaxGamePlayers(room.gameType)}人`;
+  }
+
+  if (isGameUnderMaintenance(room.gameType)) {
+    const inviteEl = document.getElementById("currentGameInvite");
+    if (inviteEl) inviteEl.innerHTML = "";
+    boardEl.innerHTML = "";
+    boardEl.appendChild(buildGameMaintenanceNotice());
+    return;
   }
 
   renderGameInvitePanel(room);
@@ -8097,6 +8171,7 @@ function getDaifugoRuleSummary(rules) {
 
 async function updateDaifugoRule(roomId, key, value) {
   if (!currentUser || !(key in DAIFUGO_DEFAULT_RULES)) return false;
+  if (isGameUnderMaintenance("daifugo")) { alert(GAME_MAINTENANCE_ALERT); return false; }
   const roomRef = doc(db, "gameRooms", roomId);
 
   try {
@@ -8174,6 +8249,7 @@ function dealDaifugoCards(deck, playerCount) {
 
 async function startDaifugoGame(roomId) {
   if (!currentUser) return;
+  if (isGameUnderMaintenance("daifugo")) return alert(GAME_MAINTENANCE_ALERT);
 
   try {
     const roomRef = doc(db, "gameRooms", roomId);
@@ -8572,6 +8648,7 @@ function renderDaifugoGame(container, room) {
 
 async function playDaifugoCards(roomId) {
   if (!currentUser) return;
+  if (isGameUnderMaintenance("daifugo")) return alert(GAME_MAINTENANCE_ALERT);
   if (selectedDaifugoCards.length === 0) return alert("カードを選択してください。");
 
   const roomRef = doc(db, "gameRooms", roomId);
@@ -8667,6 +8744,7 @@ async function playDaifugoCards(roomId) {
 
 async function passDaifugoTurn(roomId) {
   if (!currentUser) return;
+  if (isGameUnderMaintenance("daifugo")) return alert(GAME_MAINTENANCE_ALERT);
   const roomRef = doc(db, "gameRooms", roomId);
 
   try {

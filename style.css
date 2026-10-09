@@ -5911,3 +5911,44 @@ button.secondary {
 .um-coins .admin-form-error {
     margin-top: 6px;
 }
+
+
+/* ==================================================
+   ゲームの緊急メンテナンス（大富豪）
+================================================== */
+
+.game-maintenance {
+    margin: 4px 0 12px;
+
+    padding: 18px 16px;
+
+    border: 2px solid #e5484d;
+    border-radius: 14px;
+
+    background: #fff4f4;
+
+    color: #3a1d1d;
+
+    line-height: 1.7;
+}
+
+.game-maintenance-title {
+    margin-bottom: 8px;
+
+    font-size: clamp(20px, 5.5vw, 26px);
+    font-weight: 800;
+
+    color: #c62828;
+}
+
+.game-maintenance p {
+    margin: 0 0 8px;
+
+    font-size: 15px;
+
+    overflow-wrap: anywhere;
+}
+
+.game-maintenance p:last-child {
+    margin-bottom: 0;
+}
