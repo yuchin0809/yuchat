@@ -34,7 +34,8 @@ import {
 import {
   getFirestore, collection, addDoc, getDocs, getDoc, doc, setDoc,
   updateDoc, deleteDoc, query, where, onSnapshot, orderBy, limit, arrayUnion, arrayRemove, deleteField,
-  serverTimestamp, writeBatch, runTransaction
+  serverTimestamp, writeBatch, runTransaction, or, and, startAfter,
+  getAggregateFromServer, count as aggregateCount, sum as aggregateSum
 } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
 /* ゆう銀行の返済期限（Timestamp）に使う */
 import { Timestamp } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
@@ -107,6 +108,7 @@ let fcmForegroundListenerReady = false;
 let currentGameType = "daifugo";
 let selectedGameRoomId = null;
 let unsubscribeGameRooms = null;
+let messagesListenerFailed = false;
 let unsubscribeCurrentGame = null;
 let selectedDaifugoCards = [];
 let selectedShogiPiece = null;
@@ -1116,17 +1118,26 @@ async function updateProfileImageEverywhere(image) {
   if (!username) return;
 
   try {
-    const snapshot = await getDocs(collection(db, "friends"));
-    const batch = writeBatch(db);
-    let count = 0;
-
-    snapshot.forEach((item) => {
+    /* 自分が入っている友達関係だけを読む（以前は friends を全件読んでいた） */
+    const [asUser1, asUser2] = await Promise.all([
+      getDocs(query(collection(db, "friends"), where("user1", "==", username))),
+      getDocs(query(collection(db, "friends"), where("user2", "==", username)))
+    ]);
+    const updates = new Map();
+    const add = (ref, data) => updates.set(ref.path, { ref, data: { ...(updates.get(ref.path)?.data || {}), ...data } });
+    [...asUser1.docs, ...asUser2.docs].forEach((item) => {
       const data = item.data();
-      if (data.user1 === username) { batch.update(item.ref, { user1Photo: image }); count++; }
-      if (data.user2 === username) { batch.update(item.ref, { user2Photo: image }); count++; }
+      if (data.user1 === username) add(item.ref, { user1Photo: image });
+      if (data.user2 === username) add(item.ref, { user2Photo: image });
     });
 
-    if (count > 0) await batch.commit();
+    /* 1回の書き込みは500件まで */
+    const list = [...updates.values()];
+    for (let i = 0; i < list.length; i += 400) {
+      const batch = writeBatch(db);
+      list.slice(i, i + 400).forEach(({ ref, data }) => batch.update(ref, data));
+      await batch.commit();
+    }
   } catch (error) {
     console.error("プロフィール画像同期エラー:", error);
   }
@@ -1216,66 +1227,18 @@ async function migrateUsername(oldName, newName) {
   if (!oldName || !newName || oldName === newName) return;
 
   try {
-    /* 友達 */
-    const friendsSnapshot = await getDocs(collection(db, "friends"));
-    const friendBatch = writeBatch(db);
-    let friendChanged = false;
+    /* 古い名前が入っている友達・グループ・メッセージだけを読んで書き換える
+       （以前は friends・groups・messages を全件読んでいた。管理者の名前変更と同じ migrateRenamedUserData を使う） */
+    await migrateRenamedUserData(oldName, newName);
 
-    friendsSnapshot.forEach((friendDoc) => {
-      const data = friendDoc.data();
-      const updateData = {};
-      if (data.user1 === oldName) updateData.user1 = newName;
-      if (data.user2 === oldName) updateData.user2 = newName;
-      if (data.requestedBy === oldName) updateData.requestedBy = newName;
-      if (data.acceptedBy === oldName) updateData.acceptedBy = newName;
-
-      if (Object.keys(updateData).length > 0) {
-        updateData.updatedAt = serverTimestamp();
-        friendBatch.update(friendDoc.ref, updateData);
-        friendChanged = true;
-      }
-    });
-    if (friendChanged) await friendBatch.commit();
-
-    /* グループ */
-    const groupsSnapshot = await getDocs(collection(db, "groups"));
-    const groupBatch = writeBatch(db);
-    let groupChanged = false;
-
-    groupsSnapshot.forEach((groupDoc) => {
-      const data = groupDoc.data();
-      const members = Array.isArray(data.members) ? [...data.members] : [];
-      const newMembers = members.map((m) => (m === oldName ? newName : m));
-      const updateData = {};
-
-      if (JSON.stringify(members) !== JSON.stringify(newMembers)) updateData.members = newMembers;
-      if (data.owner === oldName) updateData.owner = newName;
-
-      if (Object.keys(updateData).length > 0) {
-        updateData.updatedAt = serverTimestamp();
-        groupBatch.update(groupDoc.ref, updateData);
-        groupChanged = true;
-      }
-    });
-    if (groupChanged) await groupBatch.commit();
-
-    /* メッセージ */
-    const messagesSnapshot = await getDocs(collection(db, "messages"));
-    const messageBatch = writeBatch(db);
-    let messageChanged = false;
-
-    messagesSnapshot.forEach((messageDoc) => {
-      const data = messageDoc.data();
-      const updateData = {};
-      if (data.sender === oldName) updateData.sender = newName;
-      if (data.receiver === oldName) updateData.receiver = newName;
-
-      if (Object.keys(updateData).length > 0) {
-        messageBatch.update(messageDoc.ref, updateData);
-        messageChanged = true;
-      }
-    });
-    if (messageChanged) await messageBatch.commit();
+    /* メンバーには入っていないが作成者（owner）が古い名前のグループも、以前と同じように書き換える */
+    const ownedSnap = await getDocs(query(collection(db, "groups"), where("owner", "==", oldName)));
+    const owned = ownedSnap.docs.filter((d) => !(Array.isArray(d.data().members) ? d.data().members : []).includes(oldName));
+    for (let i = 0; i < owned.length; i += 400) {
+      const batch = writeBatch(db);
+      owned.slice(i, i + 400).forEach((d) => batch.update(d.ref, { owner: newName, updatedAt: serverTimestamp() }));
+      await batch.commit();
+    }
   } catch (error) {
     console.error("名前変更データ移行エラー:", error);
     throw error;
@@ -1945,8 +1908,16 @@ function renderChatHeaderForGroup(group) {
    チャット選択
 ========================================================= */
 
+/* すでに開いていて、メッセージの監視が正常に動いているチャットか（同じチャットをもう一度選んでも監視を作り直さない） */
+function isMessagesListenerActiveFor(type, chatId, friendshipId = null) {
+  if (!unsubscribeMessages || messagesListenerFailed) return false;
+  if (selectedChatType !== type || selectedChat !== chatId) return false;
+  return type !== "friend" || selectedFriendshipId === friendshipId;
+}
+
 function selectFriendChat(friend) {
   if (!friend) return;
+  const alreadyListening = isMessagesListenerActiveFor("friend", friend.friend, friend.friendshipId);
   selectedChatType = "friend";
   selectedChat = friend.friend;
   selectedFriendshipId = friend.friendshipId;
@@ -1957,11 +1928,13 @@ function selectFriendChat(friend) {
   if (sendButton) sendButton.disabled = false;
   renderFriends();
   renderGroups();
-  listenSelectedChatMessages();
+  if (alreadyListening) markSelectedChatAsRead();
+  else listenSelectedChatMessages();
 }
 
 function selectGroupChat(group) {
   if (!group) return;
+  const alreadyListening = isMessagesListenerActiveFor("group", group.id);
   selectedChatType = "group";
   selectedChat = group.id;
   selectedFriendshipId = null;
@@ -1972,10 +1945,12 @@ function selectGroupChat(group) {
   if (sendButton) sendButton.disabled = false;
   renderFriends();
   renderGroups();
-  listenSelectedChatMessages();
+  if (alreadyListening) markSelectedChatAsRead();
+  else listenSelectedChatMessages();
 }
 
 function resetChat() {
+  chatPaging = null;
   selectedChat = null;
   selectedChatType = null;
   selectedFriendshipId = null;
@@ -2021,45 +1996,176 @@ function isMessageForSelectedChat(message) {
   return false;
 }
 
-/* 選んだチャットのメッセージだけを購読する（以前は messages コレクション全体を購読していた）
-   ・グループ：groupId が一致するもの
-   ・友達：自分→相手、相手→自分 の2つ（どちらも等号だけの条件なので、複合インデックスは不要） */
+/* =========================================================
+   選んだチャットのメッセージ
+   ・開いたときは最新 MESSAGE_PAGE_SIZE 件だけを onSnapshot で購読する（新着・既読・送信取り消しなどはリアルタイムで反映）
+       グループ：groupId が一致するもの
+       友達：「自分→相手」または「相手→自分」（or で1つの問い合わせにまとめる）
+       どちらも createdAt の新しい順＋limit。保存の形は今まで通り
+   ・上へスクロールしたら（または一番上の「過去のメッセージを読み込む」を押したら）、いちばん古い読み込み済みのメッセージより前を
+     MESSAGE_PAGE_SIZE 件ずつ1回だけ読む（getDocs）。それより前が無くなったら、もう問い合わせない
+   ・読み込んだメッセージは ID ごとに1つだけ持つ（同じメッセージを重ねて表示しない）。新着で購読の範囲から外れたメッセージも表示し続ける
+   ・必要な複合インデックス（messages：sender＋receiver＋createdAt 降順／groupId＋createdAt 降順）が無くて問い合わせが失敗したときは、
+     以前と同じ「全件を購読する」方式に自動で切り替える（チャットが表示されなくなることはない）
+========================================================= */
+
+const MESSAGE_PAGE_SIZE = 20;
 let selectedChatMessages = [];
+let chatPaging = null;
+
+function buildChatMessagesQuery(type, chatId, extra = []) {
+  const base = collection(db, "messages");
+  if (type === "group") return query(base, where("groupId", "==", chatId), orderBy("createdAt", "desc"), ...extra);
+  return query(base, or(
+    and(where("sender", "==", username), where("receiver", "==", chatId)),
+    and(where("sender", "==", chatId), where("receiver", "==", username))
+  ), orderBy("createdAt", "desc"), ...extra);
+}
+
+function toChatMessage(snap) {
+  return { id: snap.id, ...snap.data({ serverTimestamps: "estimate" }) };
+}
+
+/* 読み込んだメッセージ（購読分＋過去分）を古い順に並べて描く */
+function renderPagedChat(paging, scrollMode) {
+  if (paging !== chatPaging) return;
+  selectedChatMessages = [...paging.messages.values()]
+    .filter(isMessageForSelectedChat)
+    .sort((a, b) => timestampMillis(a.createdAt, Infinity) - timestampMillis(b.createdAt, Infinity));
+  renderSelectedMessages(selectedChatMessages, { scrollMode, olderState: paging.fallback ? null : paging.olderState });
+  markSelectedChatAsRead();
+}
 
 function listenSelectedChatMessages() {
   if (unsubscribeMessages) { unsubscribeMessages(); unsubscribeMessages = null; }
+  messagesListenerFailed = false;
   selectedChatMessages = [];
+  chatPaging = null;
   if (!username || !selectedChat) return;
 
   if (messagesElement) messagesElement.innerHTML = `<div class="loading">読み込み中...</div>`;
 
-  const chatKey = `${selectedChatType}:${selectedChat}`;
-  const queries = selectedChatType === "group"
-    ? [query(collection(db, "messages"), where("groupId", "==", selectedChat))]
+  const paging = {
+    key: `${selectedChatType}:${selectedChat}`,
+    type: selectedChatType,
+    chatId: selectedChat,
+    messages: new Map(),   /* id → メッセージ（購読分と過去分をまとめて1つ） */
+    snaps: new Map(),      /* id → ドキュメント（過去分を読むときの起点に使う） */
+    liveIds: new Set(),    /* いま購読している最新分の id */
+    olderState: "unknown", /* "more"：まだ前がある／"loading"：読み込み中／"none"：もう無い */
+    firstRendered: false,
+    fallback: false
+  };
+  chatPaging = paging;
+
+  const unsubscribe = onSnapshot(
+    buildChatMessagesQuery(paging.type, paging.chatId, [limit(MESSAGE_PAGE_SIZE)]),
+    (snapshot) => {
+      if (chatPaging !== paging) return;
+      paging.liveIds = new Set(snapshot.docs.map((item) => item.id));
+      snapshot.docs.forEach((item) => {
+        paging.messages.set(item.id, toChatMessage(item));
+        paging.snaps.set(item.id, item);
+      });
+      if (!paging.firstRendered && paging.olderState === "unknown") {
+        paging.olderState = snapshot.size < MESSAGE_PAGE_SIZE ? "none" : "more";
+      }
+      renderPagedChat(paging, paging.firstRendered ? "auto" : "bottom");
+      paging.firstRendered = true;
+    },
+    (error) => {
+      if (chatPaging !== paging) return;
+      if (error?.code === "failed-precondition") {
+        /* 複合インデックスがまだ無い：以前と同じ全件の購読に切り替える */
+        console.warn("チャットの最新件数だけの読み込みに必要なインデックスが無いため、全件の読み込みに切り替えます:", error.message);
+        listenSelectedChatMessagesUnlimited(paging);
+        return;
+      }
+      console.error("チャット読み込みエラー:", error);
+      messagesListenerFailed = true; /* もう一度選んだときは監視を作り直す */
+      if (messagesElement) {
+        messagesElement.innerHTML = `<div class="empty-state">メッセージの読み込みに失敗しました</div>`;
+      }
+    }
+  );
+  unsubscribeMessages = () => unsubscribe();
+}
+
+/* いちばん古い読み込み済みのメッセージより前を MESSAGE_PAGE_SIZE 件読む（1回だけ。それ以上前が無ければ以後は読まない） */
+async function loadOlderChatMessages() {
+  const paging = chatPaging;
+  if (!paging || paging.fallback || paging.olderState !== "more") return;
+
+  let oldest = null;
+  paging.snaps.forEach((snap, id) => {
+    const message = paging.messages.get(id);
+    if (!message?.createdAt || snap.metadata?.hasPendingWrites) return;
+    if (!oldest || timestampMillis(message.createdAt) < timestampMillis(paging.messages.get(oldest.id).createdAt)) oldest = snap;
+  });
+  if (!oldest) { paging.olderState = "none"; renderPagedChat(paging, "keep"); return; }
+
+  paging.olderState = "loading";
+  renderPagedChat(paging, "keep");
+  try {
+    const snap = await getDocs(buildChatMessagesQuery(paging.type, paging.chatId, [startAfter(oldest), limit(MESSAGE_PAGE_SIZE)]));
+    if (chatPaging !== paging) return;
+    snap.docs.forEach((item) => {
+      if (!paging.messages.has(item.id)) paging.messages.set(item.id, toChatMessage(item));
+      if (!paging.snaps.has(item.id)) paging.snaps.set(item.id, item);
+    });
+    paging.olderState = snap.size < MESSAGE_PAGE_SIZE ? "none" : "more";
+  } catch (error) {
+    console.error("過去のメッセージの読み込みエラー:", error);
+    if (chatPaging !== paging) return;
+    paging.olderState = "more"; /* もう一度試せるように */
+  }
+  renderPagedChat(paging, "keep");
+}
+
+/* 過去分として読んだメッセージに自分がした変更（送信取り消し・リアクション）は購読で届かないので、そのメッセージだけ読み直す */
+async function refreshLoadedChatMessage(messageId) {
+  const paging = chatPaging;
+  if (!paging || paging.fallback || !paging.messages.has(messageId) || paging.liveIds.has(messageId)) return;
+  try {
+    const snap = await getDoc(doc(db, "messages", messageId));
+    if (chatPaging !== paging || !snap.exists()) return;
+    paging.messages.set(messageId, toChatMessage(snap));
+    renderPagedChat(paging, "keep");
+  } catch (error) {
+    console.warn("メッセージの読み直しエラー:", error);
+  }
+}
+
+/* 以前と同じ方式（そのチャットのメッセージを全件購読する）。インデックスが無いときだけ使う */
+function listenSelectedChatMessagesUnlimited(paging) {
+  if (unsubscribeMessages) { unsubscribeMessages(); unsubscribeMessages = null; }
+  paging.fallback = true;
+  paging.olderState = "none";
+
+  const queries = paging.type === "group"
+    ? [query(collection(db, "messages"), where("groupId", "==", paging.chatId))]
     : [
-      query(collection(db, "messages"), where("sender", "==", username), where("receiver", "==", selectedChat)),
-      query(collection(db, "messages"), where("sender", "==", selectedChat), where("receiver", "==", username))
+      query(collection(db, "messages"), where("sender", "==", username), where("receiver", "==", paging.chatId)),
+      query(collection(db, "messages"), where("sender", "==", paging.chatId), where("receiver", "==", username))
     ];
   const parts = queries.map(() => null);
 
   const update = () => {
-    if (parts.some((part) => part === null)) return;
-    if (`${selectedChatType}:${selectedChat}` !== chatKey) return;
-    selectedChatMessages = parts.flat()
-      .filter(isMessageForSelectedChat)
-      .sort((a, b) => timestampMillis(a.createdAt, Infinity) - timestampMillis(b.createdAt, Infinity));
-    renderSelectedMessages(selectedChatMessages);
-    markSelectedChatAsRead();
+    if (parts.some((part) => part === null) || chatPaging !== paging) return;
+    paging.messages = new Map(parts.flat().map((m) => [m.id, m]));
+    renderPagedChat(paging, paging.firstRendered ? "auto" : "bottom");
+    paging.firstRendered = true;
   };
 
   const unsubscribers = queries.map((q, index) => onSnapshot(
     q,
     (snapshot) => {
-      parts[index] = snapshot.docs.map((item) => ({ id: item.id, ...item.data({ serverTimestamps: "estimate" }) }));
+      parts[index] = snapshot.docs.map(toChatMessage);
       update();
     },
     (error) => {
       console.error("チャット読み込みエラー:", error);
+      messagesListenerFailed = true; /* もう一度選んだときは監視を作り直す */
       if (messagesElement) {
         messagesElement.innerHTML = `<div class="empty-state">メッセージの読み込みに失敗しました</div>`;
       }
@@ -2068,15 +2174,47 @@ function listenSelectedChatMessages() {
   unsubscribeMessages = () => unsubscribers.forEach((unsubscribe) => unsubscribe());
 }
 
-function renderSelectedMessages(allMessages) {
+/* 上の端までスクロールしたら、過去のメッセージを読み込む */
+messagesElement?.addEventListener("scroll", () => {
+  if (messagesElement.scrollTop < 60 && chatPaging?.olderState === "more") loadOlderChatMessages();
+}, { passive: true });
+
+/* scrollMode：
+     "bottom"：一番下へ（チャットを開いた最初）
+     "keep"  ：見ていた位置をそのまま（過去のメッセージを上に足したとき）
+     "auto"  ：一番下の近くを見ていたとき・自分が新しく送ったときは一番下へ、上の方を読んでいるときは位置をそのまま
+   olderState：一番上に出す「過去のメッセージを読み込む」の状態（null なら出さない） */
+function renderSelectedMessages(allMessages, { scrollMode = "bottom", olderState = null } = {}) {
   if (!messagesElement) return;
 
   const messages = allMessages.filter(isMessageForSelectedChat);
+
+  /* 描き直す前に、見ていた位置（画面の一番上に見えているメッセージと、そのずれ）を覚えておく */
+  const previousLastId = messagesElement.dataset.lastMessageId || "";
+  const nearBottom = messagesElement.scrollHeight - messagesElement.scrollTop - messagesElement.clientHeight < 150;
+  let anchorId = null, anchorOffset = 0;
+  const viewTop = messagesElement.getBoundingClientRect().top;
+  for (const row of messagesElement.querySelectorAll(".message-row[data-message-id]")) {
+    const rect = row.getBoundingClientRect();
+    if (rect.bottom > viewTop) { anchorId = row.dataset.messageId; anchorOffset = rect.top - viewTop; break; }
+  }
+
   messagesElement.innerHTML = "";
 
   if (messages.length === 0) {
+    messagesElement.dataset.lastMessageId = "";
     messagesElement.innerHTML = `<div class="empty-state">まだメッセージがありません</div>`;
     return;
+  }
+
+  if (olderState === "more" || olderState === "loading") {
+    const loader = document.createElement("button");
+    loader.type = "button";
+    loader.className = "messages-older";
+    loader.disabled = olderState === "loading";
+    loader.textContent = olderState === "loading" ? "読み込み中…" : "↑ 過去のメッセージを読み込む";
+    loader.addEventListener("click", () => loadOlderChatMessages());
+    messagesElement.appendChild(loader);
   }
 
   const readInfo = getSelectedChatReadInfo();
@@ -2086,7 +2224,31 @@ function renderSelectedMessages(allMessages) {
     messagesElement.appendChild(row);
   });
 
-  requestAnimationFrame(() => { messagesElement.scrollTop = messagesElement.scrollHeight; });
+  const last = messages[messages.length - 1];
+  messagesElement.dataset.lastMessageId = last.id || "";
+  const sentByMeNow = last.id !== previousLastId && (last.senderUid ? last.senderUid === currentUser?.uid : last.sender === username);
+  const toBottom = scrollMode === "bottom" || (scrollMode === "auto" && (nearBottom || sentByMeNow || !anchorId));
+
+  const restore = () => {
+    if (toBottom) { messagesElement.scrollTop = messagesElement.scrollHeight; return; }
+    const row = anchorId && messagesElement.querySelector(`.message-row[data-message-id="${CSS.escape(anchorId)}"]`);
+    if (row) messagesElement.scrollTop += (row.getBoundingClientRect().top - messagesElement.getBoundingClientRect().top) - anchorOffset;
+  };
+  restore();
+  requestAnimationFrame(restore);
+
+  /* 画像はあとから読み込まれて高さが変わるので、読み込まれたら位置を合わせ直す（その間にユーザーが動かしていなければ） */
+  const expectedTop = () => messagesElement.scrollTop;
+  let settledTop = null;
+  requestAnimationFrame(() => { settledTop = expectedTop(); });
+  messagesElement.querySelectorAll("img").forEach((img) => {
+    if (img.complete) return;
+    img.addEventListener("load", () => {
+      if (settledTop !== null && Math.abs(messagesElement.scrollTop - settledTop) > 2) return;
+      restore();
+      settledTop = expectedTop();
+    }, { once: true });
+  });
 }
 
 function renderMessage(message, readInfo = getSelectedChatReadInfo()) {
@@ -2372,6 +2534,7 @@ async function toggleReaction(message, emoji) {
     else reactions[emoji] = users;
 
     await updateDoc(messageRef, { reactions });
+    refreshLoadedChatMessage(message.id);
   } catch (error) {
     console.error("リアクションエラー:", error);
   }
@@ -2396,6 +2559,7 @@ async function unsendMessage(messageId) {
     }
 
     await updateDoc(messageRef, { deleted: true, deletedAt: serverTimestamp() });
+    refreshLoadedChatMessage(messageId);
   } catch (error) {
     console.error("送信取り消しエラー:", error);
     alert("送信取り消しに失敗しました。");
@@ -3448,7 +3612,9 @@ function switchView(view) {
   if (view === "mypage") loadMyPage();
   if (view === "derby") { refreshDerbySubscriptionsIfNeeded(); renderRaceInfo(); }
   else stopDerbySubscriptions();
+  /* ルーム一覧の監視はゲーム画面を開いている間だけ（戻ったときに最新の一覧を読み直す）。開いているルームの監視は続ける */
   if (view === "games") loadGameRooms();
+  else stopGameRoomsSubscription();
   if (view === "economy") openEconomyView();
   if (view === "announcements") openAnnouncementsView();
   else stopAnnouncementsSubscription();
@@ -3494,6 +3660,8 @@ logoutButton?.addEventListener("click", async () => {
     currentWinPool = {};
     myCoins = 0;
     myAllBets = [];
+    betHistoryErrorCode = "";
+    myPageStatsShownForUid = "";
     myLatestUserData = null;
     resetLoginBonusState();
     economyBankAmount = "";
@@ -3524,6 +3692,8 @@ async function loadMyPage() {
   if (!currentUser) return;
   if (myName) myName.textContent = username || "ゲスト";
 
+  /* 馬券の購読がエラーで止まっていたら、マイページを開いたこのときに1回だけ作り直す（自動では繰り返さない） */
+  refreshMyBetHistoryWindow({ retryAfterError: true });
   await loadMyPageStats();
   await loadCoinRanking();
 }
@@ -3531,6 +3701,44 @@ async function loadMyPage() {
 async function loadMyPageStats() {
   const session = appSessionSeq;
   if (!currentUser || !username) return;
+
+  /* 自分の全馬券を読む代わりに、Firestore の集計（件数・合計）だけを読む（集計1回は、1,000件ごとに読み取り1回）。
+     条件は等号だけなので複合インデックスは不要。
+     集計そのものが使えないとき（BET_STATS_FALLBACK_CODES）だけ、以前と同じく全件を読んで数える。
+     無料枠の超過・権限・通信などのエラーでは全件を読まない（読み取りが増えるだけで直らず、オフラインでは手元の古いデータで誤った値になる）。
+     そのときは前に表示した値をそのまま残し、まだ一度も表示していなければ「—」にする（0 とは表示しない） */
+  const uid = currentUser.uid;
+  const render = (betCount, hitCount, profit) => {
+    if (myBetCount) myBetCount.textContent = betCount;
+    if (myHitCount) myHitCount.textContent = hitCount;
+    if (myProfit) myProfit.textContent = (profit >= 0 ? "+" : "") + profit;
+    myPageStatsShownForUid = uid;
+  };
+  const renderUnavailable = () => {
+    if (myPageStatsShownForUid === uid) return;
+    [myBetCount, myHitCount, myProfit].forEach((el) => { if (el) el.textContent = "—"; });
+  };
+
+  try {
+    const mine = query(collection(db, "raceBets"), where("uid", "==", currentUser.uid));
+    const settled = query(mine, where("settled", "==", true));
+    const [all, totals, hits] = await Promise.all([
+      getAggregateFromServer(mine, { n: aggregateCount() }),
+      getAggregateFromServer(settled, { amount: aggregateSum("amount"), payout: aggregateSum("payout") }),
+      getAggregateFromServer(query(settled, where("win", "==", true)), { n: aggregateCount() })
+    ]);
+    if (session !== appSessionSeq) return;
+    render(all.data().n, hits.data().n, Number(totals.data().payout || 0) - Number(totals.data().amount || 0));
+    return;
+  } catch (error) {
+    if (isInterruptedBySignOut(session)) return;
+    if (!BET_STATS_FALLBACK_CODES.has(error?.code)) {
+      console.warn("マイページ統計を読み込めませんでした（全件は読みません）:", error?.code || error);
+      renderUnavailable();
+      return;
+    }
+    console.warn("マイページ統計の集計が使えないため、全件を読んで数えます:", error.code);
+  }
 
   try {
     const snapshot = await getDocs(query(collection(db, "raceBets"), where("uid", "==", currentUser.uid)));
@@ -3547,12 +3755,12 @@ async function loadMyPageStats() {
       }
     });
 
-    if (myBetCount) myBetCount.textContent = betCount;
-    if (myHitCount) myHitCount.textContent = hitCount;
-    if (myProfit) myProfit.textContent = (profit >= 0 ? "+" : "") + profit;
+    if (session !== appSessionSeq) return;
+    render(betCount, hitCount, profit);
   } catch (error) {
     if (isInterruptedBySignOut(session)) return;
     console.error("マイページ統計エラー:", error);
+    renderUnavailable();
   }
 }
 
@@ -4439,30 +4647,149 @@ async function catchUpMissedRaces(attempt = 1) {
 /* ----- 自分の投票（すべてのレース分）を一括管理。
    ここから「購入した馬券」「コイン増減」「自分の馬ハイライト」などを組み立てる ----- */
 
-function listenMyBetHistory() {
-  if (unsubscribeMyBetHistory) { unsubscribeMyBetHistory(); unsubscribeMyBetHistory = null; }
-  if (!currentUser) return;
+/* =========================================================
+   自分の馬券（ゆうダービー）
+   ・以前は自分の馬券を全件（過去すべて）購読していた。今は次の2つだけを購読する
+       ① 最近のレース（今日から7日前まで・明日の自動開催の回・読み込み済みの手動レース）の自分の馬券
+          （where uid ＋ where raceId in [...]。等号と in だけなので複合インデックスは不要）
+       ② 未精算の自分の馬券（where uid ＋ where settled == false）… 古いレースの未精算も取りこぼさない
+   ・購読するレースの範囲は、日付が変わった・手動レースが増えたときに作り直す（refreshMyBetHistoryWindow）
+   ・それより前の履歴は「過去の投票履歴をすべて読み込む」を押したときだけ1回読む
+   ・問い合わせが失敗したときは、以前と同じ全件の購読に切り替える
+   ・精算（settleMyBets・catchUpMissedRaces）は今まで通り Firestore を直接確かめるので、この範囲に関係なく取りこぼさない
+========================================================= */
 
-  /* 【重要】where(uid) + orderBy(createdAt) を組み合わせたクエリは、
-     Firestore側で複合インデックスの作成が必要で、それが無いと
-     このリスナーがエラーで止まり、馬券が一切表示されなくなっていた。
-     orderByをやめてJavaScript側で並び替えることで、
-     Firebase Console側の追加設定を一切不要にした。 */
+const BET_HISTORY_RECENT_DAYS = 7;
+const BET_HISTORY_MAX_RACES = 30; /* Firestore の in に渡せる数の上限 */
+let betHistoryParts = { recent: new Map(), unsettled: new Map(), older: new Map() };
+let betHistoryWindowKey = "";
+let betHistoryFullLoaded = false;
+let betHistoryFallback = false;
+/* 最近の分・未精算の購読がエラーで止まった理由（空なら正常）。止まっても全件には切り替えず、最後に受け取ったデータのまま表示する */
+let betHistoryErrorCode = "";
+let myPageStatsShownForUid = "";
+
+/* 全件の読み込みに切り替えてよいのは「その問い合わせの形が使えない」ときだけ（必要最小限）。
+   failed-precondition：複合インデックスが無い・作成中（全件の問い合わせは単一項目のインデックスで動く）
+   unimplemented     ：集計（count・sum）が使えない
+   それ以外（resource-exhausted＝無料枠の超過・permission-denied・unauthenticated・unavailable などの通信エラー・internal など）は
+   全件に切り替えても同じ理由で失敗するか、読み取りが増えるだけなので切り替えない */
+const BET_QUERY_FALLBACK_CODES = new Set(["failed-precondition"]);
+const BET_STATS_FALLBACK_CODES = new Set(["failed-precondition", "unimplemented"]);
+
+function getRecentBetRaceIds() {
+  const now = derbyNow();
+  const ids = new Set();
+  for (let d = -1; d < BET_HISTORY_RECENT_DAYS; d++) {
+    const dayId = formatRaceId(new Date(now.getTime() - d * DAY_MS));
+    getRaceContextsForDay(dayId).forEach((c) => ids.add(c.raceId));
+  }
+  /* 新しいレースを優先して、上限までにする */
+  return [...ids].sort().reverse().slice(0, BET_HISTORY_MAX_RACES);
+}
+
+function rebuildMyAllBets() {
+  const merged = new Map();
+  [betHistoryParts.older, betHistoryParts.recent, betHistoryParts.unsettled].forEach((part) => part.forEach((bet, id) => merged.set(id, bet)));
+  myAllBets = [...merged.values()].sort((a, b) => {
+    const at = a.createdAt?.toMillis ? a.createdAt.toMillis() : 0;
+    const bt = b.createdAt?.toMillis ? b.createdAt.toMillis() : 0;
+    return bt - at;
+  });
+  renderBetHistory(myAllBets);
+  renderMyActiveTickets();
+}
+
+function stopMyBetHistory() {
+  if (unsubscribeMyBetHistory) { unsubscribeMyBetHistory(); unsubscribeMyBetHistory = null; }
+}
+
+function listenMyBetHistory() {
+  stopMyBetHistory();
+  betHistoryParts = { recent: new Map(), unsettled: new Map(), older: new Map() };
+  betHistoryWindowKey = "";
+  betHistoryFullLoaded = false;
+  betHistoryFallback = false;
+  betHistoryErrorCode = "";
+  if (!currentUser) return;
+  subscribeMyBetHistoryWindow();
+}
+
+function subscribeMyBetHistoryWindow() {
+  if (!currentUser) return;
+  stopMyBetHistory();
+  const uid = currentUser.uid;
+  const raceIds = getRecentBetRaceIds();
+  betHistoryWindowKey = raceIds.join(",");
+  betHistoryErrorCode = "";
+  const toBets = (snap) => new Map(snap.docs.map((d) => [d.id, { id: d.id, ...d.data() }]));
+  /* 2つの購読は別々に扱う。片方が止まっても、もう片方の購読と、止まった方が最後に受け取ったデータはそのまま残す */
+  let stopThis = null;
+  const onError = (error) => {
+    if (currentUser?.uid !== uid || unsubscribeMyBetHistory !== stopThis) return;
+    const code = error?.code || "unknown";
+    if (BET_QUERY_FALLBACK_CODES.has(code)) {
+      console.warn("馬券の購読（最近の分）に必要なインデックスが無いため、全件の購読に切り替えます:", code);
+      listenMyBetHistoryUnlimited();
+      return;
+    }
+    console.warn("馬券の購読が止まりました（全件には切り替えません。マイページを開くか、レースの範囲が変わったときに作り直します）:", code);
+    betHistoryErrorCode = code;
+    rebuildMyAllBets();
+  };
+
+  const unsubscribers = [
+    onSnapshot(query(collection(db, "raceBets"), where("uid", "==", uid), where("raceId", "in", raceIds)), (snap) => {
+      betHistoryParts.recent = toBets(snap);
+      rebuildMyAllBets();
+    }, onError),
+    onSnapshot(query(collection(db, "raceBets"), where("uid", "==", uid), where("settled", "==", false)), (snap) => {
+      betHistoryParts.unsettled = toBets(snap);
+      rebuildMyAllBets();
+    }, onError)
+  ];
+  stopThis = () => unsubscribers.forEach((u) => u());
+  unsubscribeMyBetHistory = stopThis;
+}
+
+/* 日付が変わった・手動レースが増えたなど、購読するレースの範囲が変わったときだけ作り直す。
+   retryAfterError：購読がエラーで止まっていたら作り直す（マイページを開いたときだけ渡す。
+   手動レースの更新などのたびに作り直すと、無料枠の超過中に何度も試すことになるので、ほかのきっかけでは作り直さない） */
+function refreshMyBetHistoryWindow({ retryAfterError = false } = {}) {
+  if (!currentUser || betHistoryFallback || !unsubscribeMyBetHistory) return;
+  if ((retryAfterError && betHistoryErrorCode) || getRecentBetRaceIds().join(",") !== betHistoryWindowKey) subscribeMyBetHistoryWindow();
+}
+
+/* 以前と同じ方式（自分の馬券を全件購読）。問い合わせが失敗したときだけ使う */
+function listenMyBetHistoryUnlimited() {
+  stopMyBetHistory();
+  betHistoryFallback = true;
+  betHistoryFullLoaded = true;
+  betHistoryErrorCode = "";
+  if (!currentUser) return;
   unsubscribeMyBetHistory = onSnapshot(
     query(collection(db, "raceBets"), where("uid", "==", currentUser.uid)),
     (snap) => {
-      myAllBets = snap.docs
-        .map((d) => ({ id: d.id, ...d.data() }))
-        .sort((a, b) => {
-          const at = a.createdAt?.toMillis ? a.createdAt.toMillis() : 0;
-          const bt = b.createdAt?.toMillis ? b.createdAt.toMillis() : 0;
-          return bt - at;
-        });
-      renderBetHistory(myAllBets);
-      renderMyActiveTickets();
+      betHistoryParts = { recent: new Map(snap.docs.map((d) => [d.id, { id: d.id, ...d.data() }])), unsettled: new Map(), older: new Map() };
+      rebuildMyAllBets();
     },
     (error) => console.error("投票履歴監視エラー:", error)
   );
+}
+
+/* 「過去の投票履歴をすべて読み込む」：それより前の履歴を1回だけ読む */
+async function loadOlderBetHistory() {
+  if (!currentUser || betHistoryFullLoaded) return;
+  betHistoryFullLoaded = true;
+  try {
+    const snap = await getDocs(query(collection(db, "raceBets"), where("uid", "==", currentUser.uid)));
+    betHistoryParts.older = new Map(snap.docs.map((d) => [d.id, { id: d.id, ...d.data() }]));
+    rebuildMyAllBets();
+  } catch (error) {
+    betHistoryFullLoaded = false;
+    console.error("過去の投票履歴の読み込みエラー:", error);
+    alert("過去の投票履歴を読み込めませんでした。");
+  }
 }
 
 function getMyBetsForRace(raceId) {
@@ -4550,9 +4877,16 @@ function renderBetHistory(bets) {
   if (!historyEl) return;
   historyEl.innerHTML = "";
 
-  if (bets.length === 0) {
-    historyEl.innerHTML = `<div class="empty-state">まだ投票履歴がありません</div>`;
-    return;
+  if (betHistoryErrorCode) {
+    /* 止まった購読がある：手元の履歴が最新とは限らないことを知らせる（「投票はありません」とは言わない） */
+    const notice = document.createElement("div");
+    notice.className = "empty-state history-error";
+    notice.textContent = "最新の投票履歴を読み込めませんでした。しばらくしてからマイページを開き直してください。";
+    historyEl.appendChild(notice);
+  } else if (bets.length === 0) {
+    historyEl.innerHTML = betHistoryFullLoaded
+      ? `<div class="empty-state">まだ投票履歴がありません</div>`
+      : `<div class="empty-state">最近（7日以内）の投票はありません</div>`;
   }
 
   bets.slice(0, 30).forEach((bet) => {
@@ -4570,6 +4904,15 @@ function renderBetHistory(bets) {
       <div style="font-size:11px; color:#888; margin-top:3px;">${escapeHTML(bet.raceId)}　${escapeHTML(resultText)}</div>`;
     historyEl.appendChild(item);
   });
+
+  if (!betHistoryFullLoaded) {
+    const more = document.createElement("button");
+    more.type = "button";
+    more.className = "secondary history-more";
+    more.textContent = "過去の投票履歴をすべて読み込む";
+    more.addEventListener("click", () => loadOlderBetHistory());
+    historyEl.appendChild(more);
+  }
 }
 
 
@@ -5190,6 +5533,7 @@ function refreshDerbySubscriptionsIfNeeded() {
 
   if (activeId !== lastActiveBettingRaceId) {
     lastActiveBettingRaceId = activeId;
+    refreshMyBetHistoryWindow();
     /* 固定オッズ方式のレースは、オッズのために馬券を購読しない（投票でオッズは変わらない） */
     if (isFixedOddsRace(activeId)) {
       if (unsubscribeWinBets) { unsubscribeWinBets(); unsubscribeWinBets = null; }
@@ -6172,6 +6516,7 @@ function listenManualRaces() {
       });
       manualRaces = next;
       renderManualRaceAdminList();
+      refreshMyBetHistoryWindow();
     },
     (error) => console.error("手動レースの読み込みエラー:", error)
   );
@@ -6740,21 +7085,40 @@ gameTypeButtons.forEach((button) => {
 
 let latestGameRooms = [];
 
+function stopGameRoomsSubscription() {
+  if (unsubscribeGameRooms) { unsubscribeGameRooms(); unsubscribeGameRooms = null; }
+}
+
+/* ゲームのルーム一覧（ゲーム画面を開いている間だけ購読する）
+   ・新しいルーム GAME_ROOM_LIST_LIMIT 件（以前は全ルームを購読していた）
+   ・自分が参加しているルーム（memberUids に自分の uid）… 古くても必ず一覧に出す
+   どちらも単一項目の並び替え・条件だけなので、複合インデックスは不要 */
+const GAME_ROOM_LIST_LIMIT = 50;
+
 function loadGameRooms() {
   if (!gameRoomsEl) return;
   if (unsubscribeGameRooms) { unsubscribeGameRooms(); unsubscribeGameRooms = null; }
+  if (!currentUser) return;
 
-  unsubscribeGameRooms = onSnapshot(
-    query(collection(db, "gameRooms"), orderBy("createdAt", "desc")),
-    (snapshot) => {
-      latestGameRooms = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
-      renderGameRooms(latestGameRooms);
-    },
-    (error) => {
-      console.error("ゲーム部屋監視エラー:", error);
-      gameRoomsEl.innerHTML = `<div class="empty-state">ゲーム部屋を読み込めませんでした</div>`;
-    }
-  );
+  const parts = { recent: null, mine: null };
+  const update = () => {
+    if (!parts.recent || !parts.mine) return;
+    const merged = new Map();
+    [...parts.recent, ...parts.mine].forEach((room) => merged.set(room.id, room));
+    latestGameRooms = [...merged.values()].sort((a, b) => timestampMillis(b.createdAt) - timestampMillis(a.createdAt));
+    renderGameRooms(latestGameRooms);
+  };
+  const onError = (error) => {
+    console.error("ゲーム部屋監視エラー:", error);
+    gameRoomsEl.innerHTML = `<div class="empty-state">ゲーム部屋を読み込めませんでした</div>`;
+  };
+  const toRooms = (snapshot) => snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
+
+  const unsubscribers = [
+    onSnapshot(query(collection(db, "gameRooms"), orderBy("createdAt", "desc"), limit(GAME_ROOM_LIST_LIMIT)), (snapshot) => { parts.recent = toRooms(snapshot); update(); }, onError),
+    onSnapshot(query(collection(db, "gameRooms"), where("memberUids", "array-contains", currentUser.uid)), (snapshot) => { parts.mine = toRooms(snapshot); update(); }, onError)
+  ];
+  unsubscribeGameRooms = () => unsubscribers.forEach((u) => u());
 }
 
 function renderGameRooms(allRooms) {

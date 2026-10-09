@@ -5952,3 +5952,31 @@ button.secondary {
 .game-maintenance p:last-child {
     margin-bottom: 0;
 }
+
+
+/* チャット：一番上の「過去のメッセージを読み込む」 */
+.messages-older {
+    display: block;
+
+    margin: 4px auto 10px;
+
+    min-height: 36px;
+
+    padding: 6px 16px;
+
+    border: 1px solid #d9dde3;
+    border-radius: 18px;
+
+    background: #fff;
+
+    color: #555;
+
+    font-size: 13px;
+
+    cursor: pointer;
+}
+
+.messages-older:disabled {
+    opacity: .6;
+    cursor: default;
+}
