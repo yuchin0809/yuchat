@@ -2395,7 +2395,9 @@ async function unsendMessage(messageId) {
       return;
     }
 
-    await updateDoc(messageRef, { deleted: true, deletedAt: serverTimestamp() });
+    /* 画像はこのメッセージのドキュメントの中だけにある（ほかのメッセージ・グループと共有していない）ので、
+       取り消したら画像のデータも消す（取り消したメッセージの画像は表示しないので、残しても保存容量と通信量を使うだけ） */
+    await updateDoc(messageRef, { deleted: true, deletedAt: serverTimestamp(), image: deleteField() });
   } catch (error) {
     console.error("送信取り消しエラー:", error);
     alert("送信取り消しに失敗しました。");
@@ -2551,9 +2553,11 @@ async function sendMessage() {
    （以前はそのまま保存していたため、約750KBを超える写真は保存できずに送信が失敗していた）
    ・選べるファイルは今まで通り 5MB まで（制限は緩めない）
    ・元の画像が十分小さければそのまま送る（GIF のアニメーションなども保つ）
-   ・大きければ長い辺 1600px まで縮めて JPEG にし、data URL が CHAT_IMAGE_MAX_LENGTH 以下になるまで画質・大きさを下げる */
+   ・大きければ長い辺 1600px まで縮めて JPEG にし、data URL が CHAT_IMAGE_MAX_LENGTH 以下になるまで画質・大きさを下げる
+   ・CHAT_IMAGE_MAX_LENGTH は 300KB（以前は 700KB）。Firestore の無料枠（保存容量・通信量）を守るため。
+     写真はふつう長い辺 1600〜1280px のまま収まる。これより大きい GIF・PNG は JPEG に変わる（GIF のアニメーションは止まる） */
 const CHAT_IMAGE_MAX_FILE_BYTES = 5 * 1024 * 1024;
-const CHAT_IMAGE_MAX_LENGTH = 700 * 1024;
+const CHAT_IMAGE_MAX_LENGTH = 300 * 1024;
 const CHAT_IMAGE_SIDES = [1600, 1280, 1024, 800, 640];
 const CHAT_IMAGE_QUALITIES = [0.85, 0.75, 0.65, 0.55];
 async function prepareChatImage(file) {

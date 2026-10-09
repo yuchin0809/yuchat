@@ -8,7 +8,7 @@
      1. ID トークンを検証して送信者の uid を確かめる（なりすまし防止）
      2. messages/{messageId} を読み、送信者本人のメッセージか確かめる
      3. 受信者を決める（友達チャット：friends の相手／グループ：送信者以外のメンバー）
-     4. notificationLogs/{messageId} を「まだ無いときだけ」作る（同じメッセージの二重送信防止）
+     4. notificationLogs/{messageId} を「まだ無いときだけ」作る（同じメッセージの二重送信防止。書き込みはこの1回だけ）
      5. 受信者の全端末（fcmTokens）へ FCM で送る。無効になったトークンは削除する
    を行う。送信者本人の端末には送らない。
 
@@ -158,8 +158,10 @@ export async function notifyForMessage(deps, uid, messageId) {
     }
   }));
 
-  await fs.update(`notificationLogs/${messageId}`, { tokenCount: tokens.length, sent, failed, removedTokens: removed.length })
-    .catch((error) => console.warn("log update failed", error));
+  /* 送信結果（端末数・成功・失敗）は Firestore に書き足さず、Cloudflare のログにだけ残す。
+     以前は送信後に notificationLogs を更新していたが、メッセージ1件につき書き込みが1回増えるだけで、どこからも読んでいなかった。
+     二重送信の防止は 4 の「まだ無いときだけ作る」だけで行っているので、この更新が無くても変わらない */
+  console.log("notify sent", JSON.stringify({ messageId, chatType: target.chatType, recipients: recipientUids.length, tokens: tokens.length, sent, failed, removed: removed.length }));
 
   return { sent, failed, removed: removed.length, recipients: recipientUids.length };
 }
