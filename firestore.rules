@@ -5,7 +5,7 @@ rules_version = '2';
 // もとのルール（Firebase Console に公開中のもの）：
 //   match /{document=**} { allow read, write: if request.auth != null; }
 // を土台にして、管理者用のデータ（手動レース・お知らせ）だけを守るように変えている。
-// それ以外のコレクション（users / friends / groups / messages / gameRooms / gameInvites /
+// それ以外のコレクション（users / friends / groups / messages / gameRooms /
 // races / raceBets / raceLogs / fcmTokens など）は、もとのルールと同じ「ログイン済みなら読み書き可」のまま。
 //
 // derby-runner（GitHub Actions）と通知の Worker はサービスアカウントで書き込むので、このルールの影響を受けない。
@@ -41,8 +41,15 @@ service cloud.firestore {
     // 下のコレクションは、このあとの専用のルールで書き込みを判定する（今までの「ログイン済みなら書ける」をもとに、一部だけ絞る）
     //   users：自分のデータだけ（管理者による名前の強制変更を除く）／adminNameChanges：管理者の名前変更の記録
     //   raceBets：固定オッズ方式のレースの精算の条件／friends：友達関係の解除（削除）は当事者だけ
+    //   gameInvites：ゲームの招待は、部屋を作った人が友達にだけ送れる。返事（参加・辞退）は招待された人だけ
     function hasDedicatedWriteRules(collection) {
-      return collection in ['users', 'adminNameChanges', 'raceBets', 'friends'];
+      return collection in ['users', 'adminNameChanges', 'raceBets', 'friends', 'gameInvites'];
+    }
+
+    // 下のコレクションは、このあとの専用のルールで読み取りを判定する
+    //   gameInvites：招待した人・招待された人だけが読める
+    function hasDedicatedReadRules(collection) {
+      return collection in ['gameInvites'];
     }
 
     // 下のコレクションは管理者だけが読める
@@ -62,7 +69,7 @@ service cloud.firestore {
 
     // ===== もとのルール（管理者用・自動処理用・廃止したコレクション以外は今まで通り） =====
     match /{collection}/{document=**} {
-      allow read: if signedIn() && !isRetiredCollection(collection) && !isAdminOnlyReadCollection(collection);
+      allow read: if signedIn() && !isRetiredCollection(collection) && !isAdminOnlyReadCollection(collection) && !hasDedicatedReadRules(collection);
       allow write: if signedIn() && !isAdminManagedCollection(collection) && !isServerOnlyCollection(collection) && !isRetiredCollection(collection) && !hasDedicatedWriteRules(collection);
     }
 
@@ -210,6 +217,48 @@ service cloud.firestore {
         return name is string && name != ''
           && exists(/databases/$(database)/documents/users/$(name))
           && get(/databases/$(database)/documents/users/$(name)).data.get('uid', '') == request.auth.uid;
+      }
+    }
+
+    // ===== ゲームの招待（gameInvites/{部屋のID}_{招待された人のuid}） =====
+    // 読み取り：招待した人・招待された人だけ（まだ無い招待を確かめる読み取りは可。中身が無いので何も分からない）
+    // 作成（と、返事が済んだ招待をもう一度送る上書き）：部屋を作った本人が、友達にだけ。
+    //   from / to の名前は users の uid と一致すること（他人の名前で招待を作れない）。部屋のゲームの種類と一致すること
+    // 更新（返事）：招待された人だけが、保留中の招待を「参加・辞退・期限切れ」にできる（状態と返事の時刻だけ）
+    // 削除：ブラウザからはできない（ユーザーの完全削除のときに通知サーバーが消す）
+    match /gameInvites/{inviteId} {
+      allow read: if signedIn()
+        && (resource == null
+          || resource.data.get('toUid', '') == request.auth.uid
+          || resource.data.get('fromUid', '') == request.auth.uid);
+      allow create: if isValidNewGameInvite(request.resource.data);
+      allow update: if (resource.data.get('status', '') != 'pending' && isValidNewGameInvite(request.resource.data))
+        || isGameInviteAnswer();
+      allow delete: if false;
+
+      function isValidNewGameInvite(data) {
+        return signedIn()
+          && data.keys().hasOnly(['roomId', 'gameType', 'from', 'fromUid', 'to', 'toUid', 'status', 'createdAt', 'respondedAt'])
+          && data.roomId is string && data.toUid is string && data.from is string && data.to is string
+          && inviteId == data.roomId + '_' + data.toUid
+          && data.fromUid == request.auth.uid
+          && data.toUid != request.auth.uid
+          && data.status == 'pending'
+          && data.gameType in ['daifugo', 'othello', 'shogi']
+          && get(/databases/$(database)/documents/users/$(data.from)).data.get('uid', '') == request.auth.uid
+          && get(/databases/$(database)/documents/users/$(data.to)).data.get('uid', '') == data.toUid
+          && get(/databases/$(database)/documents/gameRooms/$(data.roomId)).data.get('ownerUid', '') == request.auth.uid
+          && get(/databases/$(database)/documents/gameRooms/$(data.roomId)).data.get('gameType', '') == data.gameType
+          && (exists(/databases/$(database)/documents/friends/$(data.from + '_' + data.to))
+            || exists(/databases/$(database)/documents/friends/$(data.to + '_' + data.from)));
+      }
+
+      function isGameInviteAnswer() {
+        return signedIn()
+          && resource.data.get('toUid', '') == request.auth.uid
+          && resource.data.get('status', '') == 'pending'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'respondedAt'])
+          && request.resource.data.status in ['accepted', 'declined', 'expired'];
       }
     }
 

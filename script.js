@@ -112,6 +112,7 @@ let selectedDaifugoCards = [];
 let selectedShogiPiece = null;
 let unsubscribeGameInvites = null;
 let pendingGameInvites = [];
+let highlightedGameInviteId = null; // 通知から開いた招待（目立たせる）
 let gameInvitesInitialized = false;
 
 /* ゆうダービー関連の状態 */
@@ -3164,15 +3165,17 @@ async function updateFcmTokenUsername() {
   }
 }
 
-/* メッセージを送ったあと、Worker に相手への通知を頼む（失敗してもメッセージ送信には影響しない） */
-async function requestPushNotification(messageId) {
-  if (!NOTIFY_ENDPOINT || !currentUser || !messageId) return;
+/* メッセージを送ったあと（またはゲームに招待したあと）、Worker に相手への通知を頼む（失敗してもメッセージ送信・招待には影響しない）
+   引数：メッセージの ID（文字列）、または { inviteId }（🎮 ゲームの招待） */
+async function requestPushNotification(target) {
+  const payload = typeof target === "string" ? { messageId: target } : target;
+  if (!NOTIFY_ENDPOINT || !currentUser || !payload || !(payload.messageId || payload.inviteId)) return;
   try {
     const idToken = await currentUser.getIdToken();
     const response = await fetch(NOTIFY_ENDPOINT, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
-      body: JSON.stringify({ messageId })
+      body: JSON.stringify(payload)
     });
     if (!response.ok) console.warn("通知の送信依頼に失敗:", response.status, await response.text());
   } catch (error) {
@@ -3189,7 +3192,7 @@ function setupForegroundMessageListener(messaging) {
     const data = payload?.data || {};
     const title = data.title || payload?.notification?.title || "ゆうChat";
     const body = data.body || payload?.notification?.body || "新しい通知があります。";
-    const key = data.messageId ? `message:${data.messageId}` : null;
+    const key = data.kind === "gameInvite" && data.inviteId ? gameInviteKey(data) : (data.messageId ? `message:${data.messageId}` : null);
 
     /* 今まさに開いているチャットのメッセージならトーストは出さない */
     if (isChatOpenAndFocused(data.friendshipId, data.groupId)) {
@@ -3240,6 +3243,8 @@ function parseNotificationTarget(search) {
     const open = params.get("open");
     /* 🏇 ゆうダービー開始前・📢 新しいお知らせの通知は、その画面を開く */
     if (open === "derby" || open === "announcements") return { open };
+    /* 🎮 ゲームの招待の通知は、ゲーム画面のその招待を開く */
+    if (open === "games") return { open: "games", invite: params.get("invite") || null };
     if (open !== "chat") return null;
     return { open: "chat", friendship: params.get("friendship") || null, group: params.get("group") || null };
   } catch (error) {
@@ -3262,6 +3267,15 @@ function clearNotificationParamsFromUrl() {
 function applyPendingNotificationTarget(source) {
   const target = pendingNotificationTarget;
   if (!target || !currentUser || !username) return;
+
+  if (target.open === "games" && target.invite) {
+    /* 自分あての招待の一覧（gameInvites の監視）を読み込んでから開く */
+    if (!gameInvitesInitialized) { switchView("games"); return; }
+    pendingNotificationTarget = null;
+    clearNotificationParamsFromUrl();
+    openGameInviteFromNotification(target.invite);
+    return;
+  }
 
   if (target.open !== "chat") {
     pendingNotificationTarget = null;
@@ -6655,6 +6669,21 @@ function getMaxGamePlayers(type) {
   return 2;
 }
 
+/* 対局中か（新しく参加できない状態か）。大富豪は、1回のゲームが終わって次のゲームを待っている間
+   （部屋の status は "playing" のまま、gameState.phase が "finished"）は対局中として扱わない
+   notify-worker/worker.js の isGameRoomJoinable と同じ判定 */
+function isGameRoomInProgress(room) {
+  if (!room || room.status !== "playing") return false;
+  return !(room.gameType === "daifugo" && room.gameState?.phase === "finished");
+}
+
+/* まだ新しく参加できる部屋か（満員でなく、対局中でない） */
+function isGameRoomJoinable(room) {
+  if (!room) return false;
+  const members = Array.isArray(room.members) ? room.members : [];
+  return members.length < getMaxGamePlayers(room.gameType) && !isGameRoomInProgress(room);
+}
+
 /* =========================================================
    盤面の保存形式の変換（オセロ・将棋）
    ・Firestoreは「配列の中の配列」を保存できないため、
@@ -6747,12 +6776,12 @@ function renderGameRooms(allRooms) {
       <div class="room-title">${escapeHTML(getGameTypeName(room.gameType))}</div>
       <div class="room-owner">作成者：${escapeHTML(room.owner || "不明")}</div>
       <div class="room-members">参加者 ${members.length}/${getMaxGamePlayers(room.gameType)}人</div>
-      <div class="room-status">${room.status === "playing" ? "プレイ中" : "参加者募集中"}</div>`;
+      <div class="room-status">${isGameRoomInProgress(room) ? "プレイ中" : "参加者募集中"}</div>`;
 
     const joinButton = document.createElement("button");
     joinButton.type = "button";
     joinButton.className = "primary-button";
-    joinButton.textContent = members.includes(username) ? "開く" : (room.status === "playing" ? "観戦" : "参加");
+    joinButton.textContent = members.includes(username) ? "開く" : (isGameRoomInProgress(room) ? "観戦" : "参加");
     joinButton.addEventListener("click", () => joinGameRoom(room));
 
     card.appendChild(joinButton);
@@ -6859,7 +6888,7 @@ async function joinGameRoom(room) {
     const maxPlayers = getMaxGamePlayers(data.gameType);
 
     if (!members.includes(username)) {
-      if (data.status === "playing") { alert("このゲームはすでに開始されています。"); return false; }
+      if (isGameRoomInProgress(data)) { alert("このゲームはすでに開始されています。"); return false; }
       if (members.length >= maxPlayers) { alert("このルームは満員です。"); return false; }
 
       members.push(username);
@@ -6975,20 +7004,26 @@ function renderCurrentGame(room) {
 }
 
 /* =========================================================
-   ゲーム招待（将棋・オセロのみ）
+   ゲーム招待（大富豪・オセロ・将棋）
    ・gameInvites/{roomId}_{招待相手のuid} に保存（同じ部屋・同じ相手は1件だけ）
    ・gameRooms/{roomId}.invitedUsers に招待中のユーザー名を保存
    ・参加するときは既存の joinGameRoom() を使う
+   ・招待したら、通知サーバー（Worker の /notify）に招待された人へのプッシュ通知を頼む
+     （アプリを閉じていても届く。Worker が招待した本人・部屋を作った本人・友達どうしかを確かめる）
+   ・招待の読み書きは firestore.rules で、招待した人・招待された人だけに限っている
 ========================================================= */
 
-const INVITABLE_GAME_TYPES = ["othello", "shogi"];
+const INVITABLE_GAME_TYPES = ["daifugo", "othello", "shogi"];
 
 function canInviteToGameRoom(room) {
   if (!room || !INVITABLE_GAME_TYPES.includes(room.gameType)) return false;
   if (room.ownerUid !== currentUser?.uid) return false;
-  if (room.status === "playing") return false;
-  const members = Array.isArray(room.members) ? room.members : [];
-  return members.length < getMaxGamePlayers(room.gameType);
+  return isGameRoomJoinable(room);
+}
+
+function gameInviteKey(invite) {
+  const at = invite?.createdAt?.toMillis?.() ?? (Number(invite?.inviteAt) || "");
+  return `invite:${invite?.id || invite?.inviteId}:${at}`;
 }
 
 /* 部屋を作った人に表示する「友達を招待」欄 */
@@ -7057,6 +7092,7 @@ async function sendGameInvite(roomId, friendName) {
 
   const roomRef = doc(db, "gameRooms", roomId);
   const friendUserRef = doc(db, "users", friendName);
+  let sentInviteId = null;
 
   try {
     await runTransaction(db, async (transaction) => {
@@ -7067,7 +7103,7 @@ async function sendGameInvite(roomId, friendName) {
       const members = Array.isArray(room.members) ? room.members : [];
       if (!INVITABLE_GAME_TYPES.includes(room.gameType)) throw new Error("NOT_SUPPORTED");
       if (room.ownerUid !== currentUser.uid) throw new Error("NOT_HOST");
-      if (room.status === "playing") throw new Error("ROOM_PLAYING");
+      if (isGameRoomInProgress(room)) throw new Error("ROOM_PLAYING");
       if (members.length >= getMaxGamePlayers(room.gameType)) throw new Error("ROOM_FULL");
       if (members.includes(friendName)) throw new Error("ALREADY_MEMBER");
       if (!friendsData.some((f) => f.friend === friendName)) throw new Error("NOT_FRIEND");
@@ -7095,9 +7131,12 @@ async function sendGameInvite(roomId, friendName) {
         respondedAt: null
       });
       transaction.update(roomRef, { invitedUsers, updatedAt: serverTimestamp() });
+      sentInviteId = inviteRef.id;
     });
 
     showAppToast("招待しました", `${friendName}さんを招待しました`);
+    /* 招待された人の端末へプッシュ通知（失敗しても招待そのものは届いている） */
+    if (sentInviteId) requestPushNotification({ inviteId: sentInviteId });
   } catch (error) {
     console.error("ゲーム招待エラー:", error);
     const messages = {
@@ -7136,11 +7175,12 @@ function listenGameInvites() {
       if (gameInvitesInitialized) {
         pendingGameInvites
           .filter((invite) => !previousIds.has(invite.id))
-          .forEach((invite) => showAppToast("🎮 ゲームの招待", `${invite.from}さんから${getGameTypeName(invite.gameType)}に招待されました`));
+          .forEach((invite) => notifyOnce(gameInviteKey(invite), "🎮 ゲームの招待", `${invite.from}さんから${getGameTypeName(invite.gameType)}に招待されました`));
       }
       gameInvitesInitialized = true;
 
       renderGameInvites();
+      applyPendingNotificationTarget("invites");
     },
     (error) => console.error("ゲーム招待監視エラー:", error)
   );
@@ -7156,11 +7196,15 @@ function renderGameInvites() {
 
   pendingGameInvites.forEach((invite) => {
     const card = document.createElement("div");
-    card.className = "game-invite-card";
+    card.className = `game-invite-card${invite.id === highlightedGameInviteId ? " highlight" : ""}`;
+    card.dataset.inviteId = invite.id;
 
     const text = document.createElement("div");
     text.className = "game-invite-text";
-    text.textContent = `${invite.from}さんから${getGameTypeName(invite.gameType)}の招待`;
+    const icon = { daifugo: "🃏", othello: "⚫", shogi: "♟️" }[invite.gameType] || "🎮";
+    const strong = document.createElement("b");
+    strong.textContent = `${invite.from}さん`;
+    text.append(`${icon} `, strong, `から${getGameTypeName(invite.gameType)}の招待が届いています`);
 
     const actions = document.createElement("div");
     actions.className = "game-invite-actions";
@@ -7190,6 +7234,57 @@ function renderGameInvites() {
     card.append(text, actions);
     gameInvitesEl.appendChild(card);
   });
+
+  /* 通知から開いた招待は、見える位置に出して目立たせる */
+  if (highlightedGameInviteId) {
+    gameInvitesEl.querySelector(`[data-invite-id="${CSS.escape(highlightedGameInviteId)}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+}
+
+
+/* 通知から開いた招待：保留中なら招待の欄を目立たせる。もう無効なら理由を伝える */
+async function openGameInviteFromNotification(inviteId) {
+  switchView("games");
+  const pending = pendingGameInvites.find((invite) => invite.id === inviteId);
+  if (pending) {
+    /* 保留中でも、部屋が閉じられた・始まった・満員なら、すぐに理由を伝えて招待を期限切れにする */
+    const reason = await getGameInviteRoomProblem(pending).catch((error) => { console.warn("招待の部屋の確認エラー:", error); return null; });
+    if (reason) {
+      await resolveGameInvite(pending, "expired");
+      alert(reason);
+      return;
+    }
+    highlightedGameInviteId = inviteId;
+    if (currentGameType !== pending.gameType) document.querySelector(`.game-type[data-game="${pending.gameType}"]`)?.click();
+    renderGameInvites();
+    return;
+  }
+
+  let message = "この招待はもう無効です。";
+  try {
+    const snap = await getDoc(doc(db, "gameInvites", inviteId));
+    const invite = snap.exists() ? snap.data() : null;
+    if (!invite || invite.toUid !== currentUser?.uid) {
+      message = "この招待は見つかりませんでした。";
+    } else {
+      const roomSnap = await getDoc(doc(db, "gameRooms", invite.roomId));
+      const room = roomSnap.exists() ? { id: roomSnap.id, ...roomSnap.data() } : null;
+      const isMember = Boolean(room && Array.isArray(room.members) && room.members.includes(username));
+      if (invite.status === "accepted" && isMember) {
+        joinGameRoom(room);
+        return;
+      }
+      if (!room) message = "このゲームのルームはもう閉じられています。";
+      else if (invite.status === "declined") message = "この招待はすでに辞退しています。";
+      else if (invite.status === "accepted") message = "この招待にはすでに参加しましたが、ルームから退出しています。";
+      else if (!isGameRoomJoinable(room)) message = isGameRoomInProgress(room) ? "このゲームはすでに始まっているため、参加できません。" : "このルームは満員のため、参加できません。";
+    }
+  } catch (error) {
+    console.warn("招待の確認エラー:", error);
+    /* 自分あてでない招待は読めない（firestore.rules）ので、見つからないと案内する */
+    if (error?.code === "permission-denied") message = "この招待は見つかりませんでした。";
+  }
+  alert(message);
 }
 
 /* 招待の状態を更新し、部屋の invitedUsers から自分を外す */
@@ -7221,23 +7316,23 @@ async function resolveGameInvite(invite, status) {
   }
 }
 
+/* 招待の部屋に今から入れないときは、その理由（入れるときは null） */
+async function getGameInviteRoomProblem(invite) {
+  const roomSnap = await getDoc(doc(db, "gameRooms", invite.roomId));
+  if (!roomSnap.exists()) return "このゲームのルームはもう閉じられています。";
+  const room = roomSnap.data();
+  const members = Array.isArray(room.members) ? room.members : [];
+  if (members.includes(username)) return null;
+  if (isGameRoomInProgress(room)) return "このゲームはすでに開始されています。";
+  if (members.length >= getMaxGamePlayers(room.gameType)) return "このルームは満員です。";
+  return null;
+}
+
 async function acceptGameInvite(invite) {
   if (!currentUser || !username || !invite?.roomId) return;
 
   try {
-    const roomSnap = await getDoc(doc(db, "gameRooms", invite.roomId));
-    let reason = null;
-
-    if (!roomSnap.exists()) {
-      reason = "この部屋はもうありません。";
-    } else {
-      const room = roomSnap.data();
-      const members = Array.isArray(room.members) ? room.members : [];
-      if (!members.includes(username)) {
-        if (room.status === "playing") reason = "このゲームはすでに開始されています。";
-        else if (members.length >= getMaxGamePlayers(room.gameType)) reason = "このルームは満員です。";
-      }
-    }
+    const reason = await getGameInviteRoomProblem(invite);
 
     /* 参加できない招待は期限切れにして一覧から消す */
     if (reason) {
@@ -7247,6 +7342,8 @@ async function acceptGameInvite(invite) {
     }
 
     switchView("games");
+    if (highlightedGameInviteId === invite.id) highlightedGameInviteId = null;
+    if (currentGameType !== invite.gameType) document.querySelector(`.game-type[data-game="${invite.gameType}"]`)?.click();
     const joined = await joinGameRoom({ id: invite.roomId, gameType: invite.gameType });
     if (joined) await resolveGameInvite(invite, "accepted");
   } catch (error) {

@@ -19,6 +19,12 @@
                     { "action": "listUsers" | "inspectUser" | "setPassword" | "suspend" | "unsuspend" | "deleteUser" | "deleteAuthOnly" | "adjustCoins" | "notifyAnnouncement", ... }
    ID トークンの uid が ADMIN_UID のときだけ実行する（それ以外は 403）。パスワードはどこにも保存・記録しない。
 
+   🎮 ゲームの招待（大富豪・オセロ・将棋）：
+     POST /notify   Authorization: Bearer <招待した人の ID トークン>
+                    { "inviteId": "<gameInvites のドキュメントID>" }
+   招待した本人・部屋を作った本人・友達どうし・保留中で新しい招待・まだ参加できる部屋のときだけ、
+   招待された人の全端末へ送る。notificationLogs/invite-{inviteId}-{招待した時刻} で同じ招待の通知は1回だけ
+
    全員への通知（通知を ON にした全端末 = fcmTokens）：
      ・🏇 ゆうダービー開始1分前：Cron Triggers（毎分）で runScheduled が確かめる（アプリを閉じていても届く）
      ・📢 新しいお知らせ：管理者がアプリで作ったときは /admin の notifyAnnouncement、
@@ -95,6 +101,14 @@ export async function handleRequest(request, env = {}, deps = createDefaultDeps(
     /* 管理者専用（👤 ユーザー管理）：管理者の uid 以外はすべて拒否する */
     if (new URL(request.url).pathname.replace(/\/+$/, "") === "/admin") {
       const result = await handleAdminAction(deps, uid, body);
+      return jsonResponse(result, result.status || 200, cors);
+    }
+
+    /* 🎮 ゲームの招待 */
+    if (body && typeof body === "object" && "inviteId" in body) {
+      const inviteId = typeof body.inviteId === "string" ? body.inviteId : "";
+      if (!/^[A-Za-z0-9_-]{1,200}$/.test(inviteId)) return jsonResponse({ error: "invalid_invite_id" }, 400, cors);
+      const result = await notifyForGameInvite(deps, uid, inviteId);
       return jsonResponse(result, result.status || 200, cors);
     }
 
@@ -373,6 +387,87 @@ export function announcementNotificationData(id, announcement) {
     link: "./?open=announcements",
     tag: `announcement-${id}`
   };
+}
+
+/* ----- 🎮 ゲームの招待 ----- */
+
+const GAME_NAMES = { daifugo: "大富豪", othello: "オセロ", shogi: "将棋" };
+const GAME_MAX_PLAYERS = { daifugo: 4, othello: 2, shogi: 2 };
+
+/* まだ参加できる部屋か（script.js の isGameRoomJoinable と同じ判定）
+   ・満員でない
+   ・対局中でない（大富豪は、1回のゲームが終わって次のゲームを待っている間も参加できる） */
+export function isGameRoomJoinable(room) {
+  if (!room || !GAME_MAX_PLAYERS[room.gameType]) return false;
+  const members = Array.isArray(room.members) ? room.members : [];
+  if (members.length >= GAME_MAX_PLAYERS[room.gameType]) return false;
+  if (room.status !== "playing") return true;
+  return room.gameType === "daifugo" && room.gameState?.phase === "finished";
+}
+
+export function gameInviteNotificationData(inviteId, invite) {
+  const gameName = GAME_NAMES[invite.gameType] || "ゲーム";
+  return {
+    kind: "gameInvite",
+    inviteId,
+    roomId: invite.roomId,
+    gameType: invite.gameType,
+    inviteAt: String(Date.parse(invite.createdAt) || ""),
+    title: "🎮 ゲームの招待",
+    body: `${truncate(invite.from || "友達", 30)}さんから${gameName}に招待されました`,
+    link: `./?open=games&invite=${encodeURIComponent(inviteId)}`,
+    tag: `invite-${inviteId}`
+  };
+}
+
+export async function notifyForGameInvite(deps, uid, inviteId) {
+  const fs = deps.firestore;
+
+  /* 招待した本人か・保留中の新しい招待か */
+  const invite = await fs.get(`gameInvites/${inviteId}`);
+  if (!invite) return { status: 404, error: "invite_not_found" };
+  if (invite.fromUid !== uid) return { status: 403, error: "not_inviter" };
+  if (!GAME_NAMES[invite.gameType] || typeof invite.roomId !== "string" || typeof invite.toUid !== "string") return { status: 400, error: "invalid_invite" };
+  if (inviteId !== `${invite.roomId}_${invite.toUid}` || invite.toUid === uid) return { status: 400, error: "invalid_invite" };
+  if (invite.status !== "pending") return { skipped: "not_pending" };
+  const createdAt = invite.createdAt ? Date.parse(invite.createdAt) : NaN;
+  if (!Number.isFinite(createdAt) || deps.now() - createdAt > MAX_MESSAGE_AGE_MS) return { skipped: "too_old" };
+
+  /* 部屋を作った本人が、まだ参加できる部屋に招待しているか */
+  if (!/^[^/]{1,1500}$/.test(invite.roomId)) return { status: 400, error: "invalid_invite" };
+  const room = await fs.get(`gameRooms/${invite.roomId}`);
+  if (!room) return { skipped: "room_not_found" };
+  if (room.ownerUid !== uid || room.gameType !== invite.gameType) return { status: 403, error: "not_room_owner" };
+  if (!isGameRoomJoinable(room)) return { skipped: "room_not_joinable" };
+
+  /* 名前が本人のものか・友達どうしか */
+  const from = String(invite.from || ""), to = String(invite.to || "");
+  if (!from || !to || from.includes("/") || to.includes("/")) return { status: 400, error: "invalid_invite" };
+  const [fromUser, toUser, friendA, friendB] = await fs.batchGet([`users/${from}`, `users/${to}`, `friends/${from}_${to}`, `friends/${to}_${from}`]);
+  if (fromUser?.uid !== uid || toUser?.uid !== invite.toUid) return { status: 403, error: "name_mismatch" };
+  if (!friendA && !friendB) return { status: 403, error: "not_friends" };
+
+  /* 同じ招待の通知は1回だけ（返事のあとにもう一度招待したときは、招待した時刻が変わるので送る） */
+  const logId = `invite-${inviteId}-${createdAt}`;
+  const claimed = await fs.createIfAbsent(`notificationLogs/${logId}`, { kind: "gameInvite", inviteId, fromUid: uid, toUid: invite.toUid, createdAt: new Date(deps.now()) });
+  if (!claimed) return { skipped: "duplicate" };
+
+  const tokens = await getTokensForUids(fs, [invite.toUid]);
+  const data = gameInviteNotificationData(inviteId, invite);
+  let sent = 0, failed = 0, removed = 0;
+  await Promise.all(tokens.map(async (token) => {
+    try {
+      const outcome = await deps.sendFcm(token, data);
+      if (outcome.ok) { sent++; return; }
+      failed++;
+      if (outcome.invalidToken) { removed++; await fs.delete(`fcmTokens/${token}`).catch(() => {}); }
+    } catch {
+      failed++;
+    }
+  }));
+  await fs.update(`notificationLogs/${logId}`, { tokenCount: tokens.length, sent, failed, removedTokens: removed })
+    .catch((error) => console.warn("log update failed", String(error?.message || error).slice(0, 200)));
+  return { sent, failed, removed, tokens: tokens.length };
 }
 
 export async function notifyNewAnnouncement(deps, id) {
