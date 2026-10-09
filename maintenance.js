@@ -9,7 +9,7 @@
 
 (function () {
   /* ↓ メンテナンスの ON / OFF はここだけで切り替える */
-  const MAINTENANCE_MODE = true;
+  const MAINTENANCE_MODE = false;
 
   const MAINTENANCE_TITLE = "緊急メンテナンスのお知らせ";
   const MAINTENANCE_BODY = [
