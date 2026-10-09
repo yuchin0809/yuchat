@@ -2033,7 +2033,8 @@ function renderPagedChat(paging, scrollMode) {
     .filter(isMessageForSelectedChat)
     .sort((a, b) => timestampMillis(a.createdAt, Infinity) - timestampMillis(b.createdAt, Infinity));
   renderSelectedMessages(selectedChatMessages, { scrollMode, olderState: paging.fallback ? null : paging.olderState });
-  markSelectedChatAsRead();
+  /* 端末に残っていたデータだけで描いた段階では既読にしない（サーバーの最新を受け取ってから） */
+  if (paging.fallback || paging.serverSynced) markSelectedChatAsRead();
 }
 
 function listenSelectedChatMessages() {
@@ -2052,24 +2053,44 @@ function listenSelectedChatMessages() {
     messages: new Map(),   /* id → メッセージ（購読分と過去分をまとめて1つ） */
     snaps: new Map(),      /* id → ドキュメント（過去分を読むときの起点に使う） */
     liveIds: new Set(),    /* いま購読している最新分の id */
-    olderState: "unknown", /* "more"：まだ前がある／"loading"：読み込み中／"none"：もう無い */
+    olderState: "unknown", /* "more"：まだ前がある／"loading"：読み込み中／"none"：もう無い（サーバーの結果を受け取るまでは "unknown"） */
+    serverSynced: false,   /* サーバーから最新 MESSAGE_PAGE_SIZE 件を受け取ったか */
     firstRendered: false,
     fallback: false
   };
   chatPaging = paging;
 
+  /* 開き直したときなどは、まず端末に残っていたデータ（fromCache）だけで結果が届くことがある。
+     その件数は最新 MESSAGE_PAGE_SIZE 件とは限らない（足りない・間が抜けている）ので、
+     ・端末のデータの段階では表示だけして、「過去のメッセージがあるか」は決めない（ボタンも出さず、過去分も読まない）
+     ・サーバーからの最初の結果を受け取ったら、表示をその最新件数で置き換え、そこで「過去のメッセージがあるか」を決める
+     サーバーの結果が端末のデータと同じでも届くように includeMetadataChanges を付ける。
+     受け取ったあとの「中身が変わらない知らせ」（送信中→送信済み・オンライン／オフラインの切り替えだけ）は描き直さない。
+     includeMetadataChanges は知らせの種類が増えるだけで、読み取り回数は増えない */
   const unsubscribe = onSnapshot(
     buildChatMessagesQuery(paging.type, paging.chatId, [limit(MESSAGE_PAGE_SIZE)]),
+    { includeMetadataChanges: true },
     (snapshot) => {
       if (chatPaging !== paging) return;
+      const fromServer = !snapshot.metadata.fromCache;
+      const firstFromServer = fromServer && !paging.serverSynced;
+      if (paging.serverSynced && snapshot.docChanges().length === 0) {
+        /* 中身の変わらない知らせ：描き直さず、過去分を読む起点の判断に使う送信中の印（hasPendingWrites）だけ新しくする */
+        snapshot.docs.forEach((item) => { if (paging.snaps.has(item.id)) paging.snaps.set(item.id, item); });
+        return;
+      }
+      if (firstFromServer) {
+        /* 端末のデータで先に描いた分を、サーバーの最新件数で置き換える（範囲の外の古いメッセージを残さない） */
+        paging.serverSynced = true;
+        paging.messages = new Map();
+        paging.snaps = new Map();
+        paging.olderState = snapshot.size < MESSAGE_PAGE_SIZE ? "none" : "more";
+      }
       paging.liveIds = new Set(snapshot.docs.map((item) => item.id));
       snapshot.docs.forEach((item) => {
         paging.messages.set(item.id, toChatMessage(item));
         paging.snaps.set(item.id, item);
       });
-      if (!paging.firstRendered && paging.olderState === "unknown") {
-        paging.olderState = snapshot.size < MESSAGE_PAGE_SIZE ? "none" : "more";
-      }
       renderPagedChat(paging, paging.firstRendered ? "auto" : "bottom");
       paging.firstRendered = true;
     },
