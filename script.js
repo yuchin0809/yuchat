@@ -2009,7 +2009,7 @@ function isMessageForSelectedChat(message) {
      以前と同じ「全件を購読する」方式に自動で切り替える（チャットが表示されなくなることはない）
 ========================================================= */
 
-const MESSAGE_PAGE_SIZE = 20;
+const MESSAGE_PAGE_SIZE = 15;
 let selectedChatMessages = [];
 let chatPaging = null;
 
