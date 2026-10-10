@@ -1168,8 +1168,6 @@ changeNameButton?.addEventListener("click", async () => {
     }
 
     const oldName = username;
-    const oldUserSnap = await getDoc(doc(db, "users", oldName));
-    const oldUserData = oldUserSnap.exists() ? oldUserSnap.data() : {};
 
     await setDoc(newUserRef, {
       uid: currentUser.uid,
@@ -1181,30 +1179,19 @@ changeNameButton?.addEventListener("click", async () => {
       ...(isNotifySetupDoneLocally() ? { notificationSetupDone: true } : {})
     });
 
-    /* コイン・ボーナス受け取り済み・累計賭け金・ゆう銀行（預金・借入）・ゆう株・ログインボーナス・お知らせの既読の状態を新しい名前に引き継ぐ
-       （引き継がないと、次に開いたときに初期コインやボーナスがもう一度付いてしまう） */
-    const carriedCoinFields = {};
-    ["coins", "bonus500Granted", "bonus500GrantedAt", "totalBetAmount", "bank", "stocks", "lastLoginBonusDate", "lastAnnouncementReadAt"].forEach((key) => {
-      if (oldUserData[key] !== undefined) carriedCoinFields[key] = oldUserData[key];
-    });
-    if (Object.keys(carriedCoinFields).length > 0) {
-      try {
-        await updateDoc(newUserRef, carriedCoinFields);
-      } catch (error) {
-        console.error("ゆうcoinの引き継ぎエラー:", error);
-      }
+    /* コイン・ゆう銀行・ゆう株・累計賭け金・ボーナス・お知らせ既読の引き継ぎと、古い名前のデータの削除は Worker が行う
+       （ブラウザは経済項目を書けない。引き継がないと、次に開いたときに初期コインやボーナスがもう一度付いてしまう）。
+       古い名前と新しい名前のどちらも自分（uid）であることをサーバーが確かめる */
+    try {
+      await callEconomyApi("renameCarry", { from: oldName, to: trimmed });
+    } catch (error) {
+      console.error("ゆうcoinの引き継ぎエラー:", error?.economyCode || error);
     }
 
     username = trimmed;
     localStorage.setItem("yuuchat_username", username);
 
     await migrateUsername(oldName, username);
-
-    try {
-      await deleteDoc(doc(db, "users", oldName));
-    } catch (error) {
-      console.warn("旧ユーザーデータ削除失敗:", error);
-    }
 
     if (myName) myName.textContent = username;
     updateFcmTokenUsername();
@@ -4070,15 +4057,9 @@ function updateCoinDisplays(coins) {
 async function grantStartingCoinsIfNeeded() {
   if (!username) return;
   try {
-    await runTransaction(db, async (transaction) => {
-      const userRef = doc(db, "users", username);
-      const snap = await transaction.get(userRef);
-      if (!snap.exists()) return;
-      if (typeof snap.data().coins === "number") return;
-      transaction.update(userRef, { coins: YUU_START_COINS });
-    });
+    await callEconomyApi("startingCoins");
   } catch (error) {
-    console.error("ゆうcoin初期付与エラー:", error);
+    console.warn("ゆうcoin初期付与エラー:", error?.economyCode || error);
   }
 }
 
@@ -4092,20 +4073,9 @@ async function grantBonusCoinsIfNeeded() {
   if (!username || bonusGrantInFlight) return;
   bonusGrantInFlight = true;
   try {
-    await runTransaction(db, async (transaction) => {
-      const userRef = doc(db, "users", username);
-      const snap = await transaction.get(userRef);
-      if (!snap.exists()) return;
-      const data = snap.data();
-      if (typeof data.coins !== "number" || data.bonus500Granted === true) return;
-      transaction.update(userRef, {
-        coins: data.coins + YUU_BONUS_COINS,
-        bonus500Granted: true,
-        bonus500GrantedAt: serverTimestamp()
-      });
-    });
+    await callEconomyApi("bonus500");
   } catch (error) {
-    console.warn("ゆうcoin追加ボーナスの付与に失敗:", error);
+    console.warn("ゆうcoin追加ボーナスの付与に失敗:", error?.economyCode || error);
   } finally {
     bonusGrantInFlight = false;
   }
@@ -4435,57 +4405,20 @@ betButton?.addEventListener("click", async () => {
     betButton.disabled = true;
     const raceId = getActiveBettingRaceContext().raceId;
 
-    /* 累計賭け金（totalBetAmount）は、馬券の作成・コインの引き落としと同じトランザクションで加算する
-       （馬券1枚につき1回だけ。払い戻しや外れでは減らさない）。
-       万一 totalBetAmount の書き込みが拒否されても投票はできるよう、そのときは従来どおりの内容でやり直す
-       （累計は derby-runner が馬券の記録から計算し直す） */
-    const manualRef = isManualRaceId(raceId) ? doc(db, "derbyManualRaces", raceId) : null;
-    const placeBet = (withTotal) => (manualRef ? runCountedTransaction : (fn) => runTransaction(db, fn))(async (transaction) => {
-      const userRef = doc(db, "users", username);
-      const userSnap = await transaction.get(userRef);
-      const coins = userSnap.exists() ? Number(userSnap.data().coins || 0) : 0;
-      if (coins < amount) throw new Error("NOT_ENOUGH_COINS");
-
-      /* 手動レース：受付時間内で、キャンセルされていないことを同じトランザクションの中で確かめ、
-         投票数（betCount）を増やす（投票があるレースは管理者がキャンセルできないようにするため） */
-      const manualSnap = manualRef ? await transaction.get(manualRef) : null;
-      if (manualRef) {
-        const race = manualSnap.exists() ? manualSnap.data() : null;
-        if (!race || race.status === "cancelled") throw new Error("MANUAL_RACE_CANCELLED");
-        const now = derbyNow();
-        if (now < toDateValue(race.openAt) || now >= toDateValue(race.closeAt)) throw new Error("MANUAL_RACE_CLOSED");
-        transaction.update(manualRef, { betCount: Number(race.betCount || 0) + 1 });
-      }
-
-      const userUpdate = { coins: coins - amount };
-      if (withTotal) userUpdate.totalBetAmount = Number(userSnap.data().totalBetAmount || 0) + amount;
-      transaction.update(userRef, userUpdate);
-
-      const betRef = doc(collection(db, "raceBets"));
-      /* 固定オッズ方式のレースは、買ったときのオッズも記録する（精算はレースIDから計算し直した値で行う） */
-      const fixedTenths = isFixedOddsRace(raceId) ? getTicketOddsTenths(getRaceOddsTable(raceId), type, horses) : null;
-      transaction.set(betRef, {
-        raceId, uid: currentUser.uid, username, type, horses, amount,
-        settled: false, win: null, payout: null, createdAt: serverTimestamp(),
-        ...(fixedTenths !== null ? { oddsVersion: getRaceOddsTable(raceId).oddsVersion, oddsTenths: fixedTenths } : {})
-      });
-    });
-
-    try {
-      await placeBet(true);
-    } catch (error) {
-      if (error?.code !== "permission-denied") throw error;
-      console.warn("累計賭け金を記録できなかったため、従来の方法で投票します:", error);
-      await placeBet(false);
-    }
+    /* 馬券の購入は Worker に頼む（残高・締切・オッズ・手動レースの受付をサーバーで確かめる）。
+       コインの引き落とし・累計賭け金・馬券の作成（・手動レースの betCount）はサーバーが1回で行う */
+    await callEconomyApi("placeBet", { raceId, type, horses, amount });
 
     alert("投票しました！");
     resetBetHorsesSelection();
   } catch (error) {
-    console.error("投票エラー:", error);
-    if (error.message === "NOT_ENOUGH_COINS") alert("ゆうcoinが足りません。");
-    else if (error.message === "MANUAL_RACE_CANCELLED") alert("このレースはキャンセルされました。");
-    else if (error.message === "MANUAL_RACE_CLOSED") alert("このレースは投票受付時間外です。");
+    const code = error?.economyCode || error?.message;
+    console.error("投票エラー:", code, error);
+    if (code === "NOT_ENOUGH_COINS") alert("ゆうcoinが足りません。");
+    else if (code === "MANUAL_RACE_CANCELLED") alert("このレースはキャンセルされました。");
+    else if (code === "MANUAL_RACE_CLOSED" || code === "RACE_CLOSED") alert("このレースは投票を受け付けていません（締切・発走済みなど）。");
+    else if (code === "invalid_horses" || code === "invalid_bet_type" || code === "invalid_amount") alert("投票の内容が正しくありません。");
+    else if (code === "NETWORK") alert("サーバーに接続できませんでした。時間をおいてもう一度お試しください。");
     else alert("投票に失敗しました。");
   } finally {
     updateBetFormEnabled();
@@ -4560,64 +4493,29 @@ function showRaceHitAnimation(bet, payout) {
   }, 4500);
 }
 
-async function settleMyBets(raceId, resultOrder) {
+async function settleMyBets(raceId) {
   const session = appSessionSeq;
   if (!currentUser || !username) return;
 
+  /* 精算（結果の確認・払い戻しの計算・コインの加算）はすべて Worker に任せる（固定オッズも山分け方式も）。
+     ブラウザは払い戻し額を自分で決めない・馬券やコインを直接書き換えない。
+     結果を待っている自分の馬券があるときだけ頼む（毎回は呼ばない） */
   try {
-    const mySnap = await getDocs(query(
+    const pendingSnap = await getDocs(query(
       collection(db, "raceBets"),
       where("raceId", "==", raceId),
       where("uid", "==", currentUser.uid),
       where("settled", "==", false)
     ));
-    if (mySnap.empty) return;
-
-    for (const betDoc of mySnap.docs) {
-      /* 1枚の精算に失敗しても、残りの馬券の精算は続ける */
-      try {
-        const bet = betDoc.data();
-        /* 固定オッズ方式：floor(賭け金 × オッズ)。オッズはレースIDから計算し直す（馬券に記録された値は使わない）。
-           それ以前のレースは従来の山分け方式 */
-        const fixed = isFixedOddsRace(raceId);
-        const fixedResult = fixed ? computeFixedBetSettlement(bet, raceId, evaluateBetWin(bet, resultOrder)) : null;
-        const isWin = fixed ? fixedResult.isWin : evaluateBetWin(bet, resultOrder);
-        const payout = fixed ? fixedResult.payout : (isWin ? await computePoolPayout(raceId, bet, resultOrder) : 0);
-        let settledNow = false;
-
-        await runTransaction(db, async (transaction) => {
-          /* Firestore のトランザクションは「読み込みを全部終えてから書き込む」必要がある。
-             以前は払い戻しのときに書き込みの後で users を読んでいたため、
-             当たり馬券の精算が毎回失敗していた */
-          const betRef = doc(db, "raceBets", betDoc.id);
-          const userRef = doc(db, "users", username);
-          const freshBet = await transaction.get(betRef);
-          const userSnap = payout > 0 ? await transaction.get(userRef) : null;
-
-          settledNow = false;
-          if (!freshBet.exists() || freshBet.data().settled) return;
-
-          transaction.update(betRef, fixed
-            ? { settled: true, win: isWin, payout, payoutRule: FIXED_PAYOUT_RULE, settledOddsTenths: fixedResult.oddsTenths }
-            : { settled: true, win: isWin, payout });
-          if (payout > 0) {
-            const coins = userSnap?.exists() ? Number(userSnap.data().coins || 0) : 0;
-            transaction.update(userRef, { coins: coins + payout });
-          }
-          settledNow = true;
-        });
-
-        if (settledNow && isWin && payout > 0) showRaceHitAnimationWhenRevealed(raceId, bet, payout);
-      } catch (error) {
-        if (isInterruptedBySignOut(session)) return;
-        console.error(`[ベット精算エラー] raceId=${raceId} betId=${betDoc.id} code=${error?.code || "(なし)"} message=${error?.message || error}`, error);
-      }
-    }
-
+    if (pendingSnap.empty || session !== appSessionSeq) return;
+    const result = await callEconomyApi("settleMyBets", { raceId });
+    if (session !== appSessionSeq) return;
+    (result?.settled || []).forEach((b) => { if (b.win && b.payout > 0) showRaceHitAnimationWhenRevealed(raceId, b, b.payout); });
     loadMyPageStats();
   } catch (error) {
     if (isInterruptedBySignOut(session)) return;
-    console.error("ベット精算エラー:", error);
+    /* まだ結果が無い（no_result）などはよくあることなので、警告だけにとどめる */
+    console.warn("ベット精算（Worker）エラー:", error?.economyCode || error);
   }
 }
 
@@ -4657,7 +4555,7 @@ async function catchUpMissedRaces(attempt = 1) {
       }
 
       if (raceSnap.exists() && raceSnap.data().status === "finished") {
-        await settleMyBets(raceId, raceSnap.data().resultOrder);
+        await settleMyBets(raceId);
       }
     }
   } catch (error) {
@@ -5054,48 +4952,35 @@ function buildFinishStats(resultOrder) {
 /* 開催ログ（管理用）：raceLogs/{raceId}。一般の画面には表示しない（Firebase Console で確認する）。
    GitHub Actions の自動開催（derby-runner）も同じドキュメントに記録する */
 async function tryGenerateRaceResult(raceId) {
+  /* 固定オッズ方式のレースの結果は Worker（サーバー）が作る。ブラウザは結果を書き込まない。
+     発走時刻を過ぎていれば作り、まだ結果が無ければ作られる（二重には作らない） */
+  if (isFixedOddsRace(raceId)) {
+    try {
+      await callEconomyApi("ensureRaceResult", { raceId });
+    } catch (error) {
+      if (error?.economyCode !== "race_not_started") console.warn("レース結果の生成（Worker）エラー:", error?.economyCode || error);
+    }
+    return;
+  }
+
+  /* 以前の山分け方式のレース（FIXED_ODDS_FROM より前）は、これまで通り（この分は derby-runner も作る） */
   const raceRef = doc(db, "races", raceId);
   const logRef = doc(db, "raceLogs", raceId);
-
   try {
     await runTransaction(db, async (transaction) => {
       const snap = await transaction.get(raceRef);
       if (snap.exists()) return;
-
-      /* 固定オッズ方式のレースは「能力 × 当日の調子」の比で着順を決め、オッズの記録も残す（乱数は今ここで引く） */
-      const fixed = isFixedOddsRace(raceId);
-      const resultOrder = fixed ? generateFixedOddsRaceOrder(raceId) : generateWeightedRaceOrder();
-
+      const resultOrder = generateWeightedRaceOrder();
       transaction.set(raceRef, {
-        raceId,
-        resultOrder,
+        raceId, resultOrder,
         checkpoints: buildRaceCheckpoints(resultOrder),
         finishStats: buildFinishStats(resultOrder),
-        status: "finished",
-        generatedAt: serverTimestamp(),
-        generatedBy: "client",
-        ...(fixed ? buildRaceOddsRecord(raceId) : {})
+        status: "finished", generatedAt: serverTimestamp(), generatedBy: "client"
       });
-
-      transaction.set(logRef, {
-        raceId,
-        scheduledAt: parseRaceIdToDate(raceId),
-        resultGeneratedAt: serverTimestamp(),
-        resultGeneratedBy: "client",
-        resultStatus: "created"
-      }, { merge: true });
+      transaction.set(logRef, { raceId, scheduledAt: parseRaceIdToDate(raceId), resultGeneratedAt: serverTimestamp(), resultGeneratedBy: "client", resultStatus: "created" }, { merge: true });
     });
   } catch (error) {
     console.error(`[レース抽選エラー] raceId=${raceId} code=${error?.code || "(なし)"} message=${error?.message || error}`, error);
-    try {
-      await setDoc(logRef, {
-        raceId,
-        lastClientError: `${error?.code || ""} ${error?.message || error}`.trim().slice(0, 500),
-        lastClientErrorAt: serverTimestamp()
-      }, { merge: true });
-    } catch (logError) {
-      console.warn("開催ログの記録にも失敗:", logError);
-    }
   }
 }
 
@@ -5598,7 +5483,7 @@ function listenLiveRace(raceId) {
 
       if (snap.exists() && snap.data().status === "finished") {
         liveRaceResult = snap.data();
-        settleMyBets(raceId, liveRaceResult.resultOrder);
+        settleMyBets(raceId);
       } else {
         liveRaceResult = null;
       }
@@ -5726,21 +5611,6 @@ const ADMIN_UID = "g51wzTvJFsZiYEfre5aDuDckJXY2";
 
 function isAdminUser() {
   return Boolean(currentUser && currentUser.uid === ADMIN_UID);
-}
-
-/* 手動レースの投票数（betCount）は、
-   Firestore のルールで「読んだ値 + 1」になっているかを確かめている。
-   同時に何人かが書き込むと、古い値で計算した側は（競合なのに自動でやり直されず）permission-denied で拒否されるので、
-   そのときは少し待って最新の値で数回やり直す（拒否された書き込みは何も反映されていないので、二重にはならない） */
-async function runCountedTransaction(updateFunction, attempts = 8) {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      return await runTransaction(db, updateFunction);
-    } catch (error) {
-      if (error?.code !== "permission-denied" || attempt >= attempts) throw error;
-      await new Promise((resolve) => setTimeout(resolve, 100 * attempt + Math.random() * 300 * attempt));
-    }
-  }
 }
 
 function updateAdminVisibility() {
@@ -5918,6 +5788,7 @@ async function checkRenamedByAdmin() {
 ========================================================= */
 
 const ADMIN_ENDPOINT = NOTIFY_ENDPOINT.replace(/\/notify$/, "/admin");
+const ECONOMY_ENDPOINT = NOTIFY_ENDPOINT.replace(/\/notify$/, "/economy");
 const ADMIN_PASSWORD_MIN_LENGTH = 8;
 const ADMIN_PASSWORD_MAX_LENGTH = 128;
 
@@ -5981,6 +5852,26 @@ function describeAdminError(error) {
   if (code === "network") return "通知サーバー（Cloudflare Worker）に接続できませんでした。";
   if (code.startsWith("auth_")) return `Firebase Authentication でエラーになりました（${code.slice(5)}）。`;
   return `処理できませんでした（${code || "不明なエラー"}）。`;
+}
+
+/* 💰 ゆう経済・🏇 ゆうダービー：本人の操作を Worker（残高・締切・結果・払い戻しをサーバーで検証）に頼む。
+   ログインしていない・ネットワークエラーのときは code を付けた Error を投げる */
+async function callEconomyApi(action, payload = {}) {
+  if (!currentUser || !username) throw economyError("NOT_LOGGED_IN");
+  const token = await currentUser.getIdToken();
+  let response;
+  try {
+    response = await fetch(ECONOMY_ENDPOINT, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ action, username, ...payload })
+    });
+  } catch (error) {
+    throw economyError("NETWORK");
+  }
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok) { const e = economyError(json.error || `http_${response.status}`); e.detail = json; throw e; }
+  return json;
 }
 
 async function callAdminApi(action, payload = {}) {
@@ -9476,21 +9367,11 @@ async function grantLoginBonusIfNeeded(data) {
   loginBonusInFlight = true;
   const requestedFor = username;
   try {
-    let granted = false;
-    await runTransaction(db, async (transaction) => {
-      const userRef = doc(db, "users", requestedFor);
-      const snap = await transaction.get(userRef);
-      granted = false;
-      if (!snap.exists()) return;
-      const fresh = snap.data();
-      if (typeof fresh.coins !== "number" || fresh.lastLoginBonusDate === today) return;
-      transaction.update(userRef, { coins: fresh.coins + LOGIN_BONUS_COINS, lastLoginBonusDate: today });
-      granted = true;
-    });
+    const result = await callEconomyApi("loginBonus");
     if (requestedFor === username) loginBonusCheckedDate = today;
-    if (granted && requestedFor === username) showAppToast("🎁 ログインボーナス", `今日のログインボーナス +${LOGIN_BONUS_COINS}コイン`);
+    if (result?.granted && requestedFor === username) showAppToast("🎁 ログインボーナス", `今日のログインボーナス +${LOGIN_BONUS_COINS}コイン`);
   } catch (error) {
-    console.warn("ログインボーナスの付与に失敗:", error);
+    console.warn("ログインボーナスの付与に失敗:", error?.economyCode || error);
   } finally {
     loginBonusInFlight = false;
   }
@@ -9501,120 +9382,43 @@ function economyError(code) {
   return Object.assign(new Error(code), { economyCode: code });
 }
 
-async function runMyEconomyTransaction(work, { withMarket = false } = {}) {
-  if (!currentUser || !username) throw economyError("NOT_LOGGED_IN");
-  const userRef = doc(db, "users", username);
-  const marketRef = doc(db, "market", "current");
-  let marketData = null;
-  const outcome = await runTransaction(db, async (transaction) => {
-    const snap = await transaction.get(userRef);
-    const marketSnap = withMarket ? await transaction.get(marketRef) : null;
-    if (!snap.exists()) throw economyError("NO_USER");
-    marketData = marketSnap ? (marketSnap.exists() ? marketSnap.data() : createInitialMarketData()) : null;
-    const result = work(snap.data(), marketData);
-    transaction.update(userRef, result.fields);
-    return result;
-  });
-  /* 売買のときに読んだ株価は、そのまま画面の表示にも使う（読み直さない） */
-  if (marketData && (!marketCache || (marketData.date || "") >= (marketCache.data?.date || ""))) marketCache = { data: marketData, fetchedAt: Date.now() };
-  return outcome;
-}
-
 function parseEconomyAmount(value) {
   const n = Number(String(value ?? "").replace(/[,，\s]/g, ""));
   return Number.isInteger(n) && n > 0 ? n : null;
 }
 
 async function bankDeposit(amount) {
-  return runMyEconomyTransaction((data) => {
-    const bank = normalizeBankData(data.bank);
-    const coins = Number(data.coins) || 0;
-    if (bank.loan > 0) throw economyError("LOAN_ACTIVE");
-    if (coins < amount) throw economyError("NOT_ENOUGH_COINS");
-    return { fields: { coins: coins - amount, bank: { ...bank, deposit: bank.deposit + amount } } };
-  });
+  return callEconomyApi("bankDeposit", { amount });
 }
 
 async function bankWithdraw(amount) {
-  return runMyEconomyTransaction((data) => {
-    const bank = normalizeBankData(data.bank);
-    const coins = Number(data.coins) || 0;
-    if (bank.deposit < amount) throw economyError("NOT_ENOUGH_DEPOSIT");
-    const deposit = bank.deposit - amount;
-    return { fields: { coins: coins + amount, bank: { ...bank, deposit, interestBase: Math.min(bank.interestBase, deposit) } } };
-  });
+  return callEconomyApi("bankWithdraw", { amount });
 }
 
 async function bankBorrow() {
-  return runMyEconomyTransaction((data) => {
-    const bank = normalizeBankData(data.bank);
-    const coins = Number(data.coins) || 0;
-    if (bank.loan > 0) throw economyError("LOAN_ACTIVE");
-    if (coins > BANK_LOAN_MAX_COINS) throw economyError("TOO_MANY_COINS");
-    const now = derbyNow();
-    return {
-      fields: {
-        coins: coins + BANK_LOAN_AMOUNT,
-        bank: {
-          ...bank,
-          loan: BANK_LOAN_AMOUNT,
-          loanTakenAt: Timestamp.fromDate(now),
-          loanDueAt: Timestamp.fromDate(new Date(now.getTime() + BANK_LOAN_DAYS * 24 * 3600 * 1000)),
-          overdue: false,
-          overdueDate: null,
-          lastAutoRepay: null
-        }
-      }
-    };
-  });
+  return callEconomyApi("bankBorrow");
 }
 
 /* 返済は一括だけ（期限切れの自動返済で一部が返されていれば、残りの全額） */
 async function bankRepay() {
-  return runMyEconomyTransaction((data) => {
-    const bank = normalizeBankData(data.bank);
-    const coins = Number(data.coins) || 0;
-    if (bank.loan <= 0) throw economyError("NO_LOAN");
-    if (coins < bank.loan) throw economyError("NOT_ENOUGH_COINS");
-    return {
-      fields: {
-        coins: coins - bank.loan,
-        bank: { ...bank, loan: 0, loanTakenAt: null, loanDueAt: null, overdue: false, overdueDate: null, lastAutoRepay: null }
-      },
-      repaid: bank.loan
-    };
-  });
+  return callEconomyApi("bankRepay");
 }
 
 async function tradeStock(code, side, qty) {
   const company = STOCK_COMPANIES.find((c) => c.code === code);
   if (!company) throw economyError("NO_COMPANY");
-  return runMyEconomyTransaction((data, market) => {
-    const price = getStockPrice(market, code);
-    const coins = Number(data.coins) || 0;
-    const holding = normalizeStocksData(data.stocks)[code] || { qty: 0, cost: 0 };
-    const amount = price * qty;
-    let next;
-    let nextCoins;
-    if (side === "buy") {
-      if (coins < amount) throw economyError("NOT_ENOUGH_COINS");
-      next = { qty: holding.qty + qty, cost: holding.cost + amount };
-      nextCoins = coins - amount;
-    } else {
-      if (holding.qty < qty) throw economyError("NOT_ENOUGH_STOCK");
-      const costPart = Math.round(holding.cost * (qty / holding.qty));
-      next = { qty: holding.qty - qty, cost: holding.cost - costPart };
-      nextCoins = coins + amount;
-    }
-    return {
-      fields: { coins: nextCoins, [`stocks.${code}`]: next.qty > 0 ? next : deleteField() },
-      price, amount
-    };
-  }, { withMarket: true });
+  return callEconomyApi("stockTrade", { code, side, qty });
 }
 
 const ECONOMY_ERROR_MESSAGES = {
   NOT_ENOUGH_COINS: "手持ちのゆうcoinが足りません。",
+  NETWORK: "サーバーに接続できませんでした。時間をおいてもう一度お試しください。",
+  RACE_CLOSED: "このレースは投票を受け付けていません（締切・発走済みなど）。",
+  invalid_amount: "金額が正しくありません。",
+  invalid_qty: "株数が正しくありません。",
+  invalid_bet_type: "投票の種類が正しくありません。",
+  invalid_horses: "馬の選び方が正しくありません。",
+  busy: "ほかの操作と重なりました。もう一度お試しください。",
   NOT_ENOUGH_DEPOSIT: "預金が足りません。",
   NOT_ENOUGH_STOCK: "保有している株数が足りません。",
   LOAN_ACTIVE: "借入中は、預け入れ・新しい借入はできません。先に返済してください。",

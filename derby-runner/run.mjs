@@ -58,6 +58,46 @@ const TWICE_DAILY_FROM = "2026-10-07";
 /* 手動レース（特別レース）：raceId は「YYYY-MM-DD-mHHMM」。予定は derbyManualRaces/{raceId}（script.js と同じ） */
 const MANUAL_RACE_ID_PATTERN = /^\d{4}-\d{2}-\d{2}-m\d{4}$/;
 
+/* 締切は発走の10分前（script.js・worker.js と同じ） */
+const RACE_CLOSE_MINUTES_BEFORE = 10;
+
+/* 不正対策（worker.js と同じ）：
+   ・レース結果を作ってよいのはサーバー（この derby-runner と Worker）だけ。SERVER_RESULTS_FROM（レースIDの日付）以降のレースは、
+     サーバーが作ったものでない結果を使わず、作り直す（null のあいだは確かめない。Firestore Rules でブラウザからの書き込みを止めるときに日付を入れる）
+   ・馬券は、締切までにサーバーの時刻で作られ、中身（券種・馬・金額）が正しいものだけ払う。SERVER_RESULTS_FROM 以降は Worker で買われたもの（placedBy: "worker"）だけ */
+const SERVER_RESULTS_FROM = null;
+const SERVER_GENERATORS = ["github-actions", "worker"];
+const BET_COUNT = { win: 1, place: 1, quinella: 2, trio: 3, trifecta: 3 };
+const BET_MIN = 10;
+const BET_MAX = 100000000;
+
+export function isTrustedRaceResult(raceId, race, serverResultsFrom = SERVER_RESULTS_FROM) {
+  if (!race || !Array.isArray(race.resultOrder) || race.resultOrder.length !== 10) return false;
+  if (!serverResultsFrom || String(raceId).slice(0, 10) < serverResultsFrom) return true;
+  return SERVER_GENERATORS.includes(race.generatedBy);
+}
+
+function timeMillis(value) {
+  if (!value) return NaN;
+  if (typeof value.toMillis === "function") return value.toMillis();
+  if (value instanceof Date) return value.getTime();
+  return Date.parse(value);
+}
+
+export function betRejectReason(bet, closeTime, serverResultsFrom = SERVER_RESULTS_FROM) {
+  const horses = bet.horses;
+  const shapeOk = Object.prototype.hasOwnProperty.call(BET_COUNT, bet.type)
+    && Array.isArray(horses) && horses.length === BET_COUNT[bet.type]
+    && horses.every((h) => Number.isInteger(h) && h >= 1 && h <= 10) && new Set(horses).size === horses.length
+    && Number.isSafeInteger(bet.amount) && bet.amount >= BET_MIN && bet.amount <= BET_MAX;
+  if (!shapeOk) return "invalid_bet";
+  const created = timeMillis(bet.createdAt);
+  const close = timeMillis(closeTime);
+  if (!Number.isFinite(created) || !Number.isFinite(close) || created > close) return "after_close";
+  if (serverResultsFrom && String(bet.raceId).slice(0, 10) >= serverResultsFrom && bet.placedBy !== "worker") return "not_server_placed";
+  return null;
+}
+
 /* 開催時刻は日本時間。何日前までさかのぼって「作られていないレース・未精算の馬券」を処理するか */
 const JST_OFFSET_HOURS = 9;
 const LOOKBACK_DAYS = 7;
@@ -231,6 +271,7 @@ export function getRacesForJstDay(now, daysAgo) {
   const races = [];
   if (dayId >= TWICE_DAILY_FROM) races.push({ raceId: `${dayId}${MORNING_RACE_SUFFIX}`, raceTime: at(MORNING_RACE_HOUR, MORNING_RACE_MINUTE) });
   races.push({ raceId: dayId, raceTime: at(RACE_HOUR, RACE_MINUTE) });
+  races.forEach((race) => { race.closeTime = new Date(race.raceTime.getTime() - RACE_CLOSE_MINUTES_BEFORE * 60000); });
   return races;
 }
 
@@ -240,14 +281,14 @@ async function ensureRaceResult(db, raceId, raceTime) {
   const raceRef = db.collection("races").doc(raceId);
   let created = false;
 
-  /* すでに結果があれば、それを使う（読み取り1回。トランザクションと読み直しを省く） */
+  /* すでに（サーバーが作った）結果があれば、それを使う（読み取り1回。トランザクションと読み直しを省く） */
   const existing = await raceRef.get();
-  if (existing.exists) return { created, race: existing.data() };
+  if (existing.exists && isTrustedRaceResult(raceId, existing.data())) return { created, race: existing.data() };
 
   await db.runTransaction(async (transaction) => {
     const snap = await transaction.get(raceRef);
     created = false;
-    if (snap.exists) return;
+    if (snap.exists && isTrustedRaceResult(raceId, snap.data())) return;
 
     /* 固定オッズ方式のレースは「能力 × 当日の調子」の比で着順を決め、オッズの記録も残す（乱数は今ここで引く） */
     const fixed = isFixedOddsRace(raceId);
@@ -268,7 +309,7 @@ async function ensureRaceResult(db, raceId, raceTime) {
       resultGeneratedAt: FieldValue.serverTimestamp(),
       resultGeneratedBy: "github-actions",
       resultGeneratedDelaySeconds: Math.round((Date.now() - raceTime.getTime()) / 1000),
-      resultStatus: "created"
+      resultStatus: snap.exists ? "regenerated" : "created"
     }, { merge: true });
     created = true;
   });
@@ -277,7 +318,7 @@ async function ensureRaceResult(db, raceId, raceTime) {
   return { created, race: snap.data() };
 }
 
-async function settleRaceBets(db, raceId, resultOrder) {
+async function settleRaceBets(db, raceId, resultOrder, closeTime) {
   /* 未精算の馬券が無いレースは、そのレースの馬券を読まない（読み取り1回で終わる）。
      山分け方式のレースは、払い戻しの計算にそのレースの全馬券（賭け金の合計）が要るので、未精算があるときだけ全部読む。
      固定オッズ方式のレースは floor(賭け金 × オッズ) なので、未精算の馬券だけを読む（馬券の数は集計クエリで数える） */
@@ -289,7 +330,13 @@ async function settleRaceBets(db, raceId, resultOrder) {
   if (fixed) {
     betsToSettle = unsettledSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
     payouts = {};
-    for (const bet of betsToSettle) payouts[bet.id] = computeFixedBetSettlement(bet, raceId, evaluateBetWin(bet, resultOrder));
+    for (const bet of betsToSettle) {
+      /* 締切後に作られた・中身が正しくない馬券は払わない（外れとして精算し、理由を残す） */
+      const reject = betRejectReason(bet, closeTime);
+      payouts[bet.id] = reject
+        ? { isWin: false, payout: 0, oddsTenths: computeFixedBetSettlement(bet, raceId, false).oddsTenths, rejectedReason: reject }
+        : computeFixedBetSettlement(bet, raceId, evaluateBetWin(bet, resultOrder));
+    }
     betsTotal = (await db.collection("raceBets").where("raceId", "==", raceId).count().get()).data().count;
   } else {
     const betsSnap = await db.collection("raceBets").where("raceId", "==", raceId).get();
@@ -302,7 +349,7 @@ async function settleRaceBets(db, raceId, resultOrder) {
   const result = { betsTotal, settledNow: 0, payoutTotal: 0, errors: [] };
 
   for (const bet of betsToSettle) {
-    const { isWin, payout, oddsTenths } = payouts[bet.id];
+    const { isWin, payout, oddsTenths, rejectedReason } = payouts[bet.id];
     try {
       let settledNow = false;
       await db.runTransaction(async (transaction) => {
@@ -318,7 +365,7 @@ async function settleRaceBets(db, raceId, resultOrder) {
         if (payout > 0 && (!userQuery || userQuery.empty)) throw new Error(`USER_NOT_FOUND uid=${bet.uid}`);
 
         transaction.update(betRef, fixed
-          ? { settled: true, win: isWin, payout, settledBy: "github-actions", payoutRule: FIXED_PAYOUT_RULE, settledOddsTenths: oddsTenths }
+          ? { settled: true, win: isWin, payout, settledBy: "github-actions", payoutRule: FIXED_PAYOUT_RULE, settledOddsTenths: oddsTenths, ...(rejectedReason ? { rejectedReason } : {}) }
           : { settled: true, win: isWin, payout, settledBy: "github-actions" });
         if (payout > 0) transaction.update(userQuery.docs[0].ref, { coins: FieldValue.increment(payout) });
         settledNow = true;
@@ -343,7 +390,7 @@ export async function getDueManualRaces(db, now, lookbackDays = LOOKBACK_DAYS) {
   const snap = await db.collection("derbyManualRaces").where("raceAt", ">=", Timestamp.fromDate(since)).get();
   return snap.docs
     .filter((d) => MANUAL_RACE_ID_PATTERN.test(d.id) && d.data().status !== "cancelled" && d.data().raceAt)
-    .map((d) => ({ raceId: d.id, raceTime: d.data().raceAt.toDate() }))
+    .map((d) => ({ raceId: d.id, raceTime: d.data().raceAt.toDate(), closeTime: d.data().closeAt?.toDate?.() || null }))
     .filter((race) => race.raceTime <= now);
 }
 
@@ -361,7 +408,7 @@ export async function runDerby({ db, now = new Date(), lookbackDays = LOOKBACK_D
   races.push(...await getDueManualRaces(db, now, lookbackDays));
   races.sort((a, b) => a.raceTime - b.raceTime);
 
-  for (const { raceId, raceTime } of races) {
+  for (const { raceId, raceTime, closeTime } of races) {
     const logRef = db.collection("raceLogs").doc(raceId);
     const entry = { raceId, status: "ok" };
 
@@ -369,7 +416,7 @@ export async function runDerby({ db, now = new Date(), lookbackDays = LOOKBACK_D
       const { created, race } = await ensureRaceResult(db, raceId, raceTime);
       entry.result = created ? "created" : `exists(${race.generatedBy || "client"})`;
 
-      const settle = await settleRaceBets(db, raceId, race.resultOrder);
+      const settle = await settleRaceBets(db, raceId, race.resultOrder, closeTime);
       Object.assign(entry, settle);
       if (settle.errors.length) entry.status = "error";
 

@@ -8,7 +8,8 @@
     "node": ">=20"
   },
   "scripts": {
-    "start": "node run.mjs"
+    "start": "node run.mjs",
+    "test": "node --test \"*.test.mjs\""
   },
   "dependencies": {
     "firebase-admin": "^14.5.0"
