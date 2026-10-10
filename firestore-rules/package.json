@@ -7,7 +7,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "firebase emulators:exec --only firestore --project demo-yuuchat-rules \"node rules.test.cjs && node concurrency.test.cjs\"",
+    "test": "firebase emulators:exec --only firestore --project demo-yuuchat-rules \"node rules.test.cjs && node concurrency.test.cjs && node security-stage1.test.cjs\"",
     "check": "node prod-rules.mjs check",
     "deploy": "node prod-rules.mjs deploy",
     "verify": "node verify-production.mjs"
