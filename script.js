@@ -5937,6 +5937,8 @@ let userManageBusy = false;
 let userManageSeq = 0;
 
 const ADMIN_COIN_ADJUST_MAX = 1000000;
+/* 総資産の増減（Worker の ADMIN_ASSET_ADJUST_MAX と同じ） */
+const ADMIN_ASSET_ADJUST_MAX = 10000000;
 
 const ADMIN_ERROR_MESSAGES = {
   invalid_amount: `金額は1〜${ADMIN_COIN_ADJUST_MAX.toLocaleString()}の整数で入力してください。`,
@@ -5945,6 +5947,8 @@ const ADMIN_ERROR_MESSAGES = {
   balance_too_large: "残高が大きくなりすぎるため、増やせません。",
   invalid_balance: "このユーザーのコインの値が正しくないため、変更できません。",
   busy: "ほかの操作と重なったため変更できませんでした。もう一度お試しください。",
+  insufficient_assets: "回収できる資産（預金＋保有株）を超えるか、総資産がマイナスになるため、減らせません。",
+  assets_changed: "表示したあとに預金・株・株価が変わっていました。最新の内訳を表示し直したので、もう一度操作してください。",
   not_admin: "管理者としてログインしていないため、操作できません。",
   invalid_uid: "対象のユーザーが正しくありません。",
   invalid_password: `パスワードは${ADMIN_PASSWORD_MIN_LENGTH}文字以上${ADMIN_PASSWORD_MAX_LENGTH}文字以内にしてください。`,
@@ -6208,10 +6212,25 @@ function renderUserManageDetail(info) {
       <p id="umCoinError" class="admin-form-error"></p>
     </section>` : "";
 
+  /* 総資産の増減（内訳は開いたときに Worker から読む） */
+  const assetHtml = hasUserDoc && info.user && !deleting ? `
+    <section class="um-coins um-assets" aria-label="総資産の増減" data-um-assets-uid="${escapeHTML(info.uid)}">
+      <div class="um-coins-balance">総資産 <b id="umAssetTotal">…</b></div>
+      <div id="umAssetBreakdown" class="um-assets-breakdown">内訳を読み込み中…</div>
+      <div class="um-coins-row">
+        <input id="umAssetAmount" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="8" placeholder="金額" aria-label="総資産を増減する金額" autocomplete="off">
+        <button type="button" data-um-asset="increase">＋増やす</button>
+        <button type="button" class="secondary" data-um-asset="decrease">−減らす（回収）</button>
+      </div>
+      <p class="um-note">増やす：銀行預金に足します。減らす：預金から先に減らし、足りない分は保有株を評価額の高い銘柄から回収します（代金は戻しません）。手持ちコインは上の「ゆうコイン」で別に変更してください。</p>
+      <p id="umAssetError" class="admin-form-error"></p>
+    </section>` : "";
+
   openUserManageModal(`
     <h3>👤 ${escapeHTML(info.name || "ログイン情報だけのアカウント")}</h3>
     <dl class="um-detail">${rows.map(([k, v]) => `<dt>${escapeHTML(k)}</dt><dd>${escapeHTML(v)}</dd>`).join("")}</dl>
     ${coinHtml}
+    ${assetHtml}
     ${info.isAdmin ? `<p class="um-note">管理者のアカウントは停止・削除できません。</p>` : `<p class="um-note">サブアカウントかどうか確信がないときは、まず「停止」を使ってください（あとで解除できます）。完全削除は取り消せません。</p>`}
     <div class="um-actions">${buttons.join("")}</div>
     <div class="modal-buttons"><button class="modal-secondary" type="button" data-um-close>閉じる</button></div>
@@ -6222,6 +6241,145 @@ function renderUserManageDetail(info) {
   modalEl.querySelector('[data-um-action="delete"]')?.addEventListener("click", () => renderUserManageDelete(info));
   modalEl.querySelector('[data-um-action="deleteAuthOnly"]')?.addEventListener("click", () => renderUserManageDeleteAuthOnly(info));
   modalEl.querySelectorAll("[data-um-coin]").forEach((button) => button.addEventListener("click", () => runUserManageAdjustCoins(info, button.dataset.umCoin)));
+  modalEl.querySelectorAll("[data-um-asset]").forEach((button) => button.addEventListener("click", () => previewUserManageAssets(info, button.dataset.umAsset)));
+  if (assetHtml) loadUserManageAssets(info);
+}
+
+/* ----- 総資産（手持ちコイン + 預金 + 保有株の評価額 − 借入）の内訳・増減 -----
+   内訳と「何がどれだけ減るか」は Worker（previewAssets）が計算したものをそのまま表示し、確認のあと adjustAssets で実行する */
+function umStockLabel(code) {
+  const company = STOCK_COMPANIES.find((c) => c.code === code);
+  return company ? `${company.emoji} ${company.name}（${code}）` : code;
+}
+
+function umAssetBreakdownHtml(b) {
+  const stocks = (b.stocks || []).map((s) => `<li>${escapeHTML(umStockLabel(s.code))}：${s.qty.toLocaleString()}株 × ${formatCoins(s.price)} = ${formatCoins(s.value)}</li>`).join("");
+  return `
+    <dl class="um-assets-list">
+      <dt>手持ちコイン</dt><dd>🪙 ${formatCoins(b.coins)}</dd>
+      <dt>銀行預金</dt><dd>🏦 ${formatCoins(b.deposit)}</dd>
+      <dt>保有株の評価額</dt><dd>📈 ${formatCoins(b.stockValue)}</dd>
+      <dt>借入残高</dt><dd>− ${formatCoins(b.loan)}</dd>
+    </dl>
+    ${stocks ? `<ul class="um-assets-stocks">${stocks}</ul>` : `<p class="um-assets-none">保有株はありません</p>`}`;
+}
+
+function isUserManageAssetsShown(info) {
+  return Boolean(modalEl?.querySelector(`[data-um-assets-uid="${CSS.escape(info.uid)}"]`));
+}
+
+async function loadUserManageAssets(info, notice = "") {
+  try {
+    const result = await callAdminApi("previewAssets", { uid: info.uid });
+    if (!isUserManageAssetsShown(info)) return;
+    document.getElementById("umAssetTotal").textContent = `💰 ${formatCoins(result.breakdown.total)}`;
+    document.getElementById("umAssetBreakdown").innerHTML = umAssetBreakdownHtml(result.breakdown);
+    if (notice) showError(document.getElementById("umAssetError"), notice);
+  } catch (error) {
+    if (!isUserManageAssetsShown(info)) return;
+    console.error("総資産の内訳の読み込みエラー:", error.code || error.message);
+    document.getElementById("umAssetBreakdown").textContent = "内訳を読み込めませんでした。";
+    showError(document.getElementById("umAssetError"), describeAdminError(error));
+  }
+}
+
+function describeAssetError(error) {
+  if (error?.code === "insufficient_assets" && Number.isSafeInteger(error.detail?.max)) {
+    return `${ADMIN_ERROR_MESSAGES.insufficient_assets}（今回収できるのは最大 ${formatCoins(error.detail.max)}）`;
+  }
+  return describeAdminError(error);
+}
+
+/* 金額を確かめ、Worker に「何がどれだけ変わるか」を計算してもらい、確認の画面を出す */
+async function previewUserManageAssets(info, direction) {
+  if (userManageBusy) return;
+  const input = document.getElementById("umAssetAmount");
+  const errorEl = document.getElementById("umAssetError");
+  showError(errorEl, "");
+  const text = (input?.value || "").trim();
+  const amount = /^[0-9]{1,8}$/.test(text) ? Number(text) : NaN;
+  if (!Number.isSafeInteger(amount) || amount < 1 || amount > ADMIN_ASSET_ADJUST_MAX) {
+    return showError(errorEl, `金額は1〜${ADMIN_ASSET_ADJUST_MAX.toLocaleString()}の整数で入力してください。`);
+  }
+  userManageBusy = true;
+  modalEl.querySelectorAll("[data-um-asset]").forEach((b) => { b.disabled = true; });
+  try {
+    const result = await callAdminApi("previewAssets", { uid: info.uid, direction, amount });
+    userManageBusy = false;
+    renderUserManageAssetConfirm(info, result);
+  } catch (error) {
+    userManageBusy = false;
+    console.error("総資産の増減の確認エラー:", error.code || error.message);
+    if (!isUserManageAssetsShown(info)) return;
+    showError(errorEl, describeAssetError(error));
+    modalEl.querySelectorAll("[data-um-asset]").forEach((b) => { b.disabled = false; });
+  }
+}
+
+function renderUserManageAssetConfirm(info, preview) {
+  const { breakdown: b, plan } = preview;
+  const increase = plan.direction === "increase";
+  const changes = increase
+    ? [`銀行預金 +${formatCoins(plan.amount)}（${formatCoins(b.deposit)} → ${formatCoins(plan.depositAfter)}）`]
+    : [
+      ...(plan.fromDeposit > 0 ? [`銀行預金から ${formatCoins(plan.fromDeposit)} を回収`] : []),
+      ...plan.removed.map((r) => `${umStockLabel(r.code)}：${r.qty.toLocaleString()}株を回収（${r.qtyBefore.toLocaleString()} → ${r.qtyAfter.toLocaleString()}株・1株 ${formatCoins(r.price)}・評価額 ${formatCoins(r.value)}）`),
+      ...(plan.change > 0 ? [`株の端数の調整：${formatCoins(plan.change)} を銀行預金に戻す`] : []),
+      `銀行預金：${formatCoins(b.deposit)} → ${formatCoins(plan.depositAfter)}`
+    ];
+  openUserManageModal(`
+    <h3>💰 総資産を${increase ? "増やす" : "減らす（回収）"}（${escapeHTML(preview.name)}）</h3>
+    <p class="um-note">対象：${escapeHTML(preview.name)}（uid ${escapeHTML(info.uid)}）</p>
+    <div class="um-coins um-assets">
+      <div class="um-coins-balance">今の総資産 <b>💰 ${formatCoins(b.total)}</b></div>
+      ${umAssetBreakdownHtml(b)}
+    </div>
+    <div class="um-assets-plan">
+      <div class="um-assets-plan-title">変更する内容</div>
+      <ul>${changes.map((c) => `<li>${escapeHTML(c)}</li>`).join("")}</ul>
+      <div class="um-assets-total-change">総資産：${formatCoins(b.total)} → <b id="umAssetAfter">${formatCoins(plan.totalAfter)}</b>（${increase ? "+" : "−"}${formatCoins(plan.amount)}）</div>
+      <p class="um-note">手持ちコイン・借入は変わりません。${increase ? "" : "回収した株の代金はコインにも預金にも戻しません。"}総資産ランキングのこのユーザーの行と順位も、すぐに更新します。</p>
+    </div>
+    <p id="umAssetConfirmError" class="admin-form-error"></p>
+    <div class="modal-buttons">
+      <button class="modal-secondary" type="button" data-um-asset-back>戻る</button>
+      <button id="umAssetSubmit" class="modal-primary ${increase ? "" : "modal-danger"}" type="button">実行する</button>
+    </div>
+  `);
+  modalEl.querySelector("[data-um-asset-back]").addEventListener("click", () => renderUserManageDetail(info));
+  document.getElementById("umAssetSubmit").addEventListener("click", () => runUserManageAdjustAssets(info, preview));
+}
+
+async function runUserManageAdjustAssets(info, preview) {
+  if (userManageBusy) return;
+  const { breakdown: b, plan } = preview;
+  const submit = document.getElementById("umAssetSubmit");
+  const errorEl = document.getElementById("umAssetConfirmError");
+  userManageBusy = true;
+  if (submit) submit.disabled = true;
+  try {
+    const expected = { deposit: b.deposit, stocks: Object.fromEntries((b.stocks || []).map((s) => [s.code, s.qty])), prices: b.prices };
+    const result = await callAdminApi("adjustAssets", { uid: info.uid, direction: plan.direction, amount: plan.amount, expected });
+    userManageBusy = false;
+    info.user = { ...info.user, coins: result.breakdown.coins };
+    const rankNote = result.ranking ? `・ランキング ${result.ranking.rankBefore ?? "-"}位 → ${result.ranking.rankAfter}位` : "";
+    showAppToast("👤 ユーザー管理", `${result.name}の総資産を${formatCoins(result.amount)}${result.direction === "increase" ? "増やしました" : "減らしました"}（${formatCoins(result.beforeTotal)} → ${formatCoins(result.afterTotal)}${rankNote}）`);
+    rankingCache = null;
+    renderUserManageDetail(info);
+  } catch (error) {
+    userManageBusy = false;
+    console.error("総資産の増減エラー:", error.code || error.message);
+    if (error.code === "assets_changed" || error.code === "insufficient_assets") {
+      renderUserManageDetail(info);
+      const message = describeAssetError(error);
+      setTimeout(() => { const el = document.getElementById("umAssetError"); if (el) showError(el, message); }, 0);
+      return;
+    }
+    showError(errorEl, describeAdminError(error));
+    if (submit) submit.disabled = false;
+  } finally {
+    userManageBusy = false;
+  }
 }
 
 /* ゆうコインを増やす・減らす（確認のあと Worker に頼む。残高の計算・確認は Worker でも必ず行う） */
