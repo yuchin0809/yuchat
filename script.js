@@ -5613,21 +5613,6 @@ function isAdminUser() {
   return Boolean(currentUser && currentUser.uid === ADMIN_UID);
 }
 
-/* 手動レースの投票数（betCount）は、
-   Firestore のルールで「読んだ値 + 1」になっているかを確かめている。
-   同時に何人かが書き込むと、古い値で計算した側は（競合なのに自動でやり直されず）permission-denied で拒否されるので、
-   そのときは少し待って最新の値で数回やり直す（拒否された書き込みは何も反映されていないので、二重にはならない） */
-async function runCountedTransaction(updateFunction, attempts = 8) {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      return await runTransaction(db, updateFunction);
-    } catch (error) {
-      if (error?.code !== "permission-denied" || attempt >= attempts) throw error;
-      await new Promise((resolve) => setTimeout(resolve, 100 * attempt + Math.random() * 300 * attempt));
-    }
-  }
-}
-
 function updateAdminVisibility() {
   const admin = isAdminUser();
   document.getElementById("derbyAdminPanel")?.classList.toggle("hidden", !admin);
