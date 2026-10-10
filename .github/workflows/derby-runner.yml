@@ -18,6 +18,11 @@
 name: ゆうダービー自動開催
 
 on:
+  pull_request:
+    paths:
+      - "derby-runner/**"
+      - "derby-odds.js"
+      - ".github/workflows/derby-runner.yml"
   schedule:
     - cron: "41 1 * * *"   # 10:41 JST 起動 → 11:30 まで待って開催
     - cron: "5 2 * * *"    # 11:05 JST 起動 → 11:30 まで待って開催（上の実行が遅れた・失敗したときの保険）
@@ -35,7 +40,23 @@ permissions:
   contents: read
 
 jobs:
+  # プルリクエストでは、締切後・不正な馬券を払わない／サーバー以外のレース結果を信用しない、の検証テストだけ実行する（鍵は不要）
+  test:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: derby-runner
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --test "*.test.mjs"
+
   run:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     defaults:
