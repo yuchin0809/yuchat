@@ -1,15 +1,9 @@
-// 同時に投票しても、ルールに拒否されずに投票数が正しくなることを確かめる（Firestore Emulator で実行）
-// アプリと同じやり直し処理（script.js の runCountedTransaction）をそのまま取り出して使う
-const { initializeTestEnvironment } = require("@firebase/rules-unit-testing");
+// ロックダウン後：ブラウザから直接、同時に投票（betCount の加算・コイン引き落とし・馬券の作成）しても、すべて拒否されることを確かめる
+// （正規の投票は通知 Worker が行う。Worker 側の同時投票は notify-worker/test/economy.test.mjs で確認している）
+const { initializeTestEnvironment, assertFails } = require("@firebase/rules-unit-testing");
 const fs = require("fs");
 const path = require("path");
 const { doc, getDoc, setDoc, collection, runTransaction } = require("firebase/firestore");
-
-const src = fs.readFileSync(path.join(__dirname, "..", "script.js"), "utf8");
-const start = src.indexOf("async function runCountedTransaction(");
-if (start < 0) throw new Error("script.js に runCountedTransaction が見つかりません");
-const fnSrc = src.slice(start, src.indexOf("\n}\n", start) + 2);
-const makeCounted = (db) => new Function("runTransaction", "db", `${fnSrc}; return runCountedTransaction;`)(runTransaction, db);
 const min = (m) => new Date(Date.now() + m * 60000);
 
 (async () => {
@@ -24,7 +18,8 @@ const min = (m) => new Date(Date.now() + m * 60000);
   });
   const dbs = [0, 1, 2, 3, 4, 5].map((i) => env.authenticatedContext(`u${i}`).firestore());
 
-  const bet = (db, uid) => makeCounted(db)(async (t) => {
+  // アプリと同じ形（betCount+1・コイン引き落とし・馬券作成）をブラウザから直接やろうとする
+  const bet = (db, uid) => runTransaction(db, async (t) => {
     const m = doc(db, "derbyManualRaces/2030-01-01-m1300"), u = doc(db, `users/${uid}`);
     const ms = await t.get(m); const us = await t.get(u);
     t.update(m, { betCount: ms.data().betCount + 1 });
@@ -32,20 +27,19 @@ const min = (m) => new Date(Date.now() + m * 60000);
     t.set(doc(collection(db, "raceBets")), { raceId: "2030-01-01-m1300", uid, amount: 10 });
   });
 
-  // 6人が同時に投票
-  const bets = await Promise.allSettled(dbs.map((db, i) => bet(db, `u${i}`)));
+  // 6人が同時に投票 → すべて拒否される
+  let denied = 0;
+  await Promise.all(dbs.map(async (db, i) => { try { await assertFails(bet(db, `u${i}`)); denied++; } catch (e) {} }));
 
-  let mr;
+  let mr, u0;
   await env.withSecurityRulesDisabled(async (ctx) => {
     const d = ctx.firestore();
     mr = (await getDoc(doc(d, "derbyManualRaces/2030-01-01-m1300"))).data();
+    u0 = (await getDoc(doc(d, "users/u0"))).data();
   });
-  const label = (r) => (r.status === "fulfilled" ? "ok" : r.reason.code || r.reason.message);
-  console.log("同時投票 6人:", bets.map(label).join(","), `→ betCount ${mr.betCount}`);
-
-  // ルールに拒否された人がいないこと・投票数が合っていることを確かめる
-  const ok = bets.every((r) => r.status === "fulfilled") && mr.betCount === 6;
-  console.log(ok ? "同時実行テスト PASS" : "同時実行テスト FAIL");
+  console.log(`同時投票（ブラウザから直接）6人: 拒否 ${denied}/6 → betCount ${mr.betCount}・u0 coins ${u0.coins}`);
+  const ok = denied === 6 && mr.betCount === 0 && u0.coins === 1000;
+  console.log(ok ? "同時実行テスト PASS（ブラウザからの直接投票はすべて拒否）" : "同時実行テスト FAIL");
   await env.cleanup();
   process.exit(ok ? 0 : 1);
 })().catch((e) => { console.error(e); process.exit(1); });

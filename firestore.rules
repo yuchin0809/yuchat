@@ -42,7 +42,7 @@ service cloud.firestore {
     //   users：自分のデータだけ（管理者による名前の強制変更を除く）／adminNameChanges：管理者の名前変更の記録
     //   raceBets：固定オッズ方式のレースの精算の条件／friends：友達関係の解除（削除）は当事者だけ
     function hasDedicatedWriteRules(collection) {
-      return collection in ['users', 'adminNameChanges', 'raceBets', 'friends'];
+      return collection in ['users', 'adminNameChanges', 'friends'];
     }
 
     // 下のコレクションは管理者だけが読める
@@ -57,7 +57,9 @@ service cloud.firestore {
     //   notificationLogs は通知の二重送信防止の記録。Worker（と同じ処理を使う GitHub Actions）だけが書く
     //   （ブラウザから先に作られると、ゆうダービーやお知らせの通知が止められてしまうため）
     function isServerOnlyCollection(collection) {
-      return collection in ['market', 'rankings', 'adminAuditLogs', 'userDeletions', 'suspendedUsers', 'notificationLogs'];
+      return collection in ['market', 'rankings', 'adminAuditLogs', 'userDeletions', 'suspendedUsers', 'notificationLogs',
+        // レース結果・開催ログ・馬券は、サーバー（通知 Worker・GitHub Actions の derby-runner）だけが書く。ブラウザからは読み取りだけ
+        'races', 'raceLogs', 'raceBets'];
     }
 
     // ===== もとのルール（管理者用・自動処理用・廃止したコレクション以外は今まで通り） =====
@@ -74,40 +76,15 @@ service cloud.firestore {
     match /derbyManualRaces/{raceId} {
       allow read: if signedIn();
       allow create, delete: if isAdmin();
-      allow update: if isAdmin() || isBetCountIncrement();
-
-      function isBetCountIncrement() {
-        return signedIn()
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['betCount'])
-          && request.resource.data.betCount == resource.data.get('betCount', 0) + 1
-          && resource.data.get('status', 'scheduled') == 'scheduled'
-          && request.time >= resource.data.openAt
-          && request.time < resource.data.closeAt;
-      }
+      // 投票数（betCount）の加算は通知 Worker（サービスアカウント）が行う。ブラウザからは作成・キャンセル・削除は管理者だけ、更新はできない
+      allow update: if isAdmin();
     }
 
     // ===== ゆうダービーの馬券（raceBets/{betId}） =====
-    // 今まで通り：ログイン済みなら読み取り・購入（作成）・削除・精算以外の更新ができる
-    // 精算（settled を true にする更新）だけ条件を付ける：
-    //   ・自分の馬券だけ（他人の馬券は精算できない。自動精算の derby-runner はサービスアカウントなので対象外）
-    //   ・固定オッズ方式のレース（レースIDの日付が derby-odds.js の FIXED_ODDS_FROM 以降）は、
-    //     固定オッズで計算した精算（payoutRule == 'fixed-v1'）だけ。古い版のアプリの山分け方式の精算は拒否する
+    // 購入・精算は通知 Worker（サービスアカウント）が行う（残高・締切・オッズ・払い戻し額をサーバーで確かめる）。
+    // ブラウザからは読み取りだけ（購入・改変・削除・精算はできない。isServerOnlyCollection に含めてある）。
     match /raceBets/{betId} {
-      allow read, create, delete: if signedIn();
-      allow update: if signedIn() && (!isSettlingBet() || isAllowedBetSettlement());
-
-      function isSettlingBet() {
-        return request.resource.data.get('settled', false) == true && resource.data.get('settled', false) != true;
-      }
-
-      function isFixedOddsRaceId(raceId) {
-        return raceId is string && raceId >= '2026-10-09';
-      }
-
-      function isAllowedBetSettlement() {
-        return resource.data.get('uid', '') == request.auth.uid
-          && (!isFixedOddsRaceId(resource.data.get('raceId', '')) || request.resource.data.get('payoutRule', '') == 'fixed-v1');
-      }
+      allow read: if signedIn();
     }
 
     // ===== お知らせ（announcements/{announcementId}） =====
@@ -148,12 +125,29 @@ service cloud.firestore {
     //   同時に古い名前のドキュメントを消し、adminNameChanges に記録する場合に限る（コインなど他の項目は変えられない）
     match /users/{userName} {
       allow read: if signedIn();
-      allow create: if signedIn() && (request.resource.data.get('uid', '') == request.auth.uid || isAdminRenameCreate());
-      allow update: if signedIn() && isOwnUserDoc() && request.resource.data.get('uid', '') == request.auth.uid;
+      // 作成：自分の uid のデータだけ（管理者の名前強制変更を除く）。経済項目（コイン・銀行・株など）はブラウザから入れられない
+      //   （初期コインは Worker が付ける。経済項目を入れた新規作成は拒否する）
+      allow create: if signedIn()
+        && ((request.resource.data.get('uid', '') == request.auth.uid && !hasEconomyFields(request.resource.data)) || isAdminRenameCreate());
+      // 更新：自分のデータだけ。経済項目は1つも変えられない（コイン・銀行・株・累計賭け金・ボーナス・ログインボーナスは Worker だけが変える）
+      allow update: if signedIn() && isOwnUserDoc() && request.resource.data.get('uid', '') == request.auth.uid
+        && !economyFieldsChanged();
+      // 削除：自分のデータだけ（名前変更の引き継ぎは Worker が消す。管理者の名前強制変更は別の条件）
       allow delete: if signedIn() && (isOwnUserDoc() || isAdminRenameDelete());
 
       function isOwnUserDoc() {
         return resource.data.get('uid', '') == request.auth.uid;
+      }
+
+      // 経済項目（お金に関わる項目）。ブラウザからは作成・変更できない
+      function economyFields() {
+        return ['coins', 'bank', 'stocks', 'totalBetAmount', 'bonus500Granted', 'bonus500GrantedAt', 'lastLoginBonusDate'];
+      }
+      function hasEconomyFields(data) {
+        return data.keys().hasAny(economyFields());
+      }
+      function economyFieldsChanged() {
+        return request.resource.data.diff(resource.data).affectedKeys().hasAny(economyFields());
       }
 
       function userPath(name) {
