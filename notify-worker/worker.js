@@ -16,7 +16,7 @@
 
    管理者専用（👤 ユーザー管理）：
      POST /admin    Authorization: Bearer <管理者の ID トークン>
-                    { "action": "listUsers" | "inspectUser" | "setPassword" | "suspend" | "unsuspend" | "deleteUser" | "deleteAuthOnly" | "adjustCoins" | "notifyAnnouncement", ... }
+                    { "action": "listUsers" | "inspectUser" | "setPassword" | "suspend" | "unsuspend" | "deleteUser" | "deleteAuthOnly" | "adjustCoins" | "previewAssets" | "adjustAssets" | "notifyAnnouncement", ... }
    ID トークンの uid が ADMIN_UID のときだけ実行する（それ以外は 403）。パスワードはどこにも保存・記録しない。
 
    全員への通知（通知を ON にした全端末 = fcmTokens）：
@@ -457,6 +457,8 @@ export async function handleAdminAction(deps, callerUid, body) {
       case "deleteUser": return await adminDeleteUser(deps, callerUid, uid, body.confirmName);
       case "deleteAuthOnly": return await adminDeleteAuthOnly(deps, callerUid, uid);
       case "adjustCoins": return await adminAdjustCoins(deps, callerUid, uid, body);
+      case "previewAssets": return await adminPreviewAssets(deps, uid, body);
+      case "adjustAssets": return await adminAdjustAssets(deps, callerUid, uid, body);
       case "notifyAnnouncement": return await adminNotifyAnnouncement(deps, body);
       default: return { status: 400, error: "unknown_action" };
     }
@@ -965,6 +967,252 @@ async function adminAdjustCoins(deps, callerUid, uid, body) {
       return { ok: true, name, direction, amount, beforeCoins: before, afterCoins: after };
     } catch (error) {
       /* 読んだあとに users が変わっていた（条件が合わない）・ほかの書き込みと重なったときは、少し待ってから読み直す */
+      const retryable = [400, 409].includes(error?.status) && /FAILED_PRECONDITION|ABORTED|does not match|contention|ALREADY_EXISTS/i.test(String(error.message));
+      if (!retryable) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 20 + Math.random() * 60 * attempt));
+    }
+  }
+  return { status: 409, error: "busy" };
+}
+
+/* ----- 総資産の増減（管理者。不正に増やされたコインが預金・株に移されていても回収できるようにする） -----
+   総資産 = 手持ちコイン + 銀行預金 + 保有株の評価額（株数 × 今の株価）− 借入残高（アプリ・derby-runner と同じ計算）
+   ・増やす：銀行預金（bank.deposit）に足す。手持ちコイン・株・借入には触れない
+   ・減らす：銀行預金から先に減らし、足りない分は保有株を「評価額の高い銘柄から」回収する。
+     回収した株の代金はコインにも預金にも戻さない（売却ではない）。株は1株単位なので、足りない分を超える株数を回収し、
+     超えた分（1株の株価より少ない）だけを預金に戻す → 総資産の減少は指定した金額とちょうど同じになる
+   ・手持ちコインと借入には触れない（手持ちコインは adjustCoins で別に減らす）。減らしたあとの総資産が 0 より少なくなる減らし方はしない
+   ・預金を減らしたら、利息の対象（interestBase）も預金を超えないようにする（引き出しと同じ）。株の取得額（cost）は株数に比例して減らす（売却と同じ）
+   ・previewAssets：今の内訳と、その金額で何がどれだけ減るか（書き込まない）。adjustAssets：その内容で実行する
+     表示したあとに預金・株・株価が変わっていたら（expected が違う）、何もせずに最新の内訳を返す
+   ・users の書き換え・総資産ランキング（rankings/assets）のその人の行と順位の更新・操作の記録（adminAuditLogs）は、
+     1回のまとめて書き込み（読んだときの更新時刻が条件）。途中でアプリ・自動処理が書き換えていたら読み直してやり直す
+   株の会社と最初の株価は script.js・derby-runner/economy.mjs と同じにすること */
+
+const ASSET_STOCK_INITIAL_PRICES = { YGM: 180, YMT: 240, YFD: 150, YEN: 280, YPY: 210 };
+const ADMIN_ASSET_ADJUST_MAX = 10000000;
+const ADMIN_ASSET_RETRY = 8;
+
+function assetInt(value) {
+  return Math.max(0, Math.floor(Number(value) || 0));
+}
+
+function marketPricesOf(market) {
+  const prices = {};
+  Object.entries(ASSET_STOCK_INITIAL_PRICES).forEach(([code, initial]) => {
+    const price = Number(market?.companies?.[code]?.price);
+    prices[code] = Number.isFinite(price) && price > 0 ? price : initial;
+  });
+  return prices;
+}
+
+/* users の内容（decode 済み）と株価から、総資産の内訳 */
+export function assetBreakdown(data, prices) {
+  const bank = data?.bank && typeof data.bank === "object" ? data.bank : {};
+  const deposit = assetInt(bank.deposit);
+  const loan = assetInt(bank.loan);
+  const coins = Number(data?.coins) || 0;
+  const stocks = Object.entries(data?.stocks && typeof data.stocks === "object" ? data.stocks : {})
+    .map(([code, h]) => {
+      const qty = assetInt(h?.qty);
+      const price = Number(prices[code]) || 0;
+      return { code, qty, cost: Math.max(0, Math.round(Number(h?.cost) || 0)), price, value: qty * price };
+    })
+    .filter((s) => s.qty > 0)
+    .sort((a, b) => (b.value - a.value) || (a.code < b.code ? -1 : a.code > b.code ? 1 : 0));
+  const stockValue = stocks.reduce((sum, s) => sum + s.value, 0);
+  return { coins, deposit, interestBase: assetInt(bank.interestBase), loan, stocks, stockValue, total: coins + deposit + stockValue - loan };
+}
+
+/* 減らす・増やすときに、何がどれだけ変わるか。足りなければ error */
+export function planAssetAdjustment(breakdown, direction, amount) {
+  if (direction === "increase") {
+    const deposit = breakdown.deposit + amount;
+    return { direction, amount, fromDeposit: -amount, removed: [], change: 0, after: { deposit, interestBase: breakdown.interestBase, stocks: {} }, totalAfter: breakdown.total + amount };
+  }
+  const recoverable = breakdown.deposit + breakdown.stocks.filter((s) => s.price > 0).reduce((sum, s) => sum + s.value, 0);
+  const max = Math.max(0, Math.min(recoverable, breakdown.total));
+  if (amount > max) return { error: "insufficient_assets", max };
+
+  const fromDeposit = Math.min(breakdown.deposit, amount);
+  let rest = amount - fromDeposit;
+  let change = 0;
+  const removed = [];
+  const stocksAfter = {};
+  for (const s of breakdown.stocks) {
+    if (rest <= 0 || s.price <= 0) continue;
+    const qty = s.value <= rest ? s.qty : Math.ceil(rest / s.price);
+    const value = qty * s.price;
+    const costRemoved = Math.round(s.cost * (qty / s.qty));
+    removed.push({ code: s.code, qty, price: s.price, value, costRemoved, qtyBefore: s.qty, qtyAfter: s.qty - qty });
+    stocksAfter[s.code] = s.qty - qty > 0 ? { qty: s.qty - qty, cost: s.cost - costRemoved } : null;
+    if (value > rest) change = value - rest;
+    rest = Math.max(0, rest - value);
+  }
+  if (rest > 0) return { error: "insufficient_assets", max };
+  const deposit = breakdown.deposit - fromDeposit + change;
+  const interestBase = Math.min(breakdown.interestBase, deposit);
+  const totalAfter = breakdown.total - amount;
+  return { direction, amount, fromDeposit, removed, change, after: { deposit, interestBase, stocks: stocksAfter }, totalAfter };
+}
+
+/* 総資産ランキング（rankings/assets）のその人の行を、ランキングの株価で計算し直して並べ直す（derby-runner の buildAssetRanking と同じ並び） */
+export function rerankAssetRanking(rows, name, data, prices) {
+  const index = rows.findIndex((r) => r?.name === name);
+  if (index < 0) return null;
+  const b = assetBreakdown(data, prices);
+  const next = rows.map((r, i) => (i === index ? { ...r, coins: b.coins, deposit: b.deposit, stockValue: b.stockValue, loan: b.loan, total: b.total } : { ...r }));
+  next.sort((a, c) => ((Number(c.total) || 0) - (Number(a.total) || 0)) || (a.name < c.name ? -1 : a.name > c.name ? 1 : 0));
+  let rank = 0, prev = null;
+  next.forEach((r, i) => { const t = Number(r.total) || 0; if (t !== prev) { rank = i + 1; prev = t; } r.rank = rank; });
+  return { rows: next, before: rows[index], after: next.find((r) => r.name === name) };
+}
+
+function sameAssetSnapshot(breakdown, prices, expected) {
+  if (!expected || typeof expected !== "object") return true;
+  if (expected.deposit !== breakdown.deposit) return false;
+  const held = Object.fromEntries(breakdown.stocks.map((s) => [s.code, s.qty]));
+  const exp = expected.stocks && typeof expected.stocks === "object" ? expected.stocks : {};
+  const codes = new Set([...Object.keys(held), ...Object.keys(exp)]);
+  for (const code of codes) if ((held[code] || 0) !== (exp[code] || 0)) return false;
+  const expPrices = expected.prices && typeof expected.prices === "object" ? expected.prices : {};
+  return breakdown.stocks.every((s) => expPrices[s.code] === s.price);
+}
+
+function publicBreakdown(b, prices) {
+  return { coins: b.coins, deposit: b.deposit, loan: b.loan, stockValue: b.stockValue, total: b.total, stocks: b.stocks.map(({ code, qty, price, value }) => ({ code, qty, price, value })), prices };
+}
+
+function validateAssetRequest(body) {
+  const direction = body?.direction;
+  const amount = body?.amount;
+  if (direction !== "increase" && direction !== "decrease") return { status: 400, error: "invalid_direction" };
+  if (typeof amount !== "number" || !Number.isSafeInteger(amount) || amount <= 0 || amount > ADMIN_ASSET_ADJUST_MAX) return { status: 400, error: "invalid_amount" };
+  return null;
+}
+
+async function loadAssetTarget(fs, uid) {
+  const docs = await findUserDocsByUid(fs, uid);
+  if (docs.length !== 1) return { error: { status: 409, error: docs.length === 0 ? "user_not_found" : "multiple_user_docs" } };
+  const record = await fs.get(`userDeletions/${uid}`);
+  if (record && record.status !== "completed") return { error: { status: 409, error: "deletion_in_progress" } };
+  return { name: docs[0].id };
+}
+
+async function readAssetState(fs, uid, name) {
+  const [user, market] = await Promise.all([fs.getRaw(`users/${name}`), fs.get("market/current")]);
+  if (!user || user.fields?.uid?.stringValue !== uid) return { error: { status: 409, error: "user_not_found" } };
+  const data = decodeFields(user.fields);
+  if (!Number.isFinite(Number(data.coins))) return { error: { status: 409, error: "invalid_balance" } };
+  const prices = marketPricesOf(market);
+  return { user, data, prices, breakdown: assetBreakdown(data, prices) };
+}
+
+async function adminPreviewAssets(deps, uid, body) {
+  const fs = deps.firestore;
+  const target = await loadAssetTarget(fs, uid);
+  if (target.error) return target.error;
+  const state = await readAssetState(fs, uid, target.name);
+  if (state.error) return state.error;
+  const result = { ok: true, name: target.name, breakdown: publicBreakdown(state.breakdown, state.prices) };
+  if (body?.direction !== undefined || body?.amount !== undefined) {
+    const invalid = validateAssetRequest(body);
+    if (invalid) return invalid;
+    const plan = planAssetAdjustment(state.breakdown, body.direction, body.amount);
+    if (plan.error) return { status: 409, error: plan.error, max: plan.max, breakdown: result.breakdown };
+    result.plan = { direction: plan.direction, amount: plan.amount, fromDeposit: plan.fromDeposit, removed: plan.removed.map(({ code, qty, price, value, qtyBefore, qtyAfter }) => ({ code, qty, price, value, qtyBefore, qtyAfter })), change: plan.change, depositAfter: plan.after.deposit, totalAfter: plan.totalAfter };
+  }
+  return result;
+}
+
+async function adminAdjustAssets(deps, callerUid, uid, body) {
+  const invalid = validateAssetRequest(body);
+  if (invalid) return invalid;
+  const { direction, amount } = body;
+  const fs = deps.firestore;
+  const target = await loadAssetTarget(fs, uid);
+  if (target.error) return target.error;
+  const name = target.name;
+  const callerDocs = await findUserDocsByUid(fs, callerUid);
+  const byName = callerDocs.length === 1 ? callerDocs[0].id : "";
+
+  for (let attempt = 1; attempt <= ADMIN_ASSET_RETRY; attempt++) {
+    const [state, ranking] = await Promise.all([readAssetState(fs, uid, name), fs.getRaw("rankings/assets")]);
+    if (state.error) return state.error;
+    const { user, data, prices, breakdown } = state;
+    if (!sameAssetSnapshot(breakdown, prices, body?.expected)) return { status: 409, error: "assets_changed", breakdown: publicBreakdown(breakdown, prices) };
+    const plan = planAssetAdjustment(breakdown, direction, amount);
+    if (plan.error) return { status: 409, error: plan.error, max: plan.max, breakdown: publicBreakdown(breakdown, prices) };
+
+    /* users：bank.deposit / bank.interestBase と、変わる銘柄の stocks.{code} だけを書く（ほかの項目はそのまま） */
+    const userFields = { bank: { mapValue: { fields: { deposit: { integerValue: String(plan.after.deposit) }, interestBase: { integerValue: String(plan.after.interestBase) } } } } };
+    const fieldPaths = ["bank.deposit", "bank.interestBase"];
+    const stockFields = {};
+    Object.entries(plan.after.stocks).forEach(([code, holding]) => {
+      fieldPaths.push(`stocks.${code}`);
+      if (holding) stockFields[code] = { mapValue: { fields: { qty: { integerValue: String(holding.qty) }, cost: { integerValue: String(holding.cost) } } } };
+    });
+    if (Object.keys(stockFields).length) userFields.stocks = { mapValue: { fields: stockFields } };
+
+    /* 変更後の users の内容（ランキングの計算用） */
+    const afterData = structuredClone(data);
+    afterData.bank = { ...(afterData.bank || {}), deposit: plan.after.deposit, interestBase: plan.after.interestBase };
+    afterData.stocks = { ...(afterData.stocks || {}) };
+    Object.entries(plan.after.stocks).forEach(([code, holding]) => { if (holding) afterData.stocks[code] = holding; else delete afterData.stocks[code]; });
+    const afterBreakdown = assetBreakdown(afterData, prices);
+
+    const writes = [{
+      update: { name: fs.docName(`users/${name}`), fields: userFields },
+      updateMask: { fieldPaths },
+      currentDocument: { updateTime: user.updateTime }
+    }];
+
+    let rankingResult = null;
+    if (ranking) {
+      const rows = decodeValue(ranking.fields?.users) || [];
+      const rankingPrices = ranking.fields?.prices ? decodeValue(ranking.fields.prices) : null;
+      const reranked = Array.isArray(rows) ? rerankAssetRanking(rows, name, afterData, rankingPrices && Object.keys(rankingPrices).length ? rankingPrices : prices) : null;
+      if (reranked) {
+        rankingResult = { rankBefore: reranked.before.rank ?? null, rankAfter: reranked.after.rank, totalBefore: reranked.before.total ?? null, totalAfter: reranked.after.total };
+        writes.push({
+          update: { name: fs.docName("rankings/assets"), fields: { users: encodeValue(reranked.rows) } },
+          updateMask: { fieldPaths: ["users"] },
+          currentDocument: { updateTime: ranking.updateTime }
+        });
+      }
+    }
+
+    const summary = (b) => ({ coins: b.coins, deposit: b.deposit, stockValue: b.stockValue, loan: b.loan, total: b.total });
+    const logId = crypto.randomUUID().replace(/-/g, "");
+    writes.push({
+      update: {
+        name: fs.docName(`adminAuditLogs/${logId}`),
+        fields: encodeFields({
+          action: "adjustAssets", targetUid: uid, targetName: name, direction, amount,
+          delta: direction === "increase" ? amount : -amount,
+          before: summary(breakdown), after: summary(afterBreakdown),
+          beforeTotal: breakdown.total, afterTotal: afterBreakdown.total,
+          fromDeposit: plan.fromDeposit, changeToDeposit: plan.change,
+          removedStocks: plan.removed.map(({ code, qty, price, value, costRemoved, qtyBefore, qtyAfter }) => ({ code, qty, price, value, costRemoved, qtyBefore, qtyAfter })),
+          prices, ranking: rankingResult || { updated: false },
+          byUid: callerUid, byName, result: "ok"
+        })
+      },
+      updateTransforms: [{ fieldPath: "at", setToServerValue: "REQUEST_TIME" }],
+      currentDocument: { exists: false }
+    });
+
+    try {
+      await fs.commit(writes);
+      return {
+        ok: true, name, direction, amount,
+        beforeTotal: breakdown.total, afterTotal: afterBreakdown.total,
+        fromDeposit: plan.fromDeposit, change: plan.change,
+        removed: plan.removed.map(({ code, qty, price, value }) => ({ code, qty, price, value })),
+        breakdown: publicBreakdown(afterBreakdown, prices),
+        ranking: rankingResult
+      };
+    } catch (error) {
       const retryable = [400, 409].includes(error?.status) && /FAILED_PRECONDITION|ABORTED|does not match|contention|ALREADY_EXISTS/i.test(String(error.message));
       if (!retryable) throw error;
       await new Promise((resolve) => setTimeout(resolve, 20 + Math.random() * 60 * attempt));
