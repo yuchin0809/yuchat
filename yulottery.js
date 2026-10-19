@@ -4,7 +4,8 @@
    ・抽選・購入・賞金・公開/非公開の判定はすべて通知 Worker（/yuslot の lottery* アクション）が行う。
      ここは Worker が返した内容を表示して、購入ボタンを押したら Worker に頼むだけ。Firebase には直接触れない。
    ・毎週金曜 14:30（日本時間）に抽選。名前・賞金は毎週変わり、6週に1回ビッグイベント（Worker が決める）。
-   ・全3,000口の枠から券ごとに当たりが決まる（1等は全体で1本）。枚数が多いほど当たりやすい。確率は Worker が返した値から計算して表示。
+   ・券には番号（30組×100番＝全3,000通り）が付く。買い方は「連番」（同じ組の続き番号）か「バラ」（ランダム）。番号の割り当て・当選番号・
+     前後賞（1等の前後の番号）はすべて Worker が決める。1等は全体で1本。確率は Worker が返した値から計算して表示。
    ・演出（紙吹雪・数字のカウント）はブラウザ内だけ。当選のお祝いは、その回の結果を初めて見たときに1回だけ出す
      （見たかどうかは端末内 localStorage に保存。Firebase には保存しない）。
 ========================================================= */
@@ -14,6 +15,8 @@ let st = null;           // 直近の lotteryStatus
 let timer = null;
 let busy = false;
 let buyCount = 1;
+let buyMode = "seq";    // "seq"＝連番 / "random"＝バラ
+let lastBought = "";    // 直前に買った番号の表示（買い直したら消える）
 let offset = 0;          // serverNowMs - Date.now()
 let lastLoadAt = 0;
 let stylesDone = false;
@@ -27,6 +30,19 @@ const nowMs = () => Date.now() + offset;
 function fmtDraw(ms) {
   const d = new Date(ms + 9 * 3600000);
   return `${d.getUTCMonth() + 1}/${d.getUTCDate()}(${DAYS[d.getUTCDay()]}) ${d.getUTCHours()}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
+}
+/* 番号（0〜2999）の表示：01組000番 */
+const fmtNo = (n) => `${String(Math.floor(n / 100) + 1).padStart(2, "0")}組${String(n % 100).padStart(3, "0")}番`;
+/* 番号の並びを、続き番号はまとめて表示（例：12組045〜054番）。組をまたぐ連続は別々に表す */
+function fmtNumbers(list) {
+  const a = [...(list || [])].sort((x, y) => x - y), out = [];
+  for (let i = 0; i < a.length;) {
+    let j = i;
+    while (j + 1 < a.length && a[j + 1] === a[j] + 1 && Math.floor(a[j + 1] / 100) === Math.floor(a[i] / 100)) j++;
+    out.push(j === i ? fmtNo(a[i]) : `${fmtNo(a[i]).slice(0, -1)}〜${String(a[j] % 100).padStart(3, "0")}番`);
+    i = j + 1;
+  }
+  return out.join("、");
 }
 function fmtRemain(ms) {
   if (ms <= 0) return "00:00:00";
@@ -43,6 +59,7 @@ export function stopLottery() {
 
 export function renderLottery(c) {
   ctx = c;
+  lastBought = "";
   injectStyles();
   ctx.root.innerHTML = `<div class="yl-head"><button type="button" class="yw-back" id="ylBack">← お店の一覧</button><h2>🎟 ゆう宝くじ売り場</h2></div><div class="yl-card yl-msg">読み込み中…</div>`;
   $("#ylBack")?.addEventListener("click", () => { stopLottery(); ctx.onBack(); });
@@ -72,7 +89,8 @@ function maxBuyable() {
   if (!st || !st.event) return 0;
   const byRound = (st.limits?.maxPerRound || 0) - (st.myTickets || 0);
   const byCoins = st.balance == null ? Infinity : Math.floor(st.balance / st.event.price);
-  return Math.max(0, Math.min(st.limits?.maxPerBuy || 0, byRound, byCoins));
+  const byStock = st.remaining == null ? Infinity : st.remaining;
+  return Math.max(0, Math.min(st.limits?.maxPerBuy || 0, byRound, byCoins, byStock));
 }
 function clampBuy(n) { const m = maxBuyable(); return m < 1 ? 0 : Math.max(1, Math.min(m, Math.floor(n) || 1)); }
 
@@ -86,15 +104,16 @@ function draw() {
   const e = st.event, esc = ctx.esc;
   const admin = st.isTopAdmin ? `<div class="yw-admin"><span>管理者メニュー：宝くじ売り場の公開状態 <b>${st.published ? "公開中" : "非公開（準備中）"}</b></span>
       <button type="button" id="ylToggle" class="yw-btn yw-btn-sub">${st.published ? "非公開にする" : "公開する"}</button></div>` : "";
-  const medals = ["🥇", "🥈", "🥉"];
+  const medals = { "1等": "🥇", "前後賞": "🎀", "2等": "🥈", "3等": "🥉" };
   const pool = st.pool || 3000;
   const pct = (n) => { const v = (n / pool) * 100; return (v >= 1 ? String(Math.round(v * 10) / 10) : String(Math.round(v * 100) / 100)) + "%"; };
-  const tiers = (st.tiers || []).map((t, i) => `<div class="yl-tier"><span>${medals[i] || "🎖"} ${esc(t.name)}</span><span class="yl-tier-n">${t.count}本・1枚 ${pct(t.count)}</span><b>${fmt(t.prize)} <small>コイン</small></b></div>`).join("");
+  const tiers = (st.tiers || []).map((t) => `<div class="yl-tier"><span>${medals[t.name] || "🎖"} ${esc(t.name)}</span><span class="yl-tier-n">${t.count}本・1枚 ${pct(t.count)}</span><b>${fmt(t.prize)} <small>コイン</small></b></div>`).join("");
   const top = (st.tiers || [])[0];
   const last = st.last ? `<div class="yl-card yl-last"><h3>📣 前回の結果：${esc(st.last.name)}</h3>
       <p class="yl-sub">販売 ${fmt(st.last.tickets)} 枚 ／ 当選 ${fmt(st.last.winnerCount || 0)} 口 ／ 賞金 ${fmt(st.last.paid || 0)} コイン</p>
-      ${(st.last.winners || []).length ? st.last.winners.map((w) => `<div class="yl-winner"><span>${esc(w.tier)}</span><span>${esc(w.name)} さん</span><b>+${fmt(w.amount)}</b></div>`).join("") : `<p class="yl-sub">1〜3等は出ませんでした</p>`}
-      ${st.last.myWin > 0 ? `<div class="yl-mywin">🎉 あなたは ${fmt(st.last.myWin)} コイン当選しました！</div>` : ""}</div>` : "";
+      ${(st.last.numbers || []).map((w) => `<div class="yl-winner"><span>${esc(w.tier)}</span><span>${fmtNo(w.number)}　${w.name ? esc(w.name) + " さん" : "<small>（売れ残り）</small>"}</span></div>`).join("")}
+      ${(st.last.myWins || []).length ? `<div class="yl-mywin">🎉 あなたの当選：${st.last.myWins.map((w) => `${esc(w.tier)} ${fmtNo(w.number)}（+${fmt(w.amount)}）`).join("、")}<br>合計 ${fmt(st.last.myWin)} コイン</div>` : ""}</div>` : "";
+  const mineNums = (st.myNumbers || []).length ? `<details class="yl-nums"><summary>あなたの番号を見る（${fmt(st.myNumbers.length)}枚）</summary><p>${esc(fmtNumbers(st.myNumbers))}</p></details>` : "";
   ctx.root.innerHTML = `${head}${admin}
     <div class="yl-banner ${e.big ? "big" : ""}">
       ${e.big ? `<div class="yl-bigbadge">🌟 ビッグイベント 🌟</div>` : ""}
@@ -103,16 +122,18 @@ function draw() {
       <div class="yl-count" id="ylCount"></div>
       <div class="yl-pot-label">1等 賞金（全体で1本）</div>
       <div class="yl-pot"><span id="ylPot">${fmt(top ? top.prize : 0)}</span><small>コイン</small></div>
-      <div class="yl-carry">1枚 ${e.price} コイン ／ 全${fmt(pool)}口</div>
+      <div class="yl-carry">1枚 ${e.price} コイン ／ 全${fmt(pool)}枚（残り ${fmt(st.remaining ?? pool)} 枚）</div>
     </div>
-    <div class="yl-card"><h3>🏆 賞金</h3>${tiers}<p class="yl-sub">券は1枚ごとに、全${fmt(pool)}口の枠から当たりが決まります。たくさん買うほど当たりやすく、7等は元返しです。1等は全体で1本だけ。</p></div>
+    <div class="yl-card"><h3>🏆 賞金</h3>${tiers}<p class="yl-sub">番号は 30組×100番（全${fmt(pool)}通り）。抽選で決まった当選番号と同じ番号の券が当たりです。1等は全体で1本だけ。「前後賞」は1等の前後の番号なので、連番で買うと1等と一緒に当たることも！7等は元返しです。</p></div>
     <div class="yl-card yl-buy">
       <div class="yl-mine">あなたの宝くじ <b>${fmt(st.myTickets)}枚</b>（この回は最大 ${fmt(st.limits?.maxPerRound)} 枚まで）${st.balance == null ? "" : ` ／ 所持 💰 ${fmt(st.balance)}`}</div>
+      <div class="yl-modes"><button type="button" class="yl-mode ${buyMode === "seq" ? "on" : ""}" data-mode="seq">連番<small>同じ組の続き番号</small></button><button type="button" class="yl-mode ${buyMode === "random" ? "on" : ""}" data-mode="random">バラ<small>ランダムな番号</small></button></div>
       <div class="yl-stepper"><button type="button" class="yw-ctl" id="ylMinus" aria-label="へらす">－</button><span class="yl-n" id="ylN">0</span><button type="button" class="yw-ctl" id="ylPlus" aria-label="ふやす">＋</button></div>
       <div class="yl-quick">${[1, 5, 10].map((n) => `<button type="button" class="yw-ctl" data-q="${n}">${n}枚</button>`).join("")}<button type="button" class="yw-ctl" data-q="max">最大</button></div>
       <button type="button" class="yl-buybtn" id="ylBuy">買う</button>
       <div class="yl-note" id="ylNote"></div>
-      <div class="yl-toast" id="ylToast"></div>
+      <div class="yl-toast ${lastBought ? "on" : ""}" id="ylToast">${esc(lastBought)}</div>
+      ${mineNums}
     </div>
     ${last}`;
   $("#ylBack")?.addEventListener("click", () => { stopLottery(); ctx.onBack(); });
@@ -120,6 +141,10 @@ function draw() {
   $("#ylMinus")?.addEventListener("click", () => { buyCount = clampBuy(buyCount - 1); updateBuyUi(); });
   $("#ylPlus")?.addEventListener("click", () => { buyCount = clampBuy(buyCount + 1); updateBuyUi(); });
   ctx.root.querySelectorAll("[data-q]").forEach((b) => b.addEventListener("click", () => { const q = b.getAttribute("data-q"); buyCount = clampBuy(q === "max" ? maxBuyable() : Number(q)); updateBuyUi(); }));
+  ctx.root.querySelectorAll("[data-mode]").forEach((b) => b.addEventListener("click", () => {
+    buyMode = b.getAttribute("data-mode");
+    ctx.root.querySelectorAll("[data-mode]").forEach((x) => x.classList.toggle("on", x.getAttribute("data-mode") === buyMode));
+  }));
   $("#ylBuy")?.addEventListener("click", buy);
   updateBuyUi();
   tick();
@@ -167,6 +192,8 @@ async function togglePublished() {
 
 const ERRORS = {
   sales_closed: "販売は抽選の5分前に締め切りました。次の回をお楽しみに！",
+  sold_out: "売り切れです（この回の番号は全部売れました）。",
+  no_consecutive: "その枚数の連番はもう取れません。枚数を減らすか、「バラ」で買ってください。",
   seated: "ゆうスロに着席中は買えません。先に「やめる」で退出してね。",
   insufficient_coins: "コインが足りません。",
   busy: "混み合っています。もう一度お試しください。",
@@ -180,16 +207,16 @@ async function buy() {
   busy = true; updateBuyUi();
   let msg = "";
   try {
-    await ctx.api("lotteryBuy", { count: buyCount });
-    msg = `🎟 ${buyCount}枚 購入しました！ 抽選をお楽しみに`;
+    const r = await ctx.api("lotteryBuy", { count: buyCount, mode: buyMode });
+    msg = `🎟 ${buyCount}枚 購入しました！ あなたの番号：${fmtNumbers(r && r.numbers)}`;
     if (ctx.sfx && ctx.sfx.buy) ctx.sfx.buy();
     if (!reduced()) confetti(14);
   } catch (e) {
-    msg = e.code === "limit_reached" ? `この回に持てるのは最大 ${st.limits?.maxPerRound} 枚までです（あと ${e.detail?.remaining ?? 0} 枚）。` : (ERRORS[e.code] || `購入できませんでした（${e.code || "エラー"}）`);
+    msg = e.code === "sold_out" && e.detail?.remaining > 0 ? `売り切れ間近です（残り ${e.detail.remaining} 枚）。` : e.code === "limit_reached" ? `この回に持てるのは最大 ${st.limits?.maxPerRound} 枚までです（あと ${e.detail?.remaining ?? 0} 枚）。` : (ERRORS[e.code] || `購入できませんでした（${e.code || "エラー"}）`);
   }
   busy = false;
-  await load();             // 残高・枚数・賞金総額を最新に
-  const t = $("#ylToast"); if (t) { t.textContent = msg; t.classList.add("on"); }
+  lastBought = msg;
+  await load();             // 残高・枚数・番号を最新に（メッセージは再描画後も残す）
 }
 
 /* 前回の結果で自分が当選していたら、その回につき1回だけお祝い（端末内に「見た」と保存） */
@@ -205,7 +232,7 @@ function showWin(l) {
   const mask = document.createElement("div");
   mask.className = "yl-winmask";
   mask.innerHTML = `<div class="yl-winbox"><div class="yl-wintitle">🎉 当選おめでとう！ 🎉</div><div class="yl-winname">${ctx.esc(l.name)}</div>
-    <div class="yl-winamount">+${fmt(l.myWin)} <small>コイン</small></div><p>賞金はもう あなたのコインに入っています。</p><button type="button" class="yw-btn" id="ylWinClose">とじる</button></div>`;
+    <div class="yl-winamount">+${fmt(l.myWin)} <small>コイン</small></div><p>${(l.myWins || []).map((w) => `${ctx.esc(w.tier)} ${fmtNo(w.number)}`).join("、")}</p><p>賞金はもう あなたのコインに入っています。</p><button type="button" class="yw-btn" id="ylWinClose">とじる</button></div>`;
   document.body.appendChild(mask); // 売り場の再描画（残高の更新など）で消えないように、画面全体を覆う置き場に出す
   if (ctx.sfx && ctx.sfx.win) ctx.sfx.win();
   if (!reduced()) confetti(60, mask);
@@ -251,6 +278,11 @@ function injectStyles() {
   .yl-carry { font-size: 12px; margin-top: 4px; opacity: .95; }
   .yl-tier { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; padding: 7px 0; border-bottom: 1px dashed #e3e3ea; font-size: 14px; }
   .yl-tier:last-of-type { border-bottom: none; } .yl-tier-n { color: #888; font-size: 12px; } .yl-tier b small { font-size: 11px; font-weight: 600; }
+  .yl-modes { display: flex; gap: 8px; margin: 10px 0 2px; }
+  .yl-mode { flex: 1; border: 2px solid #d9d9e3; background: #f7f7fb; border-radius: 12px; padding: 8px 6px; font-size: 16px; font-weight: 900; color: #556; cursor: pointer; line-height: 1.3; }
+  .yl-mode small { display: block; font-size: 10px; font-weight: 600; color: #889; }
+  .yl-mode.on { border-color: #ff9a00; background: #fff6dc; color: #8a5a00; }
+  .yl-nums { margin-top: 10px; font-size: 13px; color: #445; } .yl-nums summary { cursor: pointer; font-weight: 700; } .yl-nums p { line-height: 1.9; margin: 6px 0 0; word-break: break-all; }
   .yl-mine { font-size: 13px; color: #445; line-height: 1.7; }
   .yl-stepper { display: flex; align-items: center; justify-content: center; gap: 16px; margin: 10px 0 6px; }
   .yl-n { min-width: 70px; text-align: center; font-size: 34px; font-weight: 900; font-variant-numeric: tabular-nums; }
@@ -261,7 +293,7 @@ function injectStyles() {
   .yl-note { text-align: center; font-size: 12px; color: #777; margin-top: 8px; line-height: 1.6; }
   .yl-toast { display: none; text-align: center; margin-top: 8px; padding: 8px 10px; border-radius: 10px; background: #fff6d6; color: #8a5a00; font-weight: 700; font-size: 13px; }
   .yl-toast.on { display: block; }
-  .yl-winner { display: grid; grid-template-columns: 44px 1fr auto; gap: 8px; padding: 5px 0; font-size: 13px; border-bottom: 1px dashed #eee; } .yl-winner b { color: #d4143c; }
+  .yl-winner { display: grid; grid-template-columns: 54px 1fr auto; gap: 8px; padding: 5px 0; font-size: 13px; border-bottom: 1px dashed #eee; } .yl-winner b { color: #d4143c; }
   .yl-mywin { margin-top: 10px; padding: 9px 12px; border-radius: 10px; background: #fff0f5; color: #d4143c; font-weight: 800; text-align: center; }
   .yl-confetti { position: absolute; top: -12px; width: 9px; height: 14px; border-radius: 2px; pointer-events: none; z-index: 5; animation: yl-fall 2.1s linear forwards; }
   @keyframes yl-fall { 0% { transform: translateY(-10px) rotate(0); opacity: 0; } 10% { opacity: 1; } 100% { transform: translateY(420px) rotate(720deg); opacity: 0; } }
