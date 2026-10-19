@@ -359,7 +359,7 @@ function runReachReveal(i, strong, pairSym) {
   const slowMs = strong ? (rdc ? 150 : 190) : 90;
   const slow = setInterval(() => { setCell(i, randSym()); setNeighbors(i); }, slowMs);
   if (!rdc) {
-    if (strong) { sfxReachTicks(dur); burstSparkles(reel, fxHigh() ? 12 : 6, "reach"); if (reels && fxHigh()) reels.classList.add("yw-zoomfx"); }
+    if (strong) { sfxReachTicks(dur); burstSparkles(reel, fxHigh() ? 12 : 6, "reach"); if (reels && fxHigh()) reels.classList.add("yw-zoomfx"); if (fxHigh()) screenFlash(dur, "fever"); }
     else sfxReachTick1();
   }
   setTimeout(() => {
@@ -492,16 +492,17 @@ function updateFeverUI() {
   const on = isFever();
   if (g) g.classList.toggle("is-fever", on);
   if (fb) fb.style.display = on ? "block" : "none";
+  feverOverlay(on); // FEVER中は画面全体を虹色に（演出強めのときだけ）
   stopFeverTimer();
-  if (on) state.feverTimer = setInterval(() => { if (!isFever()) { stopFeverTimer(); const gg = $("#ywGame"); if (gg) gg.classList.remove("is-fever"); const f = $("#ywFever"); if (f) f.style.display = "none"; } }, 400);
+  if (on) state.feverTimer = setInterval(() => { if (!isFever()) { stopFeverTimer(); const gg = $("#ywGame"); if (gg) gg.classList.remove("is-fever"); const f = $("#ywFever"); if (f) f.style.display = "none"; feverOverlay(false); } }, 400);
 }
 
 /* ---------- 退出・精算 ---------- */
 async function onExit() { if (!confirm("この台をやめますか？（コインは反映されます）")) return; await finishAndExit(); }
 function finishAndExitSoon() { setTimeout(() => finishAndExit(), 1200); }
-function backToLobbySoon() { setTimeout(async () => { state.session = null; await openLobby(); }, 1200); }
+function backToLobbySoon() { clearScreenFx(); setTimeout(async () => { state.session = null; await openLobby(); }, 1200); }
 async function finishAndExit() {
-  stopAuto(); stopFlushTimer(); stopFeverTimer();
+  stopAuto(); stopFlushTimer(); stopFeverTimer(); clearScreenFx();
   state.awaitingFever = false;
   const sess = state.session; state.session = null;
   if (sess) { try { const r = await api("settle", { session: sess }); if (typeof r.finalBalance === "number") state.balance = r.finalBalance; } catch (_) {} }
@@ -509,6 +510,7 @@ async function finishAndExit() {
   await openLobby();
 }
 async function settle() {
+  clearScreenFx();
   const sess = state.session; state.session = null; state.screen = "shop"; state.awaitingFever = false;
   if (sess) { try { await api("settle", { session: sess }); } catch (_) {} }
   if (typeof deps.onSettled === "function") { try { deps.onSettled(state.balance); } catch (_) {} }
@@ -578,16 +580,55 @@ function celebrate(kind) {
   flashWin();
   if (reduced()) return;
   const reels = $("#ywReels"), g = $("#ywGame"), tier = state.machine.tier;
-  const n = (kind === "fever" ? 16 : kind === "special" ? 14 : 8) + (fxHigh() ? tier * 2 : 0);
+  const big = kind === "special" || kind === "fever";
+  const n = (kind === "fever" ? 20 : kind === "special" ? 18 : 10) + (fxHigh() ? tier * 3 : 0);
   burstSparkles(reels, n, kind === "fever" ? "fever" : "big");
-  coinRain((kind === "special" ? 10 : kind === "fever" ? 12 : 6) + tier);
+  coinRain((kind === "special" ? 14 : kind === "fever" ? 16 : 8) + tier * 2);
   if (g) { g.classList.remove("yw-celebrate"); void g.offsetWidth; g.classList.add("yw-celebrate"); setTimeout(() => g.classList.remove("yw-celebrate"), 1300); }
-  if (kind === "special" && tier >= 6 && fxHigh()) { burstSparkles(reels, 12, "fever"); coinRain(10); } // ジャックポットは別格
+  // 演出強め：画面全体を虹色でチカチカ＋画面シェイク（光過敏の配慮で reduced-motion／演出弱めでは出さない）
+  if (fxHigh()) {
+    screenFlash(big ? (kind === "fever" ? 1400 : 1100) : 600, kind === "fever" ? "fever" : "win");
+    if (big) screenShake();
+    if (kind === "special" && tier >= 6) { burstSparkles(reels, 16, "fever"); coinRain(14); } // ジャックポットは別格
+  }
 }
 function treasureOpen(prize) {
   if (reduced()) return;
-  burstSparkles($("#ywReels"), fxHigh() ? 10 : 5, "big");
-  coinRain(Math.min(20, 6 + Math.round((prize || 3) / 3)));
+  burstSparkles($("#ywReels"), fxHigh() ? 14 : 5, "big");
+  coinRain(Math.min(24, 8 + Math.round((prize || 3) / 2)));
+  if (fxHigh()) screenFlash(800, "win");
+}
+
+/* ---------- 全画面のド派手演出（演出強めのときだけ・reduced-motion では出さない） ---------- */
+function screenFxEl() {
+  let el = document.getElementById("yw-screen-fx");
+  if (!el) { el = document.createElement("div"); el.id = "yw-screen-fx"; (document.body || document.documentElement).appendChild(el); }
+  return el;
+}
+let screenFlashTimer = null;
+function screenFlash(ms, kind) {
+  if (!fxHigh() || reduced()) return;
+  const el = screenFxEl();
+  el.classList.remove("flash-win", "flash-fever");
+  void el.offsetWidth;
+  el.classList.add(kind === "fever" ? "flash-fever" : "flash-win");
+  clearTimeout(screenFlashTimer);
+  screenFlashTimer = setTimeout(() => { el.classList.remove("flash-win", "flash-fever"); }, ms);
+}
+function screenShake() {
+  if (!fxHigh() || reduced()) return;
+  const g = $("#ywGame"); if (!g) return;
+  g.classList.remove("yw-shake"); void g.offsetWidth; g.classList.add("yw-shake");
+  setTimeout(() => g.classList.remove("yw-shake"), 700);
+}
+function feverOverlay(on) {
+  const el = screenFxEl();
+  if (on && fxHigh() && !reduced()) el.classList.add("fever-on"); else el.classList.remove("fever-on");
+}
+function clearScreenFx() {
+  const el = document.getElementById("yw-screen-fx");
+  if (el) el.classList.remove("flash-win", "flash-fever", "fever-on");
+  clearTimeout(screenFlashTimer);
 }
 
 /* ---------- 音（オリジナル。既存の有名スロットの音はコピーしない。iOSは操作後に解禁） ---------- */
@@ -755,9 +796,22 @@ function injectStyles() {
   .yw-stats > div { background: rgba(255,255,255,.1); border-radius: 10px; padding: 8px; text-align: center; }
   .yw-stats span { display: block; font-size: 11px; color: #bbc; }
   .yw-stats b { font-size: 18px; }
+  /* 当たり時の画面シェイク（演出強め） */
+  .yw-game.yw-shake { animation: yw-shake .5s ease; }
+  @keyframes yw-shake { 0%,100%{transform:translate(0,0)} 15%{transform:translate(-6px,3px) rotate(-.6deg)} 30%{transform:translate(5px,-4px) rotate(.6deg)} 45%{transform:translate(-5px,-2px)} 60%{transform:translate(4px,3px) rotate(-.4deg)} 75%{transform:translate(-3px,2px)} }
+  /* 全画面のド派手演出（演出強めのときだけ JS が on にする・reduced-motion では付けない） */
+  #yw-screen-fx { position: fixed; inset: 0; pointer-events: none; z-index: 2147483000; opacity: 0; }
+  #yw-screen-fx.flash-win { animation: yw-screenwin .5s ease; background: linear-gradient(135deg,#ff0080,#ff8c00,#ffee00,#00c853,#00b0ff,#aa00ff); background-size: 300% 300%; }
+  #yw-screen-fx.flash-fever { animation: yw-screenfever .22s steps(2) 6; background: linear-gradient(135deg,#ff0080,#ff8c00,#ffee00,#00c853,#00b0ff,#aa00ff); background-size: 300% 300%; }
+  @keyframes yw-screenwin { 0%{opacity:0} 20%{opacity:.5} 100%{opacity:0} }
+  @keyframes yw-screenfever { 0%{opacity:.05; background-position:0% 50%} 50%{opacity:.5; background-position:100% 50%} 100%{opacity:.05; background-position:0% 50%} }
+  #yw-screen-fx.fever-on { opacity: 1; animation: yw-screenfeveron 1.1s ease-in-out infinite; background:
+      radial-gradient(120% 90% at 50% 50%, transparent 52%, rgba(255,0,128,.0) 55%, rgba(255,0,128,.28) 78%, rgba(0,176,255,.42) 100%); }
+  @keyframes yw-screenfeveron { 0%,100%{filter:hue-rotate(0deg); opacity:.55} 50%{filter:hue-rotate(320deg); opacity:.9} }
   @media (prefers-reduced-motion: reduce) {
     .yw-game.is-fever, .yw-feverstart { animation: none; }
-    .yw-bounce, .yw-reels.yw-win, .yw-reel.yw-reach, .yw-reel.yw-reach-strong, .yw-game.yw-celebrate, .yw-spark, .yw-coin, .yw-reels.yw-zoomfx { animation: none; transform: none; }
+    .yw-bounce, .yw-reels.yw-win, .yw-reel.yw-reach, .yw-reel.yw-reach-strong, .yw-game.yw-celebrate, .yw-game.yw-shake, .yw-spark, .yw-coin, .yw-reels.yw-zoomfx { animation: none; transform: none; }
+    #yw-screen-fx { display: none; }
   }
   `;
   const style = document.createElement("style");
