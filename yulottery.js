@@ -3,7 +3,8 @@
 
    ・抽選・購入・賞金・公開/非公開の判定はすべて通知 Worker（/yuslot の lottery* アクション）が行う。
      ここは Worker が返した内容を表示して、購入ボタンを押したら Worker に頼むだけ。Firebase には直接触れない。
-   ・毎週金曜 14:30（日本時間）に抽選。名前・ボーナスは毎週変わり、6週に1回ビッグイベント（Worker が決める）。
+   ・毎週金曜 14:30（日本時間）に抽選。名前・賞金は毎週変わり、6週に1回ビッグイベント（Worker が決める）。
+   ・全1,000口の枠から券ごとに当たりが決まる（1等は全体で1本）。枚数が多いほど当たりやすい。確率は Worker が返した値から計算して表示。
    ・演出（紙吹雪・数字のカウント）はブラウザ内だけ。当選のお祝いは、その回の結果を初めて見たときに1回だけ出す
      （見たかどうかは端末内 localStorage に保存。Firebase には保存しない）。
 ========================================================= */
@@ -86,10 +87,13 @@ function draw() {
   const admin = st.isTopAdmin ? `<div class="yw-admin"><span>管理者メニュー：宝くじ売り場の公開状態 <b>${st.published ? "公開中" : "非公開（準備中）"}</b></span>
       <button type="button" id="ylToggle" class="yw-btn yw-btn-sub">${st.published ? "非公開にする" : "公開する"}</button></div>` : "";
   const medals = ["🥇", "🥈", "🥉"];
-  const tiers = (st.tiers || []).map((t, i) => `<div class="yl-tier"><span>${medals[i] || "🎖"} ${esc(t.name)}</span><span class="yl-tier-n">${t.winners}名</span><b>1名 ${fmt(t.prize)} <small>コイン</small></b></div>`).join("");
+  const pool = st.pool || 1000;
+  const pct = (n) => { const v = (n / pool) * 100; return (v >= 1 ? String(Math.round(v * 10) / 10) : String(Math.round(v * 100) / 100)) + "%"; };
+  const tiers = (st.tiers || []).map((t, i) => `<div class="yl-tier"><span>${medals[i] || "🎖"} ${esc(t.name)}</span><span class="yl-tier-n">${t.count}本・1枚 ${pct(t.count)}</span><b>${fmt(t.prize)} <small>コイン</small></b></div>`).join("");
+  const top = (st.tiers || [])[0];
   const last = st.last ? `<div class="yl-card yl-last"><h3>📣 前回の結果：${esc(st.last.name)}</h3>
-      <p class="yl-sub">賞金総額 ${fmt(st.last.pot)} コイン ／ 販売 ${fmt(st.last.tickets)} 枚</p>
-      ${(st.last.winners || []).length ? st.last.winners.map((w) => `<div class="yl-winner"><span>${esc(w.tier)}</span><span>${esc(w.name)} さん</span><b>+${fmt(w.amount)}</b></div>`).join("") : `<p class="yl-sub">当選者なし（賞金は持ち越し）</p>`}
+      <p class="yl-sub">販売 ${fmt(st.last.tickets)} 枚 ／ 当選 ${fmt(st.last.winnerCount || 0)} 口 ／ 賞金 ${fmt(st.last.paid || 0)} コイン</p>
+      ${(st.last.winners || []).length ? st.last.winners.map((w) => `<div class="yl-winner"><span>${esc(w.tier)}</span><span>${esc(w.name)} さん</span><b>+${fmt(w.amount)}</b></div>`).join("") : `<p class="yl-sub">1〜3等は出ませんでした</p>`}
       ${st.last.myWin > 0 ? `<div class="yl-mywin">🎉 あなたは ${fmt(st.last.myWin)} コイン当選しました！</div>` : ""}</div>` : "";
   ctx.root.innerHTML = `${head}${admin}
     <div class="yl-banner ${e.big ? "big" : ""}">
@@ -97,11 +101,11 @@ function draw() {
       <div class="yl-name">${esc(e.name)}</div>
       <div class="yl-draw">抽選：${fmtDraw(e.drawMs)}（毎週金曜 14:30）</div>
       <div class="yl-count" id="ylCount"></div>
-      <div class="yl-pot-label">賞金総額</div>
-      <div class="yl-pot"><span id="ylPot">${fmt(st.pot)}</span><small>コイン</small></div>
-      ${st.carryIn > 0 ? `<div class="yl-carry">うち前回からの持ち越し ${fmt(st.carryIn)} コイン</div>` : ""}
+      <div class="yl-pot-label">1等 賞金（全体で1本）</div>
+      <div class="yl-pot"><span id="ylPot">${fmt(top ? top.prize : 0)}</span><small>コイン</small></div>
+      <div class="yl-carry">1枚 ${e.price} コイン ／ 全${fmt(pool)}口</div>
     </div>
-    <div class="yl-card"><h3>🏆 賞金</h3>${tiers}<p class="yl-sub">売上の70%＋今回のボーナス（${fmt(e.bonus)}）が賞金に。当たらなかった分は次回へ持ち越し。販売枚数が増えるほど賞金もアップ！</p></div>
+    <div class="yl-card"><h3>🏆 賞金</h3>${tiers}<p class="yl-sub">券は1枚ごとに、全${fmt(pool)}口の枠から当たりが決まります。たくさん買うほど当たりやすく、7等は元返しです。1等は全体で1本だけ。</p></div>
     <div class="yl-card yl-buy">
       <div class="yl-mine">あなたの宝くじ <b>${fmt(st.myTickets)}枚</b>（この回は最大 ${fmt(st.limits?.maxPerRound)} 枚まで）${st.balance == null ? "" : ` ／ 所持 💰 ${fmt(st.balance)}`}</div>
       <div class="yl-stepper"><button type="button" class="yw-ctl" id="ylMinus" aria-label="へらす">－</button><span class="yl-n" id="ylN">0</span><button type="button" class="yw-ctl" id="ylPlus" aria-label="ふやす">＋</button></div>
