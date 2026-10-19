@@ -2941,6 +2941,7 @@ export function kakuPoolFor(dayId, type) {
   return Math.round(count / (kakuIsWeekend(dayId) ? KAKU_WIN_RATE.weekend : KAKU_WIN_RATE.weekday));
 }
 const KAKU_MAX_PER_DAY = 3, KAKU_REPEAT_WEIGHT = 0.2;
+const KAKU_POOR_BOOST = 4; // 総資産がいちばん少ない人の重みは、いちばん多い人の4倍（当たりやすくなるだけで、確定ではない）
 export const KAKU_MACHINE_NAMES = { yubasic: "ゆうベーシック", yurush: "ゆうラッシュ", yuchance: "ゆうチャンス", yutreasure: "ゆうトレジャー", yurainbow: "ゆうレインボー", yujackpot: "ゆうジャックポット" };
 const KAKU_NPC_NAMES = ["ほしぞら", "みかん", "ひなた", "そらまめ", "もちもち", "さくら", "こはる", "はるか", "ゆうき", "りんご", "ぽんた", "だいふく", "ねこまる", "ことり", "つばさ", "あおぞら", "ひまわり", "にじいろ", "まっちゃ", "きなこ", "わかば", "ふうた", "らいむ", "みずほ", "もも", "ぱんだ", "くるみ", "かずは", "しろくま", "ゆずぽん", "たいよう", "なないろ", "ちくわ", "おにぎり", "どんぐり", "ふわふわ", "きらきら", "しおり", "あんず", "れもん", "すいか", "ぷりん", "こむぎ", "ゆきうさぎ", "ひよこ", "ののか", "あかり", "みどり", "そうた", "かなた", "いちご", "めろん", "こうめ", "とまと", "ぽぷら", "りく", "はなび", "ほたる", "かぜのこ", "つきみ"];
 export const KAKU_NOTIFY_DEFAULTS = { pub: false, same: false, result1: true, result2: true };
@@ -2992,15 +2993,33 @@ export function kakuInitialSlots(dayId) {
 }
 export function kakuNpcName(dayId, i) { return KAKU_NPC_NAMES[(kakuHash("npc:" + dayId) + i) % KAKU_NPC_NAMES.length]; }
 
-/* 抽選：実在の申込者に、足りない人数ぶんの NPC を混ぜた集団から count 回引く。すでに当たった人は ×0.2 の重みを重ね、最大3回まで */
-export function kakuPickWinners({ applicants, poolTarget, count, wins = new Map(), random, dayId }) {
-  const all = applicants.map((a) => ({ uid: a.uid, name: a.name, npc: false }));
+/* 総資産ランキング（rankings/assets。1日1回の集計）から、申込者の「総資産の少なさ」（0＝いちばん多い〜1＝いちばん少ない）。
+   ランキングに載っていない人（新しい人など）は真ん中（0.5）。名前・金額は抽選の計算だけに使い、外には出さない */
+export function kakuPoorness(rows, names) {
+  const totals = (Array.isArray(rows) ? rows : []).map((r) => Number(r?.total)).filter(Number.isFinite);
+  const byName = new Map((Array.isArray(rows) ? rows : []).map((r) => [r?.name, Number(r?.total)]));
+  const out = new Map();
+  for (const name of names) {
+    const mine = byName.get(name);
+    if (!Number.isFinite(mine) || totals.length < 2) { out.set(name, 0.5); continue; }
+    let above = 0, same = 0;
+    for (const t of totals) { if (t > mine) above++; else if (t === mine) same++; }
+    out.set(name, (above + (same - 1) / 2) / (totals.length - 1));
+  }
+  return out;
+}
+
+/* 抽選：実在の申込者に、足りない人数ぶんの NPC を混ぜた集団から count 回引く。すでに当たった人は ×0.2 の重みを重ね、最大3回まで。
+   poor（名前→0〜1）があれば、総資産が少ない人ほど重みを大きくする（最大 KAKU_POOR_BOOST 倍。NPC は実在の申込者の平均の重み＝全体の当選割合は変わらない） */
+export function kakuPickWinners({ applicants, poolTarget, count, wins = new Map(), random, dayId, poor = null }) {
+  const all = applicants.map((a) => ({ uid: a.uid, name: a.name, npc: false, base: poor ? 1 + (KAKU_POOR_BOOST - 1) * (poor.get(a.name) ?? 0.5) : 1 }));
   const npcN = Math.max(0, poolTarget - all.length);
-  for (let i = 0; i < npcN; i++) all.push({ uid: "npc:" + i, name: kakuNpcName(dayId, i), npc: true });
+  const npcBase = all.length ? all.reduce((s, p) => s + p.base, 0) / all.length : 1;
+  for (let i = 0; i < npcN; i++) all.push({ uid: "npc:" + i, name: kakuNpcName(dayId, i), npc: true, base: npcBase });
   const got = new Map(all.map((p) => [p.uid, p.npc ? 0 : (wins.get(p.uid) || 0)]));
   const chosen = [];
   for (let k = 0; k < count; k++) {
-    const w = all.map((p) => { const n = got.get(p.uid); return n >= KAKU_MAX_PER_DAY ? 0 : Math.pow(KAKU_REPEAT_WEIGHT, n); });
+    const w = all.map((p) => { const n = got.get(p.uid); return n >= KAKU_MAX_PER_DAY ? 0 : p.base * Math.pow(KAKU_REPEAT_WEIGHT, n); });
     const total = w.reduce((s, x) => s + x, 0);
     if (total <= 0) break;
     let r = random() * total, idx = 0;
@@ -3043,6 +3062,7 @@ async function kakuWriteSlots(deps, dayId, cur, extra) {
 /* 抽選の実行（冪等：done フラグ＋更新時刻の条件）。type 1＝前日の抽選（30分枠）、2＝当日の抽選（10分枠・抽選用の3個） */
 export async function kakuRunDraw(deps, dayId, type) {
   const doneKey = type === 1 ? "draw1Done" : "draw2Done";
+  let ranking; // 総資産ランキング（申込者がいるときだけ1回読む）
   // 抽選の読み取りと書き込みの間に、申込や先着が入って更新時刻が変わったら、読み直してやり直す（最大4回）。
   // 申込は受付の締切までに入ったものが必ず抽選に入るようにするため（やり直さないと、抽選が行われないままになってしまう）
   for (let attempt = 0; attempt < 4; attempt++) {
@@ -3052,7 +3072,12 @@ export async function kakuRunDraw(deps, dayId, type) {
     const slots = cur.data.slots.map((x) => ({ ...x }));
     const targets = slots.map((x, i) => i).filter((i) => (type === 1 ? slots[i].kind === "pre" : slots[i].kind === "lot"));
     const apps = kakuParseApplicants(type === 1 ? cur.data.app1 : cur.data.app2);
-    const winners = kakuPickWinners({ applicants: apps, poolTarget: kakuPoolFor(dayId, type), count: targets.length, wins: kakuWinsOf(slots), random: deps.random, dayId });
+    if (apps.length && ranking === undefined) {
+      try { const raw = await deps.firestore.getRaw("rankings/assets"); ranking = raw ? decodeFields(raw.fields).users || [] : []; }
+      catch { ranking = []; } // 読めなくても抽選は止めない（全員同じ重み）
+    }
+    const poor = ranking && ranking.length ? kakuPoorness(ranking, apps.map((a) => a.name)) : null;
+    const winners = kakuPickWinners({ applicants: apps, poolTarget: kakuPoolFor(dayId, type), count: targets.length, wins: kakuWinsOf(slots), random: deps.random, dayId, poor });
     kakuShuffle(targets, deps.random).forEach((slotIdx, k) => {
       const w = winners[k]; if (!w) return;
       slots[slotIdx] = { ...slots[slotIdx], uid: w.npc ? "" : w.uid, name: w.name, npc: w.npc };
