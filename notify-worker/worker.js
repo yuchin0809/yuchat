@@ -2921,7 +2921,7 @@ async function lotteryBuy(deps, uid, body) {
      ／13:20〜15:20 は30分×4枠。合計18枠。
    ・前日の抽選（30分枠13個）：前日 12:00 に公開・申込開始 → 21:00 締切・抽選 → 当日 7:50 に結果のお知らせ。
    ・当日の抽選（10分枠3個）：7:00〜10:45 に申込 → 10:45 に抽選。先着（10分枠2個・1人1枠）：11:45 から。
-   ・抽選は「ダミー（NPC）の仮想申込者」を混ぜて、実在の申込者が当たる確率が約1/3になるようにする（NPC は結果に「NPC」と表示。アカウントは作らない）。
+   ・抽選は「ダミー（NPC）の仮想申込者」を混ぜて、実在の申込者が当たる確率が、平日は約1/3・土日は約10%になるようにする（アカウントは作らない）。
      1人が同じ日に当たれるのは最大3枠。2枠目・3枠目は当たりにくい重み（×0.2）をかける。
    ・遊べるのは、その時間の枠をとった人だけ（NPC・空き枠は誰も遊べない）。8:00 前と 15:20 以降は通常の台。
    ・確変中は、すべての当たりの確率を台ごとの倍率で上げる（SLOT_KAKU_RATE）。
@@ -2933,7 +2933,13 @@ export const KAKU_EPOCH = "2026-10-20";                 // 最初の確変の日
 const KAKU_JST = 9 * 3600000, KAKU_DAY_MS = 86400000, KAKU_MIN = 60000;
 const KAKU_PRE_STARTS = [480, 510, 540, 570, 600, 630, 660, 690, 720, 800, 830, 860, 890]; // 30分枠（8:00〜12:00／13:20〜14:50）
 const KAKU_SAME_STARTS = [750, 760, 770, 780, 790];     // 12:30〜13:10 の10分枠（当日分）
-const KAKU_PRE_POOL = 39, KAKU_SAME_POOL = 9;           // 申込者＋NPC の人数（枠数の3倍＝実在の人が当たる確率が約1/3）
+const KAKU_WIN_RATE = { weekday: 1 / 3, weekend: 0.1 };  // 実在の申込者が抽選に当たる割合（平日は約1/3、土日は約10%）
+export function kakuIsWeekend(dayId) { const w = new Date(kakuDayStart(dayId) + KAKU_JST).getUTCDay(); return w === 0 || w === 6; }
+/* 申込者＋NPC の人数＝枠数 ÷ 当たる割合（申込者が少ないほど NPC が多く混ざる。申込者がこれより多い日は、割合はもっと低くなる） */
+export function kakuPoolFor(dayId, type) {
+  const count = type === 1 ? KAKU_PRE_STARTS.length : 3;
+  return Math.round(count / (kakuIsWeekend(dayId) ? KAKU_WIN_RATE.weekend : KAKU_WIN_RATE.weekday));
+}
 const KAKU_MAX_PER_DAY = 3, KAKU_REPEAT_WEIGHT = 0.2;
 export const KAKU_MACHINE_NAMES = { yubasic: "ゆうベーシック", yurush: "ゆうラッシュ", yuchance: "ゆうチャンス", yutreasure: "ゆうトレジャー", yurainbow: "ゆうレインボー", yujackpot: "ゆうジャックポット" };
 const KAKU_NPC_NAMES = ["ほしぞら", "みかん", "ひなた", "そらまめ", "もちもち", "さくら", "こはる", "はるか", "ゆうき", "りんご", "ぽんた", "だいふく", "ねこまる", "ことり", "つばさ", "あおぞら", "ひまわり", "にじいろ", "まっちゃ", "きなこ", "わかば", "ふうた", "らいむ", "みずほ", "もも", "ぱんだ", "くるみ", "かずは", "しろくま", "ゆずぽん", "たいよう", "なないろ", "ちくわ", "おにぎり", "どんぐり", "ふわふわ", "きらきら", "しおり", "あんず", "れもん", "すいか", "ぷりん", "こむぎ", "ゆきうさぎ", "ひよこ", "ののか", "あかり", "みどり", "そうた", "かなた", "いちご", "めろん", "こうめ", "とまと", "ぽぷら", "りく", "はなび", "ほたる", "かぜのこ", "つきみ"];
@@ -3046,7 +3052,7 @@ export async function kakuRunDraw(deps, dayId, type) {
     const slots = cur.data.slots.map((x) => ({ ...x }));
     const targets = slots.map((x, i) => i).filter((i) => (type === 1 ? slots[i].kind === "pre" : slots[i].kind === "lot"));
     const apps = kakuParseApplicants(type === 1 ? cur.data.app1 : cur.data.app2);
-    const winners = kakuPickWinners({ applicants: apps, poolTarget: type === 1 ? KAKU_PRE_POOL : KAKU_SAME_POOL, count: targets.length, wins: kakuWinsOf(slots), random: deps.random, dayId });
+    const winners = kakuPickWinners({ applicants: apps, poolTarget: kakuPoolFor(dayId, type), count: targets.length, wins: kakuWinsOf(slots), random: deps.random, dayId });
     kakuShuffle(targets, deps.random).forEach((slotIdx, k) => {
       const w = winners[k]; if (!w) return;
       slots[slotIdx] = { ...slots[slotIdx], uid: w.npc ? "" : w.uid, name: w.name, npc: w.npc };
@@ -3122,7 +3128,7 @@ async function kakuStatus(deps, uid, body) {
     const cur = now >= t.sameOpen - 2 * 3600000 ? await kakuEnsureDay(deps, today) : await kakuGetDay(deps, today);
     const d = cur ? cur.data : null;
     out.today = {
-      day: today, machine: kakuMachineFor(today), mode: d ? d.mode : "sameDay", times: t,
+      day: today, machine: kakuMachineFor(today), mode: d ? d.mode : "sameDay", times: t, weekend: kakuIsWeekend(today),
       slots: kakuPersonalSlots(d ? d.slots : kakuInitialSlots(today), uid),
       applied1: !!d && (d.app1 || []).some((x) => String(x).startsWith(uid + "\t")),
       applied2: !!d && (d.app2 || []).some((x) => String(x).startsWith(uid + "\t")),
@@ -3132,7 +3138,7 @@ async function kakuStatus(deps, uid, body) {
   if (tomorrow >= KAKU_EPOCH) {
     const t = kakuTimes(tomorrow);
     const cur = now >= t.preOpen ? await kakuGetDay(deps, tomorrow) : null;
-    out.tomorrow = { day: tomorrow, machine: kakuMachineFor(tomorrow), times: t, applied1: !!cur && (cur.data.app1 || []).some((x) => String(x).startsWith(uid + "\t")), mode: cur ? cur.data.mode : "full" };
+    out.tomorrow = { day: tomorrow, machine: kakuMachineFor(tomorrow), times: t, weekend: kakuIsWeekend(tomorrow), applied1: !!cur && (cur.data.app1 || []).some((x) => String(x).startsWith(uid + "\t")), mode: cur ? cur.data.mode : "full" };
   }
   return out;
 }
