@@ -142,7 +142,7 @@ function renderShop() {
       <button type="button" class="yw-shop-card" id="ywOpenSlot">
         <div class="yw-shop-banner yw-slot-banner"><span>🎰</span></div>
         <div class="yw-shop-body"><div class="yw-shop-name">ゆうスロ${state.published ? "" : " <span class=\"yw-badge\">準備中</span>"}</div>
-          <div class="yw-shop-desc">6台のスロット。777やオリジナル絵柄で大当たり＆FEVER！営業時間 7:00〜21:00。</div></div>
+          <div class="yw-shop-desc">6台のスロット。777やオリジナル絵柄で大当たり＆FEVER！営業時間 7:00〜23:00。</div></div>
       </button>
       <button type="button" class="yw-shop-card" id="ywOpenLottery">
         <div class="yw-shop-banner yw-lottery-banner"><span>🎟</span></div>
@@ -174,7 +174,7 @@ async function refreshLobby() {
 }
 function renderLobby() {
   const seats = state.lobbySeats || {};
-  const closedNote = state.open ? "" : `<div class="yw-notice-strip">⏰ ただいま営業時間外です（遊べるのは 7:00〜21:00）。</div>`;
+  const closedNote = state.open ? "" : `<div class="yw-notice-strip">⏰ ただいま営業時間外です（遊べるのは 7:00〜23:00）。</div>`;
   const cards = MACHINES.map((m) => {
     const s = seats[m.id] || { occupied: false };
     const busy = s.occupied && !s.mine;
@@ -224,7 +224,7 @@ async function seat(machineId) {
   } catch (e) {
     if (e.code === "seat_taken") alert("ほかの人が先に着席しました。別の台をお選びください。");
     else if (e.code === "not_published") { state.published = false; state.screen = "preparing"; render(); }
-    else if (e.code === "closed") { state.open = false; alert("ただいま営業時間外です（7:00〜21:00）。"); refreshLobby(); }
+    else if (e.code === "closed") { state.open = false; alert("ただいま営業時間外です（7:00〜23:00）。"); refreshLobby(); }
     else alert("着席できませんでした（" + (e.code || "エラー") + "）");
   } finally { state.busy = false; }
 }
@@ -321,7 +321,7 @@ function canAfford() { return state.freeSpins > 0 || state.balance >= state.mach
 
 async function startSpin(autoDriven) {
   if (state.spinning || state.busy || state.awaitingFever) return;
-  if (!state.open) { showMsg("営業時間外です（7:00〜21:00）。", "warn"); stopAuto(); return; }
+  if (!state.open) { showMsg("営業時間外です（7:00〜23:00）。", "warn"); stopAuto(); return; }
   if (!canAfford()) { showMsg("コインが足りません。", "warn"); stopAuto(); return; }
   state.spinning = true; state.busy = true; state.reaching = false;
   state.autoDriven = !!(autoDriven || state.auto);
@@ -342,7 +342,7 @@ async function startSpin(autoDriven) {
 }
 function handleSpinError(e) {
   if (e.code === "no_funds") { showMsg("コインが足りません。", "warn"); stopAuto(); setSpinEnabled(true); return; }
-  if (e.code === "closed") { state.open = false; showMsg("営業時間が終了しました（21:00）。精算して退出します。", "warn"); stopAuto(); finishAndExitSoon(); return; }
+  if (e.code === "closed") { state.open = false; showMsg("営業時間が終了しました（23:00）。精算して退出します。", "warn"); stopAuto(); finishAndExitSoon(); return; }
   if (e.code === "day_rollover" || e.code === "session_expired") { showMsg("セッションが切り替わりました。精算して退出します。", "warn"); stopAuto(); finishAndExitSoon(); return; }
   if (e.code === "not_published") { showMsg("ただいま非公開になりました。精算して退出します。", "warn"); stopAuto(); finishAndExitSoon(); return; }
   if (e.code === "bad_session") { showMsg("セッションが無効です。もう一度着席してください。", "warn"); stopAuto(); backToLobbySoon(); return; }
