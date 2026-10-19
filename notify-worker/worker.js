@@ -2825,6 +2825,7 @@ async function lotteryStatus(deps, uid, body) {
       id: prevId, name: prev.name, big: prev.big === true, drawMs: prev.drawMs, tickets: prev.tickets, paid: prev.paid,
       numbers: pn.filter((n) => topTiers.has(n.tier)).map((n) => { const h = ws.find((w) => w.number === n.number); return { tier: n.tier, number: n.number, name: h ? h.name : null }; }),
       winnerCount: ws.length,
+      tiers: lotteryTiersFor(Number(prev.scale) || 1).map((t) => ({ ...t, hit: ws.filter((w) => w.tier === t.name).length })), // 抽選会ショー用（その回の賞金と、等級ごとの当選口数）
       myWins: ws.filter((w) => w.uid === uid).map((w) => ({ tier: w.tier, number: w.number, amount: w.amount })),
       myWin: ws.filter((w) => w.uid === uid).reduce((s, w) => s + (Number(w.amount) || 0), 0)
     } : null

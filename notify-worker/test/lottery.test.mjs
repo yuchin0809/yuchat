@@ -406,6 +406,9 @@ test("状態の取得：自分の番号・残り枚数・等級・前回の結�
   assert.ok(last.numbers.every((n) => n.name), "全部売れたので当選者の名前がある");
   const round = fs.plain("lotteryRounds/2026-10-23");
   assert.equal(last.winnerCount, round.winners.length);
+  assert.equal(last.tiers.length, 8);
+  assert.equal(last.tiers.reduce((n, t) => n + t.hit, 0), round.winners.length, "等級ごとの当選口数の合計＝当選数");
+  assert.equal(last.tiers[0].prize, 10000); assert.equal(last.tiers[0].hit, 1);
   let myTotal = 0; for (let i = 0; i < 30; i++) {
     const st = await handleYuslotAction(deps, `id${i}`, { action: "lotteryStatus", username: `u${i}` });
     assert.equal(st.last.myWin, round.winners.filter((w) => w.uid === `id${i}`).reduce((s, w) => s + w.amount, 0));
