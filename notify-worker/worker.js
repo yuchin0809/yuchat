@@ -2135,12 +2135,12 @@ export const SLOT_MACHINES = {
   // rates：台ごとの小当たり（さくらんぼ/ベル/スイカ）の確率。料金が高い台ほど還元率が下がるように調整してある。
   //   当たりやすさ（還元率）の目標：Basic95 / Rush92 / Chance90 / Treasure88 / Rainbow85 / Jackpot82（%）。
   //   確率・配当はここだけで管理し、演出では一切変えない。実測はシミュレーション（yuslot-sim.mjs）で検証する。
-  yubasic:    { price: 1, special: "orig",    specialRate: 1 / 400, rates: { cherry: 0.0830, bell: 0.0691, watermelon: 0.0553 } },
-  yurush:     { price: 2, special: "orig",    specialRate: 1 / 450, rates: { cherry: 0.0864, bell: 0.0720, watermelon: 0.0576 } },
-  yuchance:   { price: 3, special: "triple7", specialRate: 1 / 500, rates: { cherry: 0.0880, bell: 0.0734, watermelon: 0.0586 } },
-  yutreasure: { price: 5, special: "triple7", specialRate: 1 / 600, rates: { cherry: 0.0909, bell: 0.0758, watermelon: 0.0606 } },
-  yurainbow:  { price: 7, special: "triple7", specialRate: 1 / 700, rates: { cherry: 0.0896, bell: 0.0747, watermelon: 0.0598 } },
-  yujackpot:  { price: 9, special: "triple7", specialRate: 1 / 800, rates: { cherry: 0.0892, bell: 0.0744, watermelon: 0.0594 } }
+  yubasic:    { price: 1, special: "orig",    specialRate: 1 / 320, rates: { cherry: 0.0750, bell: 0.0625, watermelon: 0.0501 } },
+  yurush:     { price: 2, special: "orig",    specialRate: 1 / 360, rates: { cherry: 0.0816, bell: 0.0680, watermelon: 0.0544 } },
+  yuchance:   { price: 3, special: "triple7", specialRate: 1 / 400, rates: { cherry: 0.0848, bell: 0.0707, watermelon: 0.0565 } },
+  yutreasure: { price: 5, special: "triple7", specialRate: 1 / 480, rates: { cherry: 0.0893, bell: 0.0744, watermelon: 0.0596 } },
+  yurainbow:  { price: 7, special: "triple7", specialRate: 1 / 560, rates: { cherry: 0.0896, bell: 0.0747, watermelon: 0.0598 } },
+  yujackpot:  { price: 9, special: "triple7", specialRate: 1 / 640, rates: { cherry: 0.0892, bell: 0.0744, watermelon: 0.0594 } }
 };
 export const SLOT_RULES = {
   // 既定値（台ごとに rates で上書きしないときに使う）。freeReplay 以下は全台共通。
