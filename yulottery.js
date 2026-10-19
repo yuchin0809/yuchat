@@ -6,9 +6,11 @@
    ・毎週金曜 14:30（日本時間）に抽選。名前・賞金は毎週変わり、6週に1回ビッグイベント（Worker が決める）。
    ・券には番号（30組×100番＝全3,000通り）が付く。買い方は「連番」（同じ組の続き番号）か「バラ」（ランダム）。番号の割り当て・当選番号・
      前後賞（1等の前後の番号）はすべて Worker が決める。1等は全体で1本。確率は Worker が返した値から計算して表示。
-   ・演出（紙吹雪・数字のカウント）はブラウザ内だけ。当選のお祝いは、その回の結果を初めて見たときに1回だけ出す
-     （見たかどうかは端末内 localStorage に保存。Firebase には保存しない）。
+   ・結果発表は「抽選会ショー」（yulotteryshow.js）。ブラウザ内の演出だけで、Worker が確定した結果を見せる。
+     14:30 に売り場を開いていれば、結果が出た瞬間に自動で始まる。あとから開いたときは、買った回（または当選した回）の結果を初めて見るとき
+     に1回だけ自動で流れる（見た・買ったは端末内 localStorage に保存。Firebase には保存しない）。「もう一度見る」ボタンでいつでも再生できる。
 ========================================================= */
+import { playLotteryShow, stopLotteryShow } from "./yulotteryshow.js?v=20261019-show1";
 
 let ctx = null;          // { root, api, esc, sfx, onBack }
 let st = null;           // 直近の lotteryStatus
@@ -20,7 +22,10 @@ let lastBought = "";    // 直前に買った番号の表示（買い直した�
 let offset = 0;          // serverNowMs - Date.now()
 let lastLoadAt = 0;
 let stylesDone = false;
-const shownWin = new Set();
+const shownShow = new Set();   // この画面を開いている間に、もう流した回
+let waiting = null;            // 抽選待ち中 { id: 回ID, until: 待つ期限(ms) }（時刻を過ぎたら、結果が出るまで短い間隔で確かめる）
+let active = false;            // この画面を開いている間だけ true
+let playing = false;
 
 const fmt = (n) => Number(n || 0).toLocaleString("ja-JP");
 const DAYS = ["日", "月", "火", "水", "木", "金", "土"];
@@ -54,11 +59,14 @@ function fmtRemain(ms) {
 export function stopLottery() {
   if (timer) { clearInterval(timer); timer = null; }
   busy = false;
-  document.querySelectorAll(".yl-winmask").forEach((e) => e.remove()); // 当選のお祝いは画面の外（body 直下）に出すので、離れるときに消す
+  waiting = null;
+  active = false;
+  stopLotteryShow(); // 抽選会ショーは画面全体を覆う（body 直下）ので、離れるときに消す
 }
 
 export function renderLottery(c) {
   ctx = c;
+  active = true;
   lastBought = "";
   injectStyles();
   ctx.root.innerHTML = `<div class="yl-head"><button type="button" class="yw-back" id="ylBack">← お店の一覧</button><h2>🎟 ゆう宝くじ売り場</h2></div><div class="yl-card yl-msg">読み込み中…</div>`;
@@ -111,6 +119,7 @@ function draw() {
   const top = (st.tiers || [])[0];
   const last = st.last ? `<div class="yl-card yl-last"><h3>📣 前回の結果：${esc(st.last.name)}</h3>
       <p class="yl-sub">販売 ${fmt(st.last.tickets)} 枚 ／ 当選 ${fmt(st.last.winnerCount || 0)} 口 ／ 賞金 ${fmt(st.last.paid || 0)} コイン</p>
+      <button type="button" class="yw-btn yl-replay" id="ylReplay">🎬 抽選会をもう一度見る</button>
       ${(st.last.numbers || []).map((w) => `<div class="yl-winner"><span>${esc(w.tier)}</span><span>${fmtNo(w.number)}　${w.name ? esc(w.name) + " さん" : "<small>（売れ残り）</small>"}</span></div>`).join("")}
       ${(st.last.myWins || []).length ? `<div class="yl-mywin">🎉 あなたの当選：${st.last.myWins.map((w) => `${esc(w.tier)} ${fmtNo(w.number)}（+${fmt(w.amount)}）`).join("、")}<br>合計 ${fmt(st.last.myWin)} コイン</div>` : ""}</div>` : "";
   const mineNums = (st.myNumbers || []).length ? `<details class="yl-nums"><summary>あなたの番号を見る（${fmt(st.myNumbers.length)}枚）</summary><p>${esc(fmtNumbers(st.myNumbers))}</p></details>` : "";
@@ -146,6 +155,7 @@ function draw() {
     ctx.root.querySelectorAll("[data-mode]").forEach((x) => x.classList.toggle("on", x.getAttribute("data-mode") === buyMode));
   }));
   $("#ylBuy")?.addEventListener("click", buy);
+  $("#ylReplay")?.addEventListener("click", () => startShow(st.last));
   updateBuyUi();
   tick();
 }
@@ -171,15 +181,18 @@ function tick() {
   const e = st.event, now = nowMs();
   if (now < e.closeMs) el.textContent = `販売締切まで ${fmtRemain(e.closeMs - now)}`;
   else if (now < e.drawMs) el.textContent = `締切済み・抽選まで ${fmtRemain(e.drawMs - now)}`;
-  else el.textContent = "抽選中…まもなく結果発表！";
+  else el.textContent = "🥁 抽選中…まもなく結果発表！";
   if (st.open && now >= e.closeMs) { st.open = false; updateBuyUi(); }
 }
 function startTimer() {
   if (timer) clearInterval(timer);
   timer = setInterval(() => {
     tick();
-    // 抽選時刻を過ぎたら、結果と次の回を読み直す（抽選は数十秒おくれることがあるので、20秒おきに確かめる）
-    if (st?.event && nowMs() >= st.event.drawMs && Date.now() - lastLoadAt > 20000 && !busy) load();
+    // 抽選時刻を過ぎたら、結果が出るまで6秒おきに読み直す（抽選は通常1分以内に終わる。5分たっても出なければ待つのをやめる）
+    if (!st?.event || playing || busy) return;
+    if (!waiting && nowMs() >= st.event.drawMs) waiting = { id: st.event.id, until: st.event.drawMs + 5 * 60000 };
+    if (waiting && nowMs() > waiting.until) waiting = null;
+    if (waiting && Date.now() - lastLoadAt > 6000) load();
   }, 1000);
 }
 
@@ -209,6 +222,7 @@ async function buy() {
   try {
     const r = await ctx.api("lotteryBuy", { count: buyCount, mode: buyMode });
     msg = `🎟 ${buyCount}枚 購入しました！ あなたの番号：${fmtNumbers(r && r.numbers)}`;
+    markBought(st.event.id);
     if (ctx.sfx && ctx.sfx.buy) ctx.sfx.buy();
     if (!reduced()) confetti(14);
   } catch (e) {
@@ -219,24 +233,33 @@ async function buy() {
   await load();             // 残高・枚数・番号を最新に（メッセージは再描画後も残す）
 }
 
-/* 前回の結果で自分が当選していたら、その回につき1回だけお祝い（端末内に「見た」と保存） */
+/* 抽選会ショーを流す条件：
+   ・14:30 に開いていて、待っていた回の結果が出たとき → 自動で流す
+   ・あとから開いたとき → その回を買った（または当選した）人が、初めて見るときだけ自動で流す。それ以外は「見る」ボタン */
 function maybeReveal() {
   const l = st && st.last;
-  if (!l || !(l.myWin > 0) || shownWin.has(l.id)) return;
-  shownWin.add(l.id);
-  const key = "yl_seen_" + l.id;
-  try { if (localStorage.getItem(key)) return; localStorage.setItem(key, "1"); } catch (_) { /* 保存できなくても、この画面を開いている間は1回だけ */ }
-  showWin(l);
+  if (!l || playing) return;
+  const live = !!waiting && l.id === waiting.id;
+  if (live) waiting = null;
+  if (shownShow.has(l.id)) return;
+  const bought = hasBought(l.id) || l.myWin > 0;
+  if (!live && !bought) return;
+  let seen = false;
+  try { seen = !!localStorage.getItem("yl_seen_" + l.id); } catch (_) { /* 保存できなくても、この画面を開いている間は1回だけ */ }
+  if (seen && !live) return;
+  shownShow.add(l.id);
+  try { localStorage.setItem("yl_seen_" + l.id, "1"); } catch (_) { /* 何もしない */ }
+  startShow(l);
 }
-function showWin(l) {
-  const mask = document.createElement("div");
-  mask.className = "yl-winmask";
-  mask.innerHTML = `<div class="yl-winbox"><div class="yl-wintitle">🎉 当選おめでとう！ 🎉</div><div class="yl-winname">${ctx.esc(l.name)}</div>
-    <div class="yl-winamount">+${fmt(l.myWin)} <small>コイン</small></div><p>${(l.myWins || []).map((w) => `${ctx.esc(w.tier)} ${fmtNo(w.number)}`).join("、")}</p><p>賞金はもう あなたのコインに入っています。</p><button type="button" class="yw-btn" id="ylWinClose">とじる</button></div>`;
-  document.body.appendChild(mask); // 売り場の再描画（残高の更新など）で消えないように、画面全体を覆う置き場に出す
-  if (ctx.sfx && ctx.sfx.win) ctx.sfx.win();
-  if (!reduced()) confetti(60, mask);
-  mask.querySelector("#ylWinClose")?.addEventListener("click", () => mask.remove());
+function hasBought(id) { try { return !!localStorage.getItem("yl_bought_" + id); } catch (_) { return false; } }
+function markBought(id) { try { localStorage.setItem("yl_bought_" + id, "1"); } catch (_) { /* 何もしない */ } }
+async function startShow(l) {
+  if (playing) return;
+  playing = true;
+  try { await playLotteryShow(ctx, l, { bought: hasBought(l.id) || l.myWin > 0 }); }
+  catch (_) { /* 演出に失敗しても売り場は使える */ }
+  playing = false;
+  if (active && ctx && st) load();   // 残高（賞金）を最新に（途中で売り場を離れていたら何もしない）
 }
 
 const COLORS = ["#ff2d78", "#ff8a00", "#ffe14a", "#17e36a", "#17b6ff", "#b14cff", "#ffffff"];
@@ -297,13 +320,8 @@ function injectStyles() {
   .yl-mywin { margin-top: 10px; padding: 9px 12px; border-radius: 10px; background: #fff0f5; color: #d4143c; font-weight: 800; text-align: center; }
   .yl-confetti { position: absolute; top: -12px; width: 9px; height: 14px; border-radius: 2px; pointer-events: none; z-index: 5; animation: yl-fall 2.1s linear forwards; }
   @keyframes yl-fall { 0% { transform: translateY(-10px) rotate(0); opacity: 0; } 10% { opacity: 1; } 100% { transform: translateY(420px) rotate(720deg); opacity: 0; } }
-  .yl-winmask { position: fixed; inset: 0; z-index: 2147483200; background: rgba(10,0,30,.72); display: flex; align-items: center; justify-content: center; overflow: hidden; }
-  .yl-winbox { position: relative; text-align: center; background: linear-gradient(160deg,#2b1570,#7a1bd6); color: #fff; border-radius: 20px; padding: 26px 22px; width: min(90vw, 380px); box-shadow: 0 0 40px rgba(255,215,0,.6); animation: yl-pop .5s cubic-bezier(.2,1.4,.4,1); }
-  @keyframes yl-pop { from { transform: scale(.3); opacity: 0; } to { transform: scale(1); opacity: 1; } }
-  .yl-wintitle { font-size: 24px; font-weight: 900; text-shadow: 0 0 12px #ffe14a; }
-  .yl-winname { margin-top: 6px; opacity: .9; }
-  .yl-winamount { font-size: 46px; font-weight: 900; margin: 10px 0; color: #ffe14a; text-shadow: 0 0 16px rgba(255,225,74,.9); } .yl-winamount small { font-size: 16px; }
-  @media (prefers-reduced-motion: reduce) { .yl-banner.big, .yl-bigbadge, .yl-winbox, .yl-confetti { animation: none; } }
+  @media (prefers-reduced-motion: reduce) { .yl-banner.big, .yl-bigbadge, .yl-confetti { animation: none; } }
+  .yl-replay { width: 100%; margin: 8px 0 6px; }
   `;
   const style = document.createElement("style");
   style.id = "yulottery-styles";

@@ -13,7 +13,7 @@
 ========================================================= */
 
 /* 🎟 ゆう宝くじ売り場の画面（別ファイル。Worker の lottery* アクションを呼んで表示するだけ） */
-import { renderLottery, stopLottery } from "./yulottery.js?v=20261019-lottery4";
+import { renderLottery, stopLottery } from "./yulottery.js?v=20261019-lottery5";
 
 /* 6台（料金・特別役は worker.js の SLOT_MACHINES と同じ。表示用の名前・説明・絵文字・豪華さ(tier)を足す） */
 const MACHINES = [
@@ -127,7 +127,8 @@ function openLotteryScreen() {
     root: rootEl, api, esc,
     sfx: {
       buy: () => playSeq([[660, 0.08], [880, 0.1], [1100, 0.12]], 0.03, "triangle", 0.07),
-      win: () => playSeq([[523, 0.12], [659, 0.12], [784, 0.14], [1047, 0.12], [1319, 0.34]], 0.045, "square", 0.11)
+      win: () => playSeq([[523, 0.12], [659, 0.12], [784, 0.14], [1047, 0.12], [1319, 0.34]], 0.045, "square", 0.11),
+      tone: (note, vol, type, when) => playTone(note, vol, type, when) // 抽選会ショー用（ドラムロール・止まる音など）
     },
     onBack: () => { state.screen = "shop"; render(); }
   });
