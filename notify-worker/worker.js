@@ -295,14 +295,16 @@ async function claimBroadcastLog(deps, logId, kind) {
   }
 }
 
-export async function sendBroadcastNotification(deps, logId, data, filterUid = null) {
+export async function sendBroadcastNotification(deps, logId, data, filterUid = null, dataForUid = null) {
   const fs = deps.firestore;
   const claimed = await claimBroadcastLog(deps, logId, data.kind || "");
   if (!claimed) return { skipped: "duplicate" };
 
-  const tokens = (await fs.query("fcmTokens", [], { select: ["uid"] })).filter((d) => !filterUid || filterUid(d.data?.uid)).map((d) => d.id); // filterUid＝通知の好みで、送らない人を外す
+  // filterUid＝通知の好みで、送らない人を外す／dataForUid＝人ごとに中身を変える（null を返した人には送らない。本人の結果だけを届けるため）
+  const targets = (await fs.query("fcmTokens", [], { select: ["uid"] })).filter((d) => !filterUid || filterUid(d.data?.uid)).map((d) => ({ token: d.id, data: dataForUid ? dataForUid(d.data?.uid) : data })).filter((t) => t.data);
+  const tokens = targets.map((t) => t.token);
   let sent = 0, failed = 0, removed = 0;
-  await Promise.all(tokens.map(async (token) => {
+  await Promise.all(targets.map(async ({ token, data }) => {
     try {
       const outcome = await deps.sendFcm(token, data);
       if (outcome.ok) { sent++; return; }
@@ -2166,8 +2168,8 @@ export function slotRates(machineId, kaku = 1) {
     special: (o.special != null ? o.special : m.specialRate) * k
   };
 }
-/* 確変台の倍率（台ごと）。料金が高い台ほど小さい。シミュレーション（notify-worker/yuslot-kaku-sim.mjs）で、30分（自動スピン約900回）の平均が +400 コイン以上になるように決めた */
-export const SLOT_KAKU_RATE = { yubasic: 1.9, yurush: 1.6, yuchance: 1.5, yutreasure: 1.4, yurainbow: 1.4, yujackpot: 1.4 };
+/* 確変台の倍率（台ごと）。料金が高い台ほど小さい。シミュレーション（notify-worker/yuslot-kaku-sim.mjs）で、30分（自動スピン約900回）の平均収支が約 +600 コイン（400〜800の間）になるように決めた */
+export const SLOT_KAKU_RATE = { yubasic: 1.8, yurush: 1.43, yuchance: 1.32, yutreasure: 1.24, yurainbow: 1.23, yujackpot: 1.25 };
 const SLOT_FRUITS = ["cherry", "bell", "watermelon"];
 const SLOT_FLUSH_INTERVAL_MS = 15000;   // クライアントがこの間隔で flush する
 const SLOT_SEAT_GRACE_MS = 90000;       // 復旧猶予（約1分）＋flush の間隔ぶんの余裕
@@ -2388,7 +2390,7 @@ async function yuslotSeat(deps, uid, body) {
 
   // 🌈 確変台は、その時間の枠をとった人だけ（NPC・空き枠は誰も遊べない）
   const kakuRight = await kakuSeatRight(deps, uid, machine, now);
-  if (kakuRight && kakuRight.locked) return { status: 409, error: "kaku_locked", slot: kakuRight.slot };
+  if (kakuRight && kakuRight.locked) return { status: 409, error: "kaku_locked" };
 
   const me = await loadMyUser(deps.firestore, uid, body?.username);
   if (me.error) return me.error;
@@ -3102,7 +3104,10 @@ async function kakuQuick(deps, uid, body) {
   catch (error) { if (isRetryableCommitError(error)) return { status: 409, error: "busy" }; throw error; }
   return { ok: true, slot: idx };
 }
-const kakuPublicSlots = (slots, uid) => (slots || []).map((x) => ({ i: x.i, s: x.s, e: x.e, kind: x.kind, name: x.name || "", npc: x.npc === true, mine: !!uid && x.uid === uid }));
+/* 画面に返すのは「自分の枠」と「先着の空き状況（名前なし）」だけ。ほかの人（NPC を含む）の予定・結果は返さない */
+const kakuPersonalSlots = (slots, uid) => (slots || [])
+  .filter((x) => (!!uid && x.uid === uid) || x.kind === "quick")
+  .map((x) => ({ i: x.i, s: x.s, e: x.e, kind: x.kind, mine: !!uid && x.uid === uid, taken: !!(x.uid || x.name) }));
 async function kakuStatus(deps, uid, body) {
   const now = deps.now(), today = kakuDayId(now), tomorrow = kakuNextDay(today);
   const out = { ok: true, serverNowMs: now, active: today >= KAKU_EPOCH || tomorrow >= KAKU_EPOCH };
@@ -3112,7 +3117,8 @@ async function kakuStatus(deps, uid, body) {
     const d = cur ? cur.data : null;
     out.today = {
       day: today, machine: kakuMachineFor(today), mode: d ? d.mode : "sameDay", times: t,
-      slots: kakuPublicSlots(d ? d.slots : kakuInitialSlots(today), uid),
+      slots: kakuPersonalSlots(d ? d.slots : kakuInitialSlots(today), uid),
+      applied1: !!d && (d.app1 || []).some((x) => String(x).startsWith(uid + "\t")),
       applied2: !!d && (d.app2 || []).some((x) => String(x).startsWith(uid + "\t")),
       draw1Done: !!d && d.draw1Done === true, draw2Done: !!d && d.draw2Done === true
     };
@@ -3134,7 +3140,7 @@ export async function kakuSeatRight(deps, uid, machine, now) {
   const cur = await kakuGetDay(deps, dayId);
   const slots = cur ? cur.data.slots : [];
   const slot = slots.find((x) => x.s <= now && now < x.e);
-  if (!slot || slot.uid !== uid) return { locked: true, slot: slot ? { name: slot.name, npc: slot.npc === true, e: slot.e } : null };
+  if (!slot || slot.uid !== uid) return { locked: true };
   let end = slot.e;
   for (;;) { const nx = slots.find((x) => x.s === end && x.uid === uid); if (!nx) break; end = nx.e; }
   return { end };
@@ -3168,7 +3174,6 @@ async function kakuPushFilter(deps, kind) {
 }
 const kakuMd = (ms) => { const d = new Date(ms + KAKU_JST); return `${d.getUTCMonth() + 1}/${d.getUTCDate()}`; };
 const kakuHm = (ms) => { const d = new Date(ms + KAKU_JST); return `${d.getUTCHours()}:${String(d.getUTCMinutes()).padStart(2, "0")}`; };
-const kakuNameOf = (x) => (x.name ? (x.npc ? `${x.name}(NPC)` : `${x.name}さん`) : "（空き）");
 
 /* 毎分の cron から。予定の時刻（前日12:00公開・前日21:00抽選・7:00・7:50・10:45）の直後10分だけ動く */
 const KAKU_EVENTS = [
@@ -3192,9 +3197,22 @@ export async function runKakuTick(env = {}, scheduledTime = Date.now(), deps = n
   }
   return results;
 }
-async function kakuPush(deps, kind, day, title, body) {
+async function kakuPush(deps, kind, day, title, body, dataForUid = null) {
   const filter = await kakuPushFilter(deps, kind);
-  return sendBroadcastNotification(deps, `kaku-${kind}-${day}`, { kind: "kaku", title, body: truncate(body, 80), link: "./?open=announcements", tag: `kaku-${kind}-${day}` }, filter);
+  return sendBroadcastNotification(deps, `kaku-${kind}-${day}`, { kind: "kaku", title, body: truncate(body, 80), link: "./?open=announcements", tag: `kaku-${kind}-${day}` }, filter, dataForUid);
+}
+/* 抽選の結果は「申し込んだ本人」にだけ届ける（ほかの人の結果は載せない。申し込んでいない人には送らない） */
+export function kakuResultDataFor(d, uid, type, machine, day) {
+  if (!uid) return null;
+  const apps = (type === 1 ? d.app1 : d.app2) || [];
+  if (!apps.some((x) => String(x).startsWith(uid + "\t"))) return null;
+  const mine = (d.slots || []).filter((x) => x.uid === uid && x.kind === (type === 1 ? "pre" : "lot")).sort((a, b) => a.s - b.s);
+  const times = mine.map((x) => `${kakuHm(x.s)}〜${kakuHm(x.e)}`).join("、");
+  const title = type === 1 ? "🌈 確変台の抽選結果" : "🌈 当日分の抽選結果";
+  const body = mine.length
+    ? (type === 1 ? `🎉 当選！ ${times} の枠をゲット。8:00から「${machine}」で遊べます。` : `🎉 当日分に当選！ ${times} の枠をゲット。「${machine}」で遊べます。`)
+    : (type === 1 ? `今回は抽選に外れました。今日の確変台は「${machine}」。当日分の抽選・先着もあります！` : `当日分は外れました…。先着は11:45から！`);
+  return { kind: "kaku", title, body: truncate(body, 80), link: "./?open=announcements", tag: `kaku-result${type}-${day}` };
 }
 export async function kakuRunEvent(deps, name, day) {
   const machine = KAKU_MACHINE_NAMES[kakuMachineFor(day)];
@@ -3210,26 +3228,25 @@ export async function kakuRunEvent(deps, name, day) {
   if (name === "draw2") {
     const r = await kakuRunDraw(deps, day, 2);
     const cur = await kakuGetDay(deps, day, 0);
-    const lots = cur ? cur.data.slots.filter((x) => x.kind === "lot") : [];
-    await kakuPush(deps, "result2", day, "🌈 当日分の抽選結果が出ました", `${lots.map((x) => `${kakuHm(x.s)} ${kakuNameOf(x)}`).join("、")}。先着は11:45から！`);
+    if (cur) await kakuPush(deps, "result2", day, "🌈 当日分の抽選結果", "", (uid) => kakuResultDataFor(cur.data, uid, 2, machine, day));
     return r;
   }
   if (name === "result1") return kakuAnnounceResult(deps, day);
   return { skipped: "unknown" };
 }
-/* 当日 7:50 の結果のお知らせ（📢）。固定IDで1件だけ。プッシュは通知設定に従う */
+/* 当日 7:50：お知らせ（📢）は「今日の確変台と進め方」だけ（誰が当たったかは載せない）。固定IDで1件だけ。
+   抽選結果のプッシュは、前日の抽選に申し込んだ本人にだけ、その人の結果だけを送る */
 export async function kakuAnnounceResult(deps, day) {
   const cur = await kakuEnsureDay(deps, day);
   const d = cur.data, machine = KAKU_MACHINE_NAMES[d.machine];
-  const pre = d.slots.filter((x) => x.kind === "pre");
   const lines = [`今日の確変台は「${machine}」！ 8:00〜15:20、枠をとった人だけが遊べます（還元率がグンと上がります）。`];
   if (d.mode === "sameDay") lines.push("今日は前日の抽選がなく、当日分（12:30〜13:20の10分枠）だけの発売です。");
-  else { lines.push("【前日の抽選結果】"); pre.forEach((x) => lines.push(`${kakuHm(x.s)}〜 ${kakuNameOf(x)}`)); }
-  const q = d.slots.filter((x) => x.kind !== "pre");
-  lines.push("【当日分（10分枠）】7:00〜10:45に抽選の申込、先着は11:45から。" + q.map((x) => `${kakuHm(x.s)}${x.kind === "quick" ? "先着" : "抽選"}`).join("・"));
+  else lines.push("前日の抽選に申し込んだ方には、それぞれの結果をプッシュ通知でお知らせしました。ゆうスロの台の一覧の上の「確変台チケット売り場」でも、自分の予定を確認できます。");
+  lines.push("【当日分（10分枠）】7:00〜10:45に抽選の申込、先着は11:45から。まだ間に合います！");
   const now = new Date(deps.now());
   await deps.firestore.createIfAbsent(`announcements/kaku-${day}`, { title: truncate(`🌈 今日の確変台は「${machine}」！`, 50), body: truncate(lines.join("\n"), 480), createdAt: now, updatedAt: now, createdByUid: "yuuchat-kaku", createdByName: "ゆうスロ確変台" });
-  return kakuPush(deps, "result1", day, "🌈 今日の確変台の抽選結果", `今日の確変台は「${machine}」。8:00から！結果はお知らせで確認できます。`);
+  if (d.mode === "sameDay") return { announced: true };
+  return kakuPush(deps, "result1", day, "🌈 確変台の抽選結果", "", (uid) => kakuResultDataFor(d, uid, 1, machine, day));
 }
 
 export function createDefaultDeps(env, fetchImpl = (...args) => fetch(...args)) {

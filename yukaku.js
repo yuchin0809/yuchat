@@ -14,7 +14,7 @@ let timer = null;
 let busy = false;
 let msg = "";
 let stylesDone = false;
-const openState = { all: false, notify: false };   // 開いている「詳細」を、自動で描き直しても閉じないように覚える
+const openState = { notify: false };   // 開いている「詳細」を、自動で描き直しても閉じないように覚える
 
 const pad = (n) => String(n).padStart(2, "0");
 const nowMs = () => Date.now() + offset;
@@ -45,12 +45,6 @@ export function kakuMachineInfo(machineId) {
   return { inWindow, locked: inWindow && !mine, cur, mine, times: tm };
 }
 
-function slotChip(x, now) {
-  const done = now >= x.e, cur = now >= x.s && now < x.e;
-  const who = x.name ? (x.npc ? `🤖${deps.esc(x.name)}` : deps.esc(x.name)) : (x.kind === "pre" || x.kind === "lot" ? "—" : "先着");
-  return `<div class="yk-chip ${x.mine ? "mine" : ""} ${cur ? "cur" : ""} ${done ? "done" : ""} k-${x.kind}"><b>${hm(x.s)}</b><small>${KIND[x.kind]}</small><span>${who}${x.mine ? " ⭐" : ""}</span></div>`;
-}
-
 export function kakuPanelHtml() {
   const esc = deps.esc;
   if (!data || !data.active) return "";
@@ -63,24 +57,28 @@ export function kakuPanelHtml() {
     const T = t.times;
     html += `<div class="yk-today"><div class="yk-today-name">${mi.emoji} 今日の確変台：<b>${esc(mi.name)}</b></div>
       <div class="yk-sub">${hm(T.playStart)}〜${hm(T.playEnd)}／枠をとった人だけが遊べます（当たりの確率が大きくアップ）</div>`;
-    const mine = t.slots.filter((x) => x.mine);
-    html += mine.length ? `<div class="yk-mine">⭐ あなたの枠：${mine.map((x) => `${hm(x.s)}〜${hm(x.e)}`).join("、")}</div>` : `<div class="yk-sub">今日のあなたの枠はまだありません。</div>`;
+    // 自分の予定だけを表示する（ほかの人の枠・名前は出さない）
+    const mine = t.slots.filter((x) => x.mine).sort((a, b) => a.s - b.s);
+    html += `<div class="yk-mine">⭐ あなたの今日の予定：${mine.length ? mine.map((x) => `${hm(x.s)}〜${hm(x.e)}（${KIND[x.kind]}）`).join("、") : "まだありません"}</div>`;
+    const lotMine = mine.filter((x) => x.kind === "lot").length;
+    if (t.applied1 && t.draw1Done) html += mine.some((x) => x.kind === "pre") ? `<div class="yk-ok">🎉 前日の抽選に当選しました！</div>` : `<div class="yk-sub">前日の抽選は外れでした。当日分の抽選・先着があります！</div>`;
     // 当日分
-    const lots = t.slots.filter((x) => x.kind === "lot"), quicks = t.slots.filter((x) => x.kind === "quick");
-    html += `<div class="yk-sec">当日分（12:30〜13:20の10分枠：抽選${lots.length}・先着${quicks.length}）</div>`;
+    const quicks = t.slots.filter((x) => x.kind === "quick");
+    html += `<div class="yk-sec">当日分（12:30〜13:20の10分枠：抽選3・先着${quicks.length}）</div>`;
     if (now < T.sameOpen) html += `<div class="yk-sub">抽選の申込は ${hm(T.sameOpen)}〜${hm(T.sameClose)}、先着は ${hm(T.quickOpen)} から。</div>`;
-    else if (now < T.sameClose) html += t.applied2 ? `<div class="yk-ok">✓ 当日分の抽選に申込済み（${hm(T.sameClose)}に抽選）</div>` : `<button type="button" class="yk-btn" data-kk="apply" data-which="same">🎟 当日分の抽選に申し込む（${hm(T.sameClose)}まで・無料）</button>`;
+    else if (now < T.sameClose) html += t.applied2 ? `<div class="yk-ok">✓ 当日分の抽選に申込済み（${hm(T.sameClose)}に抽選。結果はあなたにだけ届きます）</div>` : `<button type="button" class="yk-btn" data-kk="apply" data-which="same">🎟 当日分の抽選に申し込む（${hm(T.sameClose)}まで・無料）</button>`;
+    else if (t.applied2) html += lotMine ? `<div class="yk-ok">🎉 当日分の抽選に当選しました！</div>` : `<div class="yk-sub">当日分の抽選は外れでした。${now < T.quickOpen ? `先着は ${hm(T.quickOpen)} から！` : "先着に挑戦してみよう！"}</div>`;
     else html += `<div class="yk-sub">当日分の抽選は終わりました。${now < T.quickOpen ? `先着は ${hm(T.quickOpen)} から！` : ""}</div>`;
-    if (now >= T.sameClose || t.draw2Done) html += `<div class="yk-chips">${lots.map((x) => slotChip(x, now)).join("")}</div>`;
     if (now >= T.quickOpen) {
       html += `<div class="yk-quick">${quicks.map((x) => {
-        const taken = !!x.name, started = now >= x.s;
-        return `<div class="yk-q"><span>${hm(x.s)}〜${hm(x.e)} 先着</span>${taken ? `<em>${x.mine ? "⭐ あなたが獲得！" : deps.esc(x.name) + " さん"}</em>` : started ? `<em>受付終了</em>` : `<button type="button" class="yk-btn small" data-kk="quick" data-slot="${x.i}">先着で申し込む</button>`}</div>`;
+        const started = now >= x.s;
+        return `<div class="yk-q"><span>${hm(x.s)}〜${hm(x.e)} 先着</span>${x.mine ? `<em>⭐ あなたが獲得！</em>` : x.taken ? `<em>売り切れ</em>` : started ? `<em>受付終了</em>` : `<button type="button" class="yk-btn small" data-kk="quick" data-slot="${x.i}">先着で申し込む</button>`}</div>`;
       }).join("")}</div>`;
-    } else if (now >= T.sameClose || true) {
+    } else {
       html += `<div class="yk-sub">先着：${quicks.map((x) => hm(x.s)).join("・")} の枠（${hm(T.quickOpen)}から・1人1枠）</div>`;
     }
-    html += `<details class="yk-all" ${openState.all ? "open" : ""}><summary>今日の全${t.slots.length}枠を見る</summary><div class="yk-chips">${t.slots.map((x) => slotChip(x, now)).join("")}</div>${t.mode === "sameDay" ? `<div class="yk-sub">※今日は前日の抽選がなく、当日分だけの発売です。</div>` : ""}</details></div>`;
+    if (t.mode === "sameDay") html += `<div class="yk-sub">※今日は前日の抽選がなく、当日分だけの発売です。</div>`;
+    html += `</div>`;
   }
   if (tm) {
     const mi = deps.machines[tm.machine] || { name: tm.machine, emoji: "🎰" };
@@ -103,8 +101,7 @@ function notifyHtml() {
 
 export function kakuBind(root) {
   root.querySelectorAll("[data-kk]").forEach((b) => b.addEventListener("click", () => onClick(b)));
-  const det = root.querySelector(".yk-notify"), all = root.querySelector(".yk-all");
-  if (all) all.addEventListener("toggle", () => { openState.all = all.open; });
+  const det = root.querySelector(".yk-notify");
   if (det) det.addEventListener("toggle", async () => {
     openState.notify = det.open;
     if (det.open && !prefs) { try { prefs = (await deps.api("kakuGetNotify")).prefs; } catch (_) { return; } deps.onChange && deps.onChange(); }
@@ -146,10 +143,7 @@ function injectStyles() {
   .yk-btn { display: block; width: 100%; margin: 8px 0; border: none; border-radius: 12px; padding: 11px 10px; font-size: 14px; font-weight: 900; color: #3a2a00; cursor: pointer; background: linear-gradient(135deg,#ffd700,#ff9a00); box-shadow: 0 3px 12px rgba(255,160,0,.5); }
   .yk-btn.small { display: inline-block; width: auto; margin: 0; padding: 7px 14px; font-size: 12px; }
   .yk-quick { display: flex; flex-direction: column; gap: 6px; margin: 6px 0; } .yk-q { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 10px; background: rgba(255,255,255,.14); font-size: 13px; } .yk-q em { font-style: normal; font-weight: 800; color: #ffe14a; }
-  .yk-chips { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; margin: 8px 0; }
-  .yk-chip { display: flex; flex-direction: column; gap: 1px; padding: 6px 8px; border-radius: 10px; background: rgba(255,255,255,.13); font-size: 12px; line-height: 1.3; } .yk-chip b { font-size: 13px; } .yk-chip small { opacity: .75; font-size: 10px; }
-  .yk-chip.mine { background: linear-gradient(135deg,rgba(255,215,0,.55),rgba(255,138,0,.45)); outline: 2px solid #ffd700; } .yk-chip.cur { outline: 2px solid #17e36a; } .yk-chip.done { opacity: .5; }
-  .yk-all summary, .yk-notify summary { cursor: pointer; font-weight: 800; font-size: 13px; margin-top: 10px; } .yk-tomorrow { margin-top: 6px; padding-top: 6px; border-top: 1px dashed rgba(255,255,255,.35); }
+  .yk-notify summary { cursor: pointer; font-weight: 800; font-size: 13px; margin-top: 10px; } .yk-tomorrow { margin-top: 6px; padding-top: 6px; border-top: 1px dashed rgba(255,255,255,.35); }
   .yk-chk { display: block; padding: 5px 0; font-size: 13px; }
   .yw-machine.yw-kaku { position: relative; border: 3px solid transparent; background: linear-gradient(#fff,#fff) padding-box, linear-gradient(120deg,#ff2d78,#ff8a00,#ffe14a,#17e36a,#17b6ff,#b14cff,#ff2d78) border-box; background-size: 100% 100%, 300% 100%; animation: yk-rainbow 4s linear infinite; box-shadow: 0 0 18px rgba(255,160,0,.55), 0 0 30px rgba(177,76,255,.35); }
   @keyframes yk-rainbow { from { background-position: 0 0, 0% 50%; } to { background-position: 0 0, 300% 50%; } }
