@@ -1,0 +1,51 @@
+# 🎟 ゆう宝くじ売り場 オープン（手動実行）
+#
+# ・実行すると：宝くじ売り場を公開／お知らせ（オープンのお知らせ）を投稿／お知らせのプッシュ通知を送る。コインは配らない。
+# ・冪等：何度実行しても、お知らせは1件だけ・プッシュ通知は1回だけ・公開は安全に入れ直すだけ
+#   （.github/notify-worker/lottery-open.mjs の固定IDと notificationLogs で保証）。
+# ・鍵：FIREBASE_SERVICE_ACCOUNT（ゆうダービー・Firestore ルール・お知らせ自動作成・ゆうスロ オープンと同じもの）。未登録なら何もしない。
+# ・テストは .github/notify-worker/** を変更する PR で通知サーバーの CI が実行する（ここでは回さない）。
+
+name: 🎟 ゆう宝くじ売り場 オープン
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lottery-open
+  cancel-in-progress: false
+
+jobs:
+  open:
+    name: ゆう宝くじ売り場 オープン
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 鍵が登録されているか確認
+        id: secret
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          if [ -z "$FIREBASE_SERVICE_ACCOUNT" ]; then
+            echo "::warning::FIREBASE_SERVICE_ACCOUNT が使えないため、宝くじ売り場のオープンをスキップしました"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.secret.outputs.ready == 'true'
+        with:
+          node-version: 22
+
+      - name: 開店（公開・お知らせ・プッシュ通知）
+        if: steps.secret.outputs.ready == 'true'
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: node .github/notify-worker/lottery-open.mjs
