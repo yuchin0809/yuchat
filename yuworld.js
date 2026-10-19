@@ -290,8 +290,9 @@ function setCell(i, sym) { const el = $("#ywC" + i); if (el) el.innerHTML = symb
 function randSym() { return SPIN_POOL[Math.floor(Math.random() * SPIN_POOL.length)]; }
 function setNeighbors(i) { const t = $("#ywT" + i), b = $("#ywB" + i); if (t) t.innerHTML = symbolInner(randSym(), state.machine.id); if (b) b.innerHTML = symbolInner(randSym(), state.machine.id); }
 function resetReelFx() {
-  for (let i = 0; i < 3; i++) { const r = $("#ywReel" + i); if (r) r.classList.remove("yw-reach", "yw-reach-strong", "yw-specialhit"); }
+  for (let i = 0; i < 3; i++) { const r = $("#ywReel" + i); if (r) r.classList.remove("yw-reach", "yw-reach-strong", "yw-specialhit"); const c = $("#ywC" + i); if (c) c.classList.remove("yw-hit"); }
   const reels = $("#ywReels"); if (reels) reels.classList.remove("yw-reach-dim", "yw-zoomfx", "yw-win");
+  rootEl && rootEl.querySelectorAll(".yw-bigtext").forEach((e) => e.remove());
 }
 
 function canAfford() { return state.freeSpins > 0 || state.balance >= state.machine.price; }
@@ -407,7 +408,8 @@ function finishSpin() {
     stopAuto();
     sfxSpecial();
     showMsg(spin.center[0] === "triple7" ? "🎉 7 7 7 大当たり！" : "🎉 オリジナル絵柄で大当たり！", "big");
-    celebrate("special");
+    highlightWinCells();
+    celebrate("special", spin.center[0] === "triple7" ? "７７７ 大当たり!!" : "大当たり!!");
     state.awaitingFever = true;
     renderFeverStartButton();
     setSpinEnabled(false);
@@ -418,7 +420,7 @@ function finishSpin() {
   else if (spin.result === "treasure") { sfxTreasure(); showMsg(`🎁 宝箱から ${spin.prize} コイン！`, "win"); treasureOpen(spin.prize); }
   else if (spin.result === "star") { sfxStar(); showMsg("⭐ 星が揃った！無料スピン +5", "win"); if (!reduced()) burstSparkles($("#ywReels"), fxHigh() ? 10 : 5, "stop"); }
   else if (spin.result === "replay") { sfxReplay(); showMsg("🔄 REPLAY！無料でもう1回", "win"); }
-  else if (spin.coinWin) { sfxWin(); showMsg(`やったね！+${spin.payout}`, "win"); celebrate("win"); }
+  else if (spin.coinWin) { sfxWin(); showMsg(`やったね！+${spin.payout}`, "win"); highlightWinCells(); celebrate("win"); }
   else { /* ハズレ */ }
 
   const autoDriven = state.auto;
@@ -480,7 +482,7 @@ async function onFeverStart() {
   removeFeverStartButton();
   sfxFever();
   updateFeverUI();
-  if (!reduced()) celebrate("fever");
+  celebrate("fever", "FEVER!!");
   showMsg("🌈 FEVER！ 自動回転ボタンでもどうぞ", "fever");
   setSpinEnabled(true);
 }
@@ -576,21 +578,50 @@ function coinRain(n) {
     setTimeout(() => c.remove(), 1600);
   }
 }
-function celebrate(kind) {
+function celebrate(kind, text) {
   flashWin();
   if (reduced()) return;
   const reels = $("#ywReels"), g = $("#ywGame"), tier = state.machine.tier;
   const big = kind === "special" || kind === "fever";
-  const n = (kind === "fever" ? 20 : kind === "special" ? 18 : 10) + (fxHigh() ? tier * 3 : 0);
+  const n = (kind === "fever" ? 24 : kind === "special" ? 22 : 12) + (fxHigh() ? tier * 4 : 0);
   burstSparkles(reels, n, kind === "fever" ? "fever" : "big");
-  coinRain((kind === "special" ? 14 : kind === "fever" ? 16 : 8) + tier * 2);
+  coinRain((kind === "special" ? 18 : kind === "fever" ? 20 : 10) + tier * 2);
   if (g) { g.classList.remove("yw-celebrate"); void g.offsetWidth; g.classList.add("yw-celebrate"); setTimeout(() => g.classList.remove("yw-celebrate"), 1300); }
-  // 演出強め：画面全体を虹色でチカチカ＋画面シェイク（光過敏の配慮で reduced-motion／演出弱めでは出さない）
+  if (big && text) showBigText(text, kind === "win");
+  // 演出強め：白フラッシュ→極彩チカチカ＋画面シェイク＋紙吹雪（光過敏の配慮で reduced-motion／演出弱めでは出さない）
   if (fxHigh()) {
-    screenFlash(big ? (kind === "fever" ? 1400 : 1100) : 600, kind === "fever" ? "fever" : "win");
-    if (big) screenShake();
-    if (kind === "special" && tier >= 6) { burstSparkles(reels, 16, "fever"); coinRain(14); } // ジャックポットは別格
+    if (big) { screenFlash(kind === "fever" ? 1600 : 1200, kind === "fever" ? "fever" : "win"); screenShake(); confetti(kind === "fever" ? 48 : 40 + tier * 2); }
+    else confetti(14); // 通常当たりは全画面フラッシュなし（軽く紙吹雪＋発光だけ）
+    if (kind === "special" && tier >= 6) { burstSparkles(reels, 20, "fever"); coinRain(16); confetti(24); } // ジャックポットは別格
+  } else if (big) { confetti(20); }
+}
+/* 画面中央にデカ文字（パチンコの告知風）。演出弱め・reduced でも“情報”として軽く出す */
+function showBigText(text, small) {
+  const g = $("#ywGame"); if (!g) return;
+  const el = document.createElement("div");
+  el.className = "yw-bigtext" + (small ? " small" : "");
+  el.textContent = text;
+  g.appendChild(el);
+  setTimeout(() => el.remove(), 1000);
+}
+const CONFETTI_COLORS = ["#ff2d78", "#ff8a00", "#ffe14a", "#17e36a", "#17b6ff", "#b14cff", "#ffffff"];
+function confetti(n) {
+  const g = $("#ywGame"); if (!g || reduced()) return;
+  const count = Math.min(fxHigh() ? n : Math.ceil(n / 3), 60);
+  for (let k = 0; k < count; k++) {
+    const c = document.createElement("span");
+    c.className = "yw-confetti";
+    c.style.left = (Math.random() * 100) + "%";
+    c.style.background = CONFETTI_COLORS[k % CONFETTI_COLORS.length];
+    c.style.animationDelay = (Math.random() * 0.4).toFixed(2) + "s";
+    c.style.transform = `rotate(${Math.floor(Math.random() * 360)}deg)`;
+    g.appendChild(c);
+    setTimeout(() => c.remove(), 2100);
   }
+}
+/* 当たりの中央ラインをネオンで光らせる（次のスピンで消す） */
+function highlightWinCells() {
+  for (let i = 0; i < 3; i++) { const el = $("#ywC" + i); if (el) el.parentElement && el.classList.add("yw-hit"); }
 }
 function treasureOpen(prize) {
   if (reduced()) return;
@@ -733,12 +764,13 @@ function injectStyles() {
   .yw-zoomwrap { overflow-x: auto; overflow-y: hidden; display: flex; justify-content: center; }
   .yw-zoom { width: ${BASE_W}px; transform-origin: top center; flex: 0 0 auto; }
 
-  .yw-game { position: relative; overflow: hidden; background: linear-gradient(180deg, #1b1b2e, #2a2a44); border-radius: 18px; padding: 14px; color: #fff; --yw-accent: #9fb3d6; --yw-glow: rgba(255,210,74,.9); }
-  .yw-game.yw-tier2 { background: linear-gradient(180deg,#2a2412,#3a2f16); --yw-accent: #ffcf5a; --yw-glow: rgba(255,207,90,.95); box-shadow: inset 0 0 0 2px rgba(255,207,90,.35); }
-  .yw-game.yw-tier3 { background: linear-gradient(180deg,#201438,#2f1d5a); --yw-accent: #b98bff; --yw-glow: rgba(185,139,255,.95); box-shadow: inset 0 0 0 2px rgba(185,139,255,.4); }
-  .yw-game.yw-tier4 { background: linear-gradient(180deg,#2c1d0c,#4a3115); --yw-accent: #ffb13b; --yw-glow: rgba(255,177,59,.95); box-shadow: inset 0 0 0 2px rgba(255,177,59,.45); }
-  .yw-game.yw-tier5 { background: linear-gradient(135deg,#2a0f3a,#0f2a4a,#0f3a2a); --yw-accent: #76e0ff; --yw-glow: rgba(120,224,255,.95); box-shadow: inset 0 0 0 2px rgba(255,255,255,.18); }
-  .yw-game.yw-tier6 { background: linear-gradient(135deg,#3a2a00,#1a0f3a,#00263a); --yw-accent: #ffd700; --yw-glow: rgba(255,215,0,.95); box-shadow: inset 0 0 0 3px rgba(255,215,0,.5), 0 8px 30px rgba(255,215,0,.15); }
+  .yw-game { position: relative; overflow: hidden; border-radius: 18px; padding: 14px; color: #fff;
+    background: linear-gradient(160deg,#2b1570,#5b1fb0 55%,#141c6e); --yw-accent: #ffd24a; --yw-glow: rgba(255,215,74,.95); box-shadow: inset 0 0 0 2px rgba(255,210,74,.5), 0 8px 26px rgba(120,60,255,.25); }
+  .yw-game.yw-tier2 { background: linear-gradient(160deg,#6a4b00,#b07a00 55%,#5a3600); --yw-accent: #ffd700; --yw-glow: rgba(255,215,0,.98); box-shadow: inset 0 0 0 2px rgba(255,215,0,.6), 0 8px 26px rgba(255,170,0,.3); }
+  .yw-game.yw-tier3 { background: linear-gradient(160deg,#3a0a7a,#7a1bd6 55%,#2a0a66); --yw-accent: #d08bff; --yw-glow: rgba(210,120,255,.98); box-shadow: inset 0 0 0 2px rgba(210,120,255,.6), 0 8px 26px rgba(170,40,255,.3); }
+  .yw-game.yw-tier4 { background: linear-gradient(160deg,#7a3d00,#d86a00 55%,#5a2a00); --yw-accent: #ffc23b; --yw-glow: rgba(255,170,40,.98); box-shadow: inset 0 0 0 2px rgba(255,170,40,.6), 0 8px 26px rgba(255,120,0,.3); }
+  .yw-game.yw-tier5 { background: linear-gradient(135deg,#b4008f,#1a3dd8 45%,#00a86b); background-size: 200% 200%; animation: yw-rainbow 7s ease infinite; --yw-accent: #76e0ff; --yw-glow: rgba(120,224,255,.98); box-shadow: inset 0 0 0 2px rgba(255,255,255,.35), 0 8px 26px rgba(60,120,255,.3); }
+  .yw-game.yw-tier6 { background: linear-gradient(135deg,#ffb300,#ff1d6c 33%,#8a1bff 66%,#00b6ff); background-size: 220% 220%; animation: yw-rainbow 6s ease infinite; --yw-accent: #ffe14a; --yw-glow: rgba(255,225,74,.98); box-shadow: inset 0 0 0 3px rgba(255,255,255,.5), 0 10px 34px rgba(255,170,0,.35); }
   .yw-game.is-fever { background: linear-gradient(135deg,#ff0080,#ff8c00,#ffee00,#00c853,#00b0ff,#aa00ff); background-size: 400% 400%; animation: yw-rainbow 3s ease infinite; }
   @keyframes yw-rainbow { 0%{background-position:0% 50%} 50%{background-position:100% 50%} 100%{background-position:0% 50%} }
   .yw-game.yw-celebrate { animation: yw-celebrate .5s ease 2; }
@@ -748,33 +780,42 @@ function injectStyles() {
   .yw-balance { font-weight: 800; font-size: 16px; }
   .yw-exit { background: rgba(255,255,255,.15); border: none; color: #fff; border-radius: 8px; padding: 6px 12px; cursor: pointer; font-size: 13px; }
   .yw-fever-banner { display: none; text-align: center; font-weight: 900; font-size: 20px; letter-spacing: 3px; text-shadow: 0 0 10px #fff; margin-bottom: 8px; }
-  .yw-reels { position: relative; display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; background: #0d0d1a; border-radius: 12px; padding: 10px; box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--yw-accent) 50%, transparent); transition: transform .2s; }
-  .yw-reels.yw-zoomfx { transform: scale(1.05); }
-  .yw-reel { position: relative; background: #fff; border-radius: 8px; overflow: hidden; transition: box-shadow .2s; }
-  .yw-reel.yw-specialhit { box-shadow: 0 0 16px 3px var(--yw-glow); }
-  .yw-reel.yw-reach { box-shadow: 0 0 14px 3px var(--yw-glow); }
-  .yw-reel.yw-reach-strong { box-shadow: 0 0 26px 8px var(--yw-glow); animation: yw-reachpulse .45s ease infinite alternate; }
-  @keyframes yw-reachpulse { from{box-shadow:0 0 12px 3px var(--yw-glow)} to{box-shadow:0 0 30px 12px var(--yw-glow)} }
-  .yw-reels.yw-reach-dim .yw-reel:not(.yw-reach):not(.yw-reach-strong) { opacity: .5; }
+  .yw-reels { position: relative; display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; background: #06060f; border-radius: 12px; padding: 10px; box-shadow: inset 0 0 0 3px var(--yw-accent), 0 0 14px 1px var(--yw-glow); transition: transform .15s; }
+  .yw-reels.yw-zoomfx { transform: scale(1.08); }
+  .yw-reel { position: relative; background: #fff; border-radius: 8px; overflow: hidden; transition: box-shadow .15s; }
+  .yw-reel.yw-specialhit { box-shadow: 0 0 22px 5px var(--yw-glow); }
+  .yw-reel.yw-reach { box-shadow: 0 0 18px 4px var(--yw-glow); }
+  .yw-reel.yw-reach-strong { box-shadow: 0 0 34px 12px var(--yw-glow); animation: yw-reachpulse .32s ease infinite alternate; }
+  @keyframes yw-reachpulse { from{box-shadow:0 0 16px 4px var(--yw-glow)} to{box-shadow:0 0 42px 16px var(--yw-glow)} }
+  .yw-reels.yw-reach-dim .yw-reel:not(.yw-reach):not(.yw-reach-strong) { opacity: .45; }
   .yw-cell { height: 56px; display: flex; align-items: center; justify-content: center; font-size: 34px; }
-  .yw-cell.top, .yw-cell.bot { opacity: .35; height: 34px; font-size: 24px; }
-  .yw-cell.center { border-top: 2px solid var(--yw-accent); border-bottom: 2px solid var(--yw-accent); background: #fffdf2; }
+  .yw-cell.top, .yw-cell.bot { opacity: .3; height: 34px; font-size: 24px; }
+  .yw-cell.center { border-top: 3px solid var(--yw-accent); border-bottom: 3px solid var(--yw-accent); background: #fffef7; }
+  .yw-cell.center.yw-hit { animation: yw-hitpulse .4s ease infinite alternate; }
+  @keyframes yw-hitpulse { from{box-shadow:inset 0 0 10px 2px var(--yw-glow); background:#fffef7} to{box-shadow:inset 0 0 22px 6px var(--yw-glow); background:#fff7d6} }
   .yw-sym-img { max-height: 48px; max-width: 48px; object-fit: contain; }
-  .yw-sym-7 { color: #e22; font-weight: 900; font-size: 38px; text-shadow: 0 1px 0 #fff, 0 0 8px rgba(255,80,80,.6); }
-  .yw-sym-replay { color: #26c; font-weight: 900; font-size: 15px; line-height: 1; text-align: center; }
+  .yw-sym-7 { color: #ff1d1d; font-weight: 900; font-size: 40px; text-shadow: 0 1px 0 #fff, 0 0 10px #ff3b3b, 0 0 20px #ff8a00; }
+  .yw-sym-replay { color: #1565ff; font-weight: 900; font-size: 15px; line-height: 1; text-align: center; }
   .yw-sym-emoji { font-size: 34px; }
-  .yw-payline { position: absolute; left: 6px; right: 6px; top: 50%; height: 2px; background: color-mix(in srgb, var(--yw-accent) 60%, transparent); transform: translateY(-1px); pointer-events: none; }
+  .yw-payline { position: absolute; left: 6px; right: 6px; top: 50%; height: 3px; background: var(--yw-accent); box-shadow: 0 0 8px 1px var(--yw-glow); transform: translateY(-1.5px); pointer-events: none; }
   .yw-bounce { animation: yw-bounce .28s ease; }
-  @keyframes yw-bounce { 0%{transform:translateY(-14px);opacity:.4} 60%{transform:translateY(3px)} 100%{transform:translateY(0);opacity:1} }
-  .yw-reels.yw-win { animation: yw-winflash .5s ease 2; }
-  @keyframes yw-winflash { 0%,100%{box-shadow:inset 0 0 0 2px color-mix(in srgb, var(--yw-accent) 50%, transparent)} 50%{box-shadow:0 0 26px 6px var(--yw-glow)} }
-  .yw-spark { position: absolute; width: 10px; height: 10px; pointer-events: none; border-radius: 50%; background: radial-gradient(circle, #fff 0%, var(--yw-glow) 60%, transparent 70%); animation: yw-sparkle .85s ease forwards; z-index: 5; }
-  .yw-spark-win, .yw-spark-big { width: 14px; height: 14px; }
-  .yw-spark-big { background: radial-gradient(circle, #fff 0%, #ffd700 60%, transparent 72%); }
-  .yw-spark-fever { background: radial-gradient(circle, #fff 0%, #ff6bd6 60%, transparent 72%); }
-  @keyframes yw-sparkle { 0%{transform:scale(.2);opacity:0} 30%{opacity:1} 100%{transform:scale(1.6) translateY(-12px);opacity:0} }
-  .yw-coin { position: absolute; bottom: 18%; pointer-events: none; z-index: 6; animation: yw-coinfly 1.4s ease-out forwards; }
-  @keyframes yw-coinfly { 0%{transform:translateY(0) rotate(0);opacity:0} 15%{opacity:1} 100%{transform:translateY(-150px) rotate(340deg);opacity:0} }
+  @keyframes yw-bounce { 0%{transform:translateY(-16px);opacity:.4} 55%{transform:translateY(4px)} 100%{transform:translateY(0);opacity:1} }
+  .yw-reels.yw-win { animation: yw-winflash .32s ease 3; }
+  @keyframes yw-winflash { 0%,100%{box-shadow:inset 0 0 0 3px var(--yw-accent), 0 0 14px 1px var(--yw-glow)} 50%{box-shadow:inset 0 0 0 4px #fff, 0 0 40px 12px var(--yw-glow)} }
+  .yw-spark { position: absolute; width: 14px; height: 14px; pointer-events: none; border-radius: 50%; background: radial-gradient(circle, #fff 0%, #ffe14a 45%, #ff8a00 70%, transparent 78%); box-shadow: 0 0 8px 2px rgba(255,220,80,.9); animation: yw-sparkle .8s ease forwards; z-index: 5; }
+  .yw-spark-win, .yw-spark-big { width: 20px; height: 20px; }
+  .yw-spark-big { background: radial-gradient(circle, #fff 0%, #ffd700 45%, #ff5ea0 72%, transparent 80%); box-shadow: 0 0 12px 3px rgba(255,215,0,.95); }
+  .yw-spark-fever { background: radial-gradient(circle, #fff 0%, #68f0ff 45%, #ff3bd0 72%, transparent 80%); box-shadow: 0 0 12px 3px rgba(120,230,255,.95); }
+  @keyframes yw-sparkle { 0%{transform:scale(.2) rotate(0);opacity:0} 25%{opacity:1} 100%{transform:scale(2) translateY(-16px) rotate(90deg);opacity:0} }
+  .yw-coin { position: absolute; bottom: 14%; pointer-events: none; z-index: 6; text-shadow: 0 2px 4px rgba(0,0,0,.4); animation: yw-coinfly 1.5s cubic-bezier(.2,.7,.3,1) forwards; }
+  @keyframes yw-coinfly { 0%{transform:translateY(40px) scale(.6) rotate(0);opacity:0} 12%{opacity:1} 70%{opacity:1} 100%{transform:translateY(-170px) scale(1.1) rotate(380deg);opacity:0} }
+  .yw-confetti { position: absolute; top: -12px; width: 9px; height: 14px; pointer-events: none; z-index: 6; border-radius: 2px; animation: yw-confetti 1.7s linear forwards; }
+  @keyframes yw-confetti { 0%{transform:translateY(-10px) rotate(0);opacity:0} 10%{opacity:1} 100%{transform:translateY(340px) rotate(720deg);opacity:0} }
+  .yw-bigtext { position: absolute; left: 0; right: 0; top: 38%; text-align: center; pointer-events: none; z-index: 7; font-weight: 900; font-size: 42px; letter-spacing: 1px;
+    background: linear-gradient(90deg,#ffe14a,#ff8a00,#ff1d6c,#b14cff,#00c2ff,#ffe14a); background-size: 300% 100%; -webkit-background-clip: text; background-clip: text; color: transparent;
+    -webkit-text-stroke: 2px rgba(0,0,0,.35); filter: drop-shadow(0 3px 6px rgba(0,0,0,.5)); animation: yw-bigtext .9s cubic-bezier(.2,1.4,.4,1) forwards, yw-rainbow 1.2s linear infinite; }
+  .yw-bigtext.small { font-size: 30px; }
+  @keyframes yw-bigtext { 0%{transform:scale(.2) rotate(-8deg);opacity:0} 45%{transform:scale(1.25) rotate(3deg);opacity:1} 70%{transform:scale(.95)} 100%{transform:scale(1);opacity:0} }
   .yw-msg { min-height: 22px; text-align: center; font-weight: 700; margin: 8px 0; font-size: 14px; }
   .yw-msg.win { color: #ffe08a; } .yw-msg.big, .yw-msg.fever { color: #fff; text-shadow: 0 0 8px var(--yw-glow); font-size: 16px; } .yw-msg.warn { color: #ffb4a8; }
   .yw-feverstart-slot { min-height: 0; }
@@ -800,14 +841,13 @@ function injectStyles() {
   .yw-game.yw-shake { animation: yw-shake .5s ease; }
   @keyframes yw-shake { 0%,100%{transform:translate(0,0)} 15%{transform:translate(-6px,3px) rotate(-.6deg)} 30%{transform:translate(5px,-4px) rotate(.6deg)} 45%{transform:translate(-5px,-2px)} 60%{transform:translate(4px,3px) rotate(-.4deg)} 75%{transform:translate(-3px,2px)} }
   /* 全画面のド派手演出（演出強めのときだけ JS が on にする・reduced-motion では付けない） */
-  #yw-screen-fx { position: fixed; inset: 0; pointer-events: none; z-index: 2147483000; opacity: 0; }
-  #yw-screen-fx.flash-win { animation: yw-screenwin .5s ease; background: linear-gradient(135deg,#ff0080,#ff8c00,#ffee00,#00c853,#00b0ff,#aa00ff); background-size: 300% 300%; }
-  #yw-screen-fx.flash-fever { animation: yw-screenfever .22s steps(2) 6; background: linear-gradient(135deg,#ff0080,#ff8c00,#ffee00,#00c853,#00b0ff,#aa00ff); background-size: 300% 300%; }
-  @keyframes yw-screenwin { 0%{opacity:0} 20%{opacity:.5} 100%{opacity:0} }
-  @keyframes yw-screenfever { 0%{opacity:.05; background-position:0% 50%} 50%{opacity:.5; background-position:100% 50%} 100%{opacity:.05; background-position:0% 50%} }
-  #yw-screen-fx.fever-on { opacity: 1; animation: yw-screenfeveron 1.1s ease-in-out infinite; background:
-      radial-gradient(120% 90% at 50% 50%, transparent 52%, rgba(255,0,128,.0) 55%, rgba(255,0,128,.28) 78%, rgba(0,176,255,.42) 100%); }
-  @keyframes yw-screenfeveron { 0%,100%{filter:hue-rotate(0deg); opacity:.55} 50%{filter:hue-rotate(320deg); opacity:.9} }
+  #yw-screen-fx { position: fixed; inset: 0; pointer-events: none; z-index: 2147483000; opacity: 0; mix-blend-mode: screen; }
+  #yw-screen-fx.flash-win { animation: yw-screenwin .5s ease; background: linear-gradient(135deg,#ff2d78,#ff8a00,#ffe14a,#17e36a,#17b6ff,#b14cff); background-size: 300% 300%; }
+  #yw-screen-fx.flash-fever { animation: yw-screenfever .16s steps(1) 9; background: linear-gradient(135deg,#ff2d78,#ff8a00,#ffe14a,#17e36a,#17b6ff,#b14cff); background-size: 300% 300%; }
+  @keyframes yw-screenwin { 0%{opacity:.9; background:#fff} 18%{opacity:.75} 100%{opacity:0} }
+  @keyframes yw-screenfever { 0%{opacity:.15; background-position:0% 50%} 50%{opacity:.92; background-position:100% 50%} 100%{opacity:.15; background-position:0% 50%} }
+  #yw-screen-fx.fever-on { opacity: 1; background: repeating-linear-gradient(60deg,#ff2d78 0 10%,#ff8a00 10% 20%,#ffe14a 20% 30%,#17e36a 30% 40%,#17b6ff 40% 50%,#b14cff 50% 60%); background-size: 300% 300%; animation: yw-screenfeveron 1.6s linear infinite; }
+  @keyframes yw-screenfeveron { 0%{background-position:0% 0%; opacity:.42} 50%{opacity:.6} 100%{background-position:60% 60%; opacity:.42} }
   @media (prefers-reduced-motion: reduce) {
     .yw-game.is-fever, .yw-feverstart { animation: none; }
     .yw-bounce, .yw-reels.yw-win, .yw-reel.yw-reach, .yw-reel.yw-reach-strong, .yw-game.yw-celebrate, .yw-game.yw-shake, .yw-spark, .yw-coin, .yw-reels.yw-zoomfx { animation: none; transform: none; }
