@@ -34,7 +34,7 @@ import {
 /* 🎡 ゆうワールド（ゆうスロなどのお店）。残高・抽選・公開・営業時間の判定はすべて Worker 任せ（Firebase には触らない） */
 import {
   initYuWorld, openYuWorldView, stopYuWorldView
-} from "./yuworld.js?v=20261019-yuworld16";
+} from "./yuworld.js?v=20261019-yuworld17";
 
 import {
   getFirestore, collection, addDoc, getDocs, getDoc, doc, setDoc,
