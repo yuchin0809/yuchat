@@ -44,6 +44,9 @@ async function ng(n, p) { try { await assertFails(p); pass++; logs.push("PASS �
     // 🎟 ゆう宝くじ：購入枚数（lotteryEntries）と抽選結果（lotteryRounds）は Worker（サービスアカウント）だけが書く
     await setDoc(doc(d, "lotteryEntries/2026-10-23_uidA"), { uid: "uidA", name: "alice", round: "2026-10-23", count: 3 });
     await setDoc(doc(d, "lotteryRounds/2026-10-23"), { round: "2026-10-23", tickets: 3, sales: 30, status: "open" });
+    // 🌈 ゆうスロ確変台：枠・申込（yuslotKaku）と通知の好み（yuslotPrefs）は Worker（サービスアカウント）だけが書く
+    await setDoc(doc(d, "yuslotKaku/2026-10-21"), { day: "2026-10-21", machine: "yubasic", slots: [], app1: [], app2: [] });
+    await setDoc(doc(d, "yuslotPrefs/uidA"), { uid: "uidA", kakuNotify: { result1: true } });
   });
 
   logs.push("--- ① ゲームルーム：読み取りはロビー公開、作成は作成者が自分");
@@ -127,6 +130,14 @@ async function ng(n, p) { try { await assertFails(p); pass++; logs.push("PASS �
   await ng("抽選結果を書き換えて自分を当選させる", setDoc(doc(alice, "lotteryRounds/2026-10-23"), { status: "done", winners: [{ uid: "uidA", name: "alice", tier: "1等", amount: 999999 }] }));
   await ng("最上位管理者でもブラウザから抽選結果を書けない", updateDoc(doc(admin, "lotteryRounds/2026-10-23"), { status: "done" }));
   await ng("未ログインが購入枚数を作る", setDoc(doc(anon, "lotteryEntries/2026-10-23_uidZ"), { uid: "uidZ", count: 1 }));
+
+  logs.push("--- ⑨ ゆうスロ確変台：枠・申込・通知の好みはサーバー（Worker）だけ。ブラウザからは読み書きできない");
+  await ng("確変台の枠・申込（yuslotKaku）を直接読めない", getDoc(doc(alice, "yuslotKaku/2026-10-21")));
+  await ng("最上位管理者でも直接読めない", getDoc(doc(admin, "yuslotKaku/2026-10-21")));
+  await ng("自分を当選させる（枠の書き換え）", updateDoc(doc(alice, "yuslotKaku/2026-10-21"), { slots: [{ i: 0, uid: "uidA", name: "alice" }] }));
+  await ng("勝手に申込を作る", setDoc(doc(bob, "yuslotKaku/2026-10-22"), { day: "2026-10-22", machine: "yubasic", slots: [] }));
+  await ng("通知の好み（yuslotPrefs）を直接読めない", getDoc(doc(alice, "yuslotPrefs/uidA")));
+  await ng("他人の通知の好みを書き換える", setDoc(doc(bob, "yuslotPrefs/uidA"), { uid: "uidA", kakuNotify: { result1: false } }));
 
   await env.cleanup();
   console.log(logs.join("\n"));

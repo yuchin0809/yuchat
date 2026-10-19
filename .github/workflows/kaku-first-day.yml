@@ -1,0 +1,50 @@
+# 🌈 ゆうスロ確変台 初日（2026-10-20）の準備（手動実行）
+#
+# ・実行すると：初日の確変台のドキュメントを作り、「確変台が登場！明日の確変台は…」のお知らせを投稿する。プッシュ通知は送らない（夜遅いので）。
+# ・冪等：何度実行しても、お知らせは1件だけ・ドキュメントは1つだけ（.github/notify-worker/kaku-first-day.mjs の固定IDで保証）。
+# ・鍵：FIREBASE_SERVICE_ACCOUNT（ゆうダービー・Firestore ルール・お知らせ自動作成・ゆうスロ オープンと同じもの）。未登録なら何もしない。
+# ・テストは .github/notify-worker/** を変更する PR で通知サーバーの CI が実行する（ここでは回さない）。
+
+name: 🌈 ゆうスロ確変台 初日の準備
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kaku-first-day
+  cancel-in-progress: false
+
+jobs:
+  open:
+    name: ゆうスロ確変台 初日の準備
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 鍵が登録されているか確認
+        id: secret
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          if [ -z "$FIREBASE_SERVICE_ACCOUNT" ]; then
+            echo "::warning::FIREBASE_SERVICE_ACCOUNT が使えないため、確変台の初日の準備をスキップしました"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.secret.outputs.ready == 'true'
+        with:
+          node-version: 22
+
+      - name: 初日の準備（ドキュメント作成・お知らせ。プッシュ通知なし）
+        if: steps.secret.outputs.ready == 'true'
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: node .github/notify-worker/kaku-first-day.mjs

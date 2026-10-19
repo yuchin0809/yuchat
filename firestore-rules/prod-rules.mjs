@@ -168,6 +168,12 @@ const TEST_CASES = [
   testCase("DENY", "lotteryEntries：購入枚数を削除する", userA, "delete", `lotteryEntries/2030-01-04_${userA.uid}`, { existing: { uid: userA.uid, round: "2030-01-04", count: 3 } }),
   testCase("DENY", "lotteryRounds：抽選結果を直接読めない", userA, "get", "lotteryRounds/2030-01-04", { existing: { round: "2030-01-04", status: "open", tickets: 3 } }),
   testCase("DENY", "lotteryRounds：抽選結果を書き換えて当選する", userA, "update", "lotteryRounds/2030-01-04", { data: { status: "done", winners: [{ uid: userA.uid, tier: "1等", amount: 999999 }] }, existing: { round: "2030-01-04", status: "open" } }),
+  // 🌈 ゆうスロ確変台：枠・申込（yuslotKaku）と通知の好み（yuslotPrefs）はサーバー（通知 Worker）だけ
+  testCase("DENY", "yuslotKaku：枠・申込を直接読めない", userA, "get", "yuslotKaku/2030-01-04", { existing: { day: "2030-01-04", machine: "yubasic", slots: [], app1: [] } }),
+  testCase("DENY", "yuslotKaku：自分を当選させる（枠の書き換え）", userA, "update", "yuslotKaku/2030-01-04", { data: { slots: [{ i: 0, uid: userA.uid, name: "a" }] }, existing: { day: "2030-01-04", machine: "yubasic", slots: [] } }),
+  testCase("DENY", "yuslotKaku：最上位管理者でもブラウザから書けない", admin, "update", "yuslotKaku/2030-01-04", { data: { draw1Done: true }, existing: { day: "2030-01-04", machine: "yubasic" } }),
+  testCase("DENY", "yuslotPrefs：通知の好みを直接読めない", userA, "get", `yuslotPrefs/${userA.uid}`, { existing: { uid: userA.uid, kakuNotify: { result1: true } } }),
+  testCase("DENY", "yuslotPrefs：他人の通知の好みを書き換える", userA, "update", "yuslotPrefs/someoneElse", { data: { kakuNotify: { result1: false } }, existing: { uid: "someoneElse", kakuNotify: { result1: true } } }),
   testCase("DENY", "lotteryRounds：最上位管理者でもブラウザから書けない", admin, "update", "lotteryRounds/2030-01-04", { data: { status: "done" }, existing: { round: "2030-01-04", status: "open" } }),
   // お知らせ（announcements）：読み取りはログイン済みなら誰でも・作成/編集/削除は管理者だけ
   testCase("ALLOW", "一般：お知らせの読み取り", userA, "get", "announcements/a1", { existing: announcementDoc }),

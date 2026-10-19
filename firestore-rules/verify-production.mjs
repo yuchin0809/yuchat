@@ -102,7 +102,9 @@ async function main() {
     worldCfgEvil: `worldcfgverify-${stamp}`,
     seatEvil: `seatverify-${stamp}`,
     lotteryEntryEvil: `lotteryverify-${stamp}`,
-    lotteryRoundEvil: `lotteryroundverify-${stamp}`
+    lotteryRoundEvil: `lotteryroundverify-${stamp}`,
+    kakuEvil: `kakuverify-${stamp}`,
+    prefsEvil: `prefsverify-${stamp}`
   };
   const cleanupRefs = [
     db.doc(`derbyManualRaces/${ids.closedRace}`),
@@ -120,7 +122,9 @@ async function main() {
     db.doc(`worldConfig/${ids.worldCfgEvil}`),
     db.doc(`yuslotSeats/${ids.seatEvil}`),
     db.doc(`lotteryEntries/${ids.lotteryEntryEvil}`),
-    db.doc(`lotteryRounds/${ids.lotteryRoundEvil}`)
+    db.doc(`lotteryRounds/${ids.lotteryRoundEvil}`),
+    db.doc(`yuslotKaku/${ids.kakuEvil}`),
+    db.doc(`yuslotPrefs/${ids.prefsEvil}`)
   ];
 
   const results = [];
@@ -203,6 +207,14 @@ async function main() {
     await checkDeniedAfterPropagation("宝くじの購入枚数をブラウザから直接読む", () => get(`lotteryEntries/${ids.lotteryEntryEvil}`));
     await checkDeniedAfterPropagation("宝くじの抽選結果をブラウザから書き換える", () => create("lotteryRounds", ids.lotteryRoundEvil, { round: "2030-01-04", status: "done", winners: [] }), () => lotteryRoundRef.delete());
     await checkDeniedAfterPropagation("宝くじの抽選結果をブラウザから直接読む", () => get(`lotteryRounds/${ids.lotteryRoundEvil}`));
+
+    /* 🌈 ゆうスロ確変台：枠・申込（yuslotKaku）と通知の好み（yuslotPrefs）もサーバー（通知 Worker）だけ。宝くじと同じく、反映の遅れを見込んで確かめ直す */
+    const kakuRef = db.doc(`yuslotKaku/${ids.kakuEvil}`);
+    const prefsRef = db.doc(`yuslotPrefs/${ids.prefsEvil}`);
+    await checkDeniedAfterPropagation("確変台の枠をブラウザから書き換える", () => create("yuslotKaku", ids.kakuEvil, { day: "2030-01-04", machine: "yubasic", slots: [] }), () => kakuRef.delete());
+    await checkDeniedAfterPropagation("確変台の枠・申込をブラウザから直接読む", () => get(`yuslotKaku/${ids.kakuEvil}`));
+    await checkDeniedAfterPropagation("通知の好みをブラウザから書き換える", () => create("yuslotPrefs", ids.prefsEvil, { uid: TEST_UID, kakuNotify: { result1: false } }), () => prefsRef.delete());
+    await checkDeniedAfterPropagation("通知の好みをブラウザから直接読む", () => get(`yuslotPrefs/${ids.prefsEvil}`));
 
     /* ④ 読み取りと、管理用以外のデータ（今まで通りのルール） */
     await check("手動レースの読み取り", "ALLOW", get(`derbyManualRaces/${ids.closedRace}`));

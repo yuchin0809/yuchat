@@ -58,6 +58,8 @@ export default {
     ctx.waitUntil(runScheduled(env, event.scheduledTime).catch((error) => console.error("scheduled error", String(error?.message || error).slice(0, 300))));
     /* 🎟 毎週金曜 14:30（日本時間）の宝くじの抽選。抽選の直後以外は Firestore に触れずにすぐ戻る */
     ctx.waitUntil(runLotteryTick(env, event.scheduledTime).catch((error) => console.error("lottery tick error", String(error?.message || error).slice(0, 300))));
+    /* 🌈 ゆうスロ確変台：前日12:00の公開・21:00の抽選・当日7:00/7:50/10:45。予定の時刻の直後以外は Firestore に触れずにすぐ戻る */
+    ctx.waitUntil(runKakuTick(env, event.scheduledTime).catch((error) => console.error("kaku tick error", String(error?.message || error).slice(0, 300))));
   }
 };
 
@@ -293,12 +295,12 @@ async function claimBroadcastLog(deps, logId, kind) {
   }
 }
 
-export async function sendBroadcastNotification(deps, logId, data) {
+export async function sendBroadcastNotification(deps, logId, data, filterUid = null) {
   const fs = deps.firestore;
   const claimed = await claimBroadcastLog(deps, logId, data.kind || "");
   if (!claimed) return { skipped: "duplicate" };
 
-  const tokens = (await fs.query("fcmTokens", [], { select: ["uid"] })).map((d) => d.id);
+  const tokens = (await fs.query("fcmTokens", [], { select: ["uid"] })).filter((d) => !filterUid || filterUid(d.data?.uid)).map((d) => d.id); // filterUid＝通知の好みで、送らない人を外す
   let sent = 0, failed = 0, removed = 0;
   await Promise.all(tokens.map(async (token) => {
     try {
@@ -2151,18 +2153,21 @@ export const SLOT_RULES = {
   treasurePrizes: [[3, 0.40], [5, 0.30], [10, 0.20], [20, 0.08], [50, 0.02]]
 };
 /* 台ごとの実効確率（rates が無い項目は SLOT_RULES の既定値。special は specialRate） */
-export function slotRates(machineId) {
+export function slotRates(machineId, kaku = 1) {
   const m = SLOT_MACHINES[machineId], R = SLOT_RULES, o = m && m.rates ? m.rates : {};
+  const k = kaku > 0 ? kaku : 1; // 確変：すべての当たりの確率を同じ倍率で上げる（払い戻しの額は変えない）
   return {
-    cherry: o.cherry != null ? o.cherry : R.cherry,
-    bell: o.bell != null ? o.bell : R.bell,
-    watermelon: o.watermelon != null ? o.watermelon : R.watermelon,
-    replay: o.replay != null ? o.replay : R.replay,
-    star: o.star != null ? o.star : R.star,
-    treasure: o.treasure != null ? o.treasure : R.treasure,
-    special: o.special != null ? o.special : m.specialRate
+    cherry: (o.cherry != null ? o.cherry : R.cherry) * k,
+    bell: (o.bell != null ? o.bell : R.bell) * k,
+    watermelon: (o.watermelon != null ? o.watermelon : R.watermelon) * k,
+    replay: (o.replay != null ? o.replay : R.replay) * k,
+    star: (o.star != null ? o.star : R.star) * k,
+    treasure: (o.treasure != null ? o.treasure : R.treasure) * k,
+    special: (o.special != null ? o.special : m.specialRate) * k
   };
 }
+/* 確変台の倍率（台ごと）。料金が高い台ほど小さい。シミュレーション（notify-worker/yuslot-kaku-sim.mjs）で、30分（自動スピン約900回）の平均が +400 コイン以上になるように決めた */
+export const SLOT_KAKU_RATE = { yubasic: 1.9, yurush: 1.6, yuchance: 1.5, yutreasure: 1.4, yurainbow: 1.4, yujackpot: 1.4 };
 const SLOT_FRUITS = ["cherry", "bell", "watermelon"];
 const SLOT_FLUSH_INTERVAL_MS = 15000;   // クライアントがこの間隔で flush する
 const SLOT_SEAT_GRACE_MS = 90000;       // 復旧猶予（約1分）＋flush の間隔ぶんの余裕
@@ -2205,11 +2210,11 @@ function slotLoseCenter(machineId, random) {
 }
 
 /* 1スピンの抽選結果（純粋関数。残高には触れない）。free=無料スピン中、fever=FEVER中 */
-export function slotDrawOutcome(machineId, { free = false, fever = false } = {}, random = Math.random) {
+export function slotDrawOutcome(machineId, { free = false, fever = false, kaku = 1 } = {}, random = Math.random) {
   const m = SLOT_MACHINES[machineId];
   const R = SLOT_RULES;
   if (!m) throw new Error("unknown_machine");
-  const rates = slotRates(machineId);
+  const rates = slotRates(machineId, kaku);
   if (fever) {
     // FEVER中はさくらんぼ・ベル・スイカのみ（必ずどれかが揃う）。重みは台ごとの小当たり確率に比例
     const w = [["cherry", rates.cherry], ["bell", rates.bell], ["watermelon", rates.watermelon]];
@@ -2241,14 +2246,14 @@ export function slotDrawOutcome(machineId, { free = false, fever = false } = {},
 }
 
 /* セッションに1スピンを適用する（残高・無料スピン・FEVER・統計を更新）。Firestore には触れない */
-export function slotApplySpin(session, nowMs, random = Math.random) {
+export function slotApplySpin(session, nowMs, random = Math.random, kakuRate = 0) {
   const price = session.price;
   const fever = nowMs < (session.feverUntil || 0);
   const usingFree = (session.freeSpins || 0) > 0;
   const available = session.startCoins + session.delta;
   if (!usingFree && available < price) return { error: "no_funds" };
 
-  const draw = slotDrawOutcome(session.machine, { free: usingFree, fever }, random);
+  const draw = slotDrawOutcome(session.machine, { free: usingFree, fever, kaku: session.kaku ? (kakuRate || SLOT_KAKU_RATE[session.machine] || 1) : 1 }, random);
   const cost = usingFree ? 0 : price;
   const next = { ...session };
   next.delta = session.delta + draw.payout - cost;
@@ -2330,6 +2335,11 @@ export async function handleYuslotAction(deps, uid, body) {
       case "lotteryStatus": return await lotteryStatus(deps, uid, body);
       case "lotteryBuy": return await lotteryBuy(deps, uid, body);
       case "lotterySetPublished": return await lotterySetPublished(deps, uid, body);
+      case "kakuStatus": return await kakuStatus(deps, uid, body);
+      case "kakuApply": return await kakuApply(deps, uid, body);
+      case "kakuQuick": return await kakuQuick(deps, uid, body);
+      case "kakuGetNotify": return { ok: true, prefs: await kakuGetNotify(deps, uid) };
+      case "kakuSetNotify": return await kakuSetNotify(deps, uid, body);
       default: return { status: 400, error: "unknown_action" };
     }
   } catch (error) {
@@ -2376,6 +2386,10 @@ async function yuslotSeat(deps, uid, body) {
   const now = deps.now();
   if (!slotBusinessOpen(now)) return { status: 409, error: "closed" };
 
+  // 🌈 確変台は、その時間の枠をとった人だけ（NPC・空き枠は誰も遊べない）
+  const kakuRight = await kakuSeatRight(deps, uid, machine, now);
+  if (kakuRight && kakuRight.locked) return { status: 409, error: "kaku_locked", slot: kakuRight.slot };
+
   const me = await loadMyUser(deps.firestore, uid, body?.username);
   if (me.error) return me.error;
   const startCoins = Number(decodeFields(me.raw.fields).coins || 0);
@@ -2405,8 +2419,9 @@ async function yuslotSeat(deps, uid, body) {
     startCoins, delta: 0, flushed: 0, freeSpins: 0, feverUntil: 0,
     spins: 0, wins: 0, streak: 0, day: slotBusinessDay(now), nonce, seatMs: now, lastMs: now
   };
+  if (kakuRight && kakuRight.end) { session.kaku = true; session.kakuEnd = kakuRight.end; } // 確変中（枠の終わりまで）
   const signed = await slotSignSession(session, deps.slotSecret);
-  return { ok: true, session: signed, machine, price: session.price, startCoins, name: me.name, balance: startCoins, freeSpins: 0, open: true, serverNowMs: now, day: session.day };
+  return { ok: true, session: signed, machine, price: session.price, startCoins, name: me.name, balance: startCoins, freeSpins: 0, open: true, serverNowMs: now, day: session.day, kaku: session.kaku === true, kakuEnd: session.kakuEnd || 0 };
 }
 
 async function yuslotLoadSession(deps, uid, body) {
@@ -2427,6 +2442,7 @@ async function yuslotSpin(deps, uid, body) {
   if (now - session.seatMs > SLOT_SESSION_MAX_MS) return { status: 409, error: "session_expired", mustSettle: true };
   if (session.day !== slotBusinessDay(now)) return { status: 409, error: "day_rollover", mustSettle: true };
   if (!slotBusinessOpen(now)) return { status: 409, error: "closed", mustSettle: true };
+  if (kakuSpinGate(session, now)) return { status: 409, error: "kaku_over", mustSettle: true }; // 確変台の枠が終わった（精算して退席）
 
   const applied = slotApplySpin(session, now, deps.random);
   if (applied.error) return { status: 409, error: applied.error };
@@ -2894,6 +2910,326 @@ async function lotteryBuy(deps, uid, body) {
   }
   lotteryDocCache.delete(roundPath);
   return { ok: true, bought: count, numbers: alloc.numbers, balance: coins - cost, cost, mode, tickets: totalTickets, remaining: Math.max(0, N - totalTickets) };
+}
+
+/* =========================================================
+   🌈 ゆうスロ「確変台」（毎日どこか1台が、抽選・先着で権利をとった人だけの高還元の台になる）
+   ・確変台は日付からの決まったランダムで決まる（前日と同じ台は避ける）。Firestore には保存しなくても分かる。
+   ・時間割（日本時間）：8:00〜12:30 は30分×9枠／12:30〜13:20 は10分×5枠（当日分：抽選3・先着2。どれが抽選・先着かは日ごとにランダム）
+     ／13:20〜15:20 は30分×4枠。合計18枠。
+   ・前日の抽選（30分枠13個）：前日 12:00 に公開・申込開始 → 21:00 締切・抽選 → 当日 7:50 に結果のお知らせ。
+   ・当日の抽選（10分枠3個）：7:00〜10:45 に申込 → 10:45 に抽選。先着（10分枠2個・1人1枠）：11:45 から。
+   ・抽選は「ダミー（NPC）の仮想申込者」を混ぜて、実在の申込者が当たる確率が約1/3になるようにする（NPC は結果に「NPC」と表示。アカウントは作らない）。
+     1人が同じ日に当たれるのは最大3枠。2枠目・3枠目は当たりにくい重み（×0.2）をかける。
+   ・遊べるのは、その時間の枠をとった人だけ（NPC・空き枠は誰も遊べない）。8:00 前と 15:20 以降は通常の台。
+   ・確変中は、すべての当たりの確率を台ごとの倍率で上げる（SLOT_KAKU_RATE）。
+   ・Firestore：yuslotKaku/{日付}（サーバー専用）。申込は appendMissingElements で追記するだけ。毎分の cron は予定の時刻以外は何も読まない。
+   ・通知の好み：yuslotPrefs/{uid}（サーバー専用）。先着の通知はなし。
+========================================================= */
+
+export const KAKU_EPOCH = "2026-10-20";                 // 最初の確変の日
+const KAKU_JST = 9 * 3600000, KAKU_DAY_MS = 86400000, KAKU_MIN = 60000;
+const KAKU_PRE_STARTS = [480, 510, 540, 570, 600, 630, 660, 690, 720, 800, 830, 860, 890]; // 30分枠（8:00〜12:00／13:20〜14:50）
+const KAKU_SAME_STARTS = [750, 760, 770, 780, 790];     // 12:30〜13:10 の10分枠（当日分）
+const KAKU_PRE_POOL = 39, KAKU_SAME_POOL = 9;           // 申込者＋NPC の人数（枠数の3倍＝実在の人が当たる確率が約1/3）
+const KAKU_MAX_PER_DAY = 3, KAKU_REPEAT_WEIGHT = 0.2;
+export const KAKU_MACHINE_NAMES = { yubasic: "ゆうベーシック", yurush: "ゆうラッシュ", yuchance: "ゆうチャンス", yutreasure: "ゆうトレジャー", yurainbow: "ゆうレインボー", yujackpot: "ゆうジャックポット" };
+const KAKU_NPC_NAMES = ["ほしぞら", "みかん", "ひなた", "そらまめ", "もちもち", "さくら", "こはる", "はるか", "ゆうき", "りんご", "ぽんた", "だいふく", "ねこまる", "ことり", "つばさ", "あおぞら", "ひまわり", "にじいろ", "まっちゃ", "きなこ", "わかば", "ふうた", "らいむ", "みずほ", "もも", "ぱんだ", "くるみ", "かずは", "しろくま", "ゆずぽん", "たいよう", "なないろ", "ちくわ", "おにぎり", "どんぐり", "ふわふわ", "きらきら", "しおり", "あんず", "れもん", "すいか", "ぷりん", "こむぎ", "ゆきうさぎ", "ひよこ", "ののか", "あかり", "みどり", "そうた", "かなた", "いちご", "めろん", "こうめ", "とまと", "ぽぷら", "りく", "はなび", "ほたる", "かぜのこ", "つきみ"];
+export const KAKU_NOTIFY_DEFAULTS = { pub: false, same: false, result1: true, result2: true };
+
+export function kakuDayId(ms) {
+  const d = new Date(ms + KAKU_JST);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+}
+export function kakuDayStart(dayId) { const [y, m, d] = dayId.split("-").map(Number); return Date.UTC(y, m - 1, d) - KAKU_JST; }
+export function kakuNextDay(dayId) { return kakuDayId(kakuDayStart(dayId) + KAKU_DAY_MS); }
+export function kakuTimes(dayId) {
+  const t0 = kakuDayStart(dayId), H = 3600000;
+  return { dayStart: t0, preOpen: t0 - 12 * H, preClose: t0 - 3 * H, sameOpen: t0 + 7 * H, resultAt: t0 + 7 * H + 50 * KAKU_MIN, playStart: t0 + 8 * H,
+    sameClose: t0 + 10 * H + 45 * KAKU_MIN, quickOpen: t0 + 11 * H + 45 * KAKU_MIN, playEnd: t0 + 15 * H + 20 * KAKU_MIN };
+}
+function kakuHash(str) { let h = 2166136261; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
+function kakuSeeded(seed) { let a = kakuHash(seed); return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+
+/* その日の確変台（日付だけで決まる。前日と同じ台は避ける） */
+const kakuMachineCache = new Map();
+export function kakuMachineFor(dayId) {
+  if (dayId < KAKU_EPOCH) return null;
+  if (kakuMachineCache.has(dayId)) return kakuMachineCache.get(dayId);
+  const ids = Object.keys(SLOT_MACHINES);
+  let prev = null, d = KAKU_EPOCH, out = null;
+  for (let guard = 0; guard < 2000; guard++) {
+    const pool = ids.filter((x) => x !== prev);
+    const m = pool[Math.floor(kakuSeeded("machine:" + d)() * pool.length) % pool.length];
+    kakuMachineCache.set(d, m);
+    if (d === dayId) { out = m; break; }
+    prev = m; d = kakuNextDay(d);
+  }
+  return out;
+}
+/* 当日分の10分枠5個のうち、先着にする2個（残り3個が抽選）。日ごとにランダム */
+export function kakuSameKinds(dayId) {
+  const r = kakuSeeded("kinds:" + dayId);
+  const idx = [0, 1, 2, 3, 4];
+  for (let i = idx.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [idx[i], idx[j]] = [idx[j], idx[i]]; }
+  const quick = new Set(idx.slice(0, 2));
+  return KAKU_SAME_STARTS.map((_, i) => (quick.has(i) ? "quick" : "lot"));
+}
+export function kakuInitialSlots(dayId) {
+  const t0 = kakuDayStart(dayId), kinds = kakuSameKinds(dayId), slots = [];
+  KAKU_PRE_STARTS.forEach((m) => slots.push({ s: t0 + m * KAKU_MIN, e: t0 + (m + 30) * KAKU_MIN, kind: "pre", uid: "", name: "", npc: false }));
+  KAKU_SAME_STARTS.forEach((m, i) => slots.push({ s: t0 + m * KAKU_MIN, e: t0 + (m + 10) * KAKU_MIN, kind: kinds[i], uid: "", name: "", npc: false }));
+  slots.sort((a, b) => a.s - b.s);
+  return slots.map((x, i) => ({ i, ...x }));
+}
+export function kakuNpcName(dayId, i) { return KAKU_NPC_NAMES[(kakuHash("npc:" + dayId) + i) % KAKU_NPC_NAMES.length]; }
+
+/* 抽選：実在の申込者に、足りない人数ぶんの NPC を混ぜた集団から count 回引く。すでに当たった人は ×0.2 の重みを重ね、最大3回まで */
+export function kakuPickWinners({ applicants, poolTarget, count, wins = new Map(), random, dayId }) {
+  const all = applicants.map((a) => ({ uid: a.uid, name: a.name, npc: false }));
+  const npcN = Math.max(0, poolTarget - all.length);
+  for (let i = 0; i < npcN; i++) all.push({ uid: "npc:" + i, name: kakuNpcName(dayId, i), npc: true });
+  const got = new Map(all.map((p) => [p.uid, p.npc ? 0 : (wins.get(p.uid) || 0)]));
+  const chosen = [];
+  for (let k = 0; k < count; k++) {
+    const w = all.map((p) => { const n = got.get(p.uid); return n >= KAKU_MAX_PER_DAY ? 0 : Math.pow(KAKU_REPEAT_WEIGHT, n); });
+    const total = w.reduce((s, x) => s + x, 0);
+    if (total <= 0) break;
+    let r = random() * total, idx = 0;
+    for (; idx < w.length - 1; idx++) { if (r < w[idx]) break; r -= w[idx]; }
+    chosen.push(all[idx]); got.set(all[idx].uid, got.get(all[idx].uid) + 1);
+  }
+  return chosen;
+}
+const kakuParseApplicants = (list) => (Array.isArray(list) ? list : []).map((x) => { const i = String(x).indexOf("\t"); return i > 0 ? { uid: x.slice(0, i), name: x.slice(i + 1) } : null; }).filter(Boolean);
+const kakuWinsOf = (slots) => { const m = new Map(); (slots || []).forEach((s) => { if (s.uid) m.set(s.uid, (m.get(s.uid) || 0) + 1); }); return m; };
+function kakuShuffle(arr, random) { const a = arr.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+
+/* ----- その日のドキュメント yuslotKaku/{日付}（メモリに短くためる） ----- */
+const kakuDocCache = new Map();
+const kakuTickDone = new Set();
+export function resetKakuCacheForTest() { kakuDocCache.clear(); kakuTickDone.clear(); }
+async function kakuGetDay(deps, dayId, ttlMs = 15000) {
+  const now = deps.now(), hit = kakuDocCache.get(dayId);
+  if (hit && now - hit.at < ttlMs) return hit.value;
+  const raw = await deps.firestore.getRaw(`yuslotKaku/${dayId}`);
+  const value = raw ? { data: decodeFields(raw.fields), updateTime: raw.updateTime } : null;
+  kakuDocCache.set(dayId, { at: now, value });
+  return value;
+}
+export async function kakuEnsureDay(deps, dayId) {
+  const cur = await kakuGetDay(deps, dayId, 5000);
+  if (cur) return cur;
+  const now = deps.now(), t = kakuTimes(dayId);
+  const mode = now >= t.preClose ? "sameDay" : "full"; // 前日の抽選の締切後に作った日は、当日分だけ発売
+  await deps.firestore.createIfAbsent(`yuslotKaku/${dayId}`, { day: dayId, machine: kakuMachineFor(dayId), mode, slots: kakuInitialSlots(dayId), app1: [], app2: [], draw1Done: mode === "sameDay", draw2Done: false, createdAtMs: now });
+  kakuDocCache.delete(dayId);
+  return kakuGetDay(deps, dayId, 0);
+}
+async function kakuWriteSlots(deps, dayId, cur, extra) {
+  const fields = { slots: cur.data.slots, ...extra };
+  await deps.firestore.commit([{ update: { name: deps.firestore.docName(`yuslotKaku/${dayId}`), fields: encodeFields(fields) }, updateMask: { fieldPaths: Object.keys(fields) }, currentDocument: { updateTime: cur.updateTime } }]);
+  kakuDocCache.delete(dayId);
+}
+
+/* 抽選の実行（冪等：done フラグ＋更新時刻の条件）。type 1＝前日の抽選（30分枠）、2＝当日の抽選（10分枠・抽選用の3個） */
+export async function kakuRunDraw(deps, dayId, type) {
+  const cur = await kakuEnsureDay(deps, dayId);
+  const doneKey = type === 1 ? "draw1Done" : "draw2Done";
+  if (cur.data[doneKey]) return { skipped: "done" };
+  const slots = cur.data.slots.map((x) => ({ ...x }));
+  const targets = slots.map((x, i) => i).filter((i) => (type === 1 ? slots[i].kind === "pre" : slots[i].kind === "lot"));
+  const apps = kakuParseApplicants(type === 1 ? cur.data.app1 : cur.data.app2);
+  const winners = kakuPickWinners({ applicants: apps, poolTarget: type === 1 ? KAKU_PRE_POOL : KAKU_SAME_POOL, count: targets.length, wins: kakuWinsOf(slots), random: deps.random, dayId });
+  kakuShuffle(targets, deps.random).forEach((slotIdx, k) => {
+    const w = winners[k]; if (!w) return;
+    slots[slotIdx] = { ...slots[slotIdx], uid: w.npc ? "" : w.uid, name: w.name, npc: w.npc };
+  });
+  try { await kakuWriteSlots(deps, dayId, { data: { slots }, updateTime: cur.updateTime }, { [doneKey]: true, [type === 1 ? "applied1" : "applied2"]: apps.length }); }
+  catch (error) { if (isRetryableCommitError(error)) return { skipped: "raced" }; throw error; }
+  return { drawn: true, applicants: apps.length, real: slots.filter((x) => x.uid).length };
+}
+
+/* ----- 申込・先着・状態 ----- */
+async function kakuGate(deps, uid) {
+  const published = await slotGetPublished(deps);
+  return published || slotIsTopAdmin(deps, uid);
+}
+async function kakuApply(deps, uid, body) {
+  const which = body?.which === "same" ? "same" : body?.which === "pre" ? "pre" : "";
+  if (!which) return { status: 400, error: "bad_request" };
+  if (!(await kakuGate(deps, uid))) return { status: 403, error: "not_published" };
+  const now = deps.now();
+  const dayId = which === "same" ? kakuDayId(now) : kakuNextDay(kakuDayId(now));
+  if (dayId < KAKU_EPOCH) return { status: 409, error: "no_event" };
+  const t = kakuTimes(dayId);
+  const open = which === "same" ? now >= t.sameOpen && now < t.sameClose : now >= t.preOpen && now < t.preClose;
+  if (!open) return { status: 409, error: "not_open" };
+  const me = await loadMyUser(deps.firestore, uid, body?.username);
+  if (me.error) return me.error;
+  const cur = await kakuEnsureDay(deps, dayId);
+  if (which === "pre" && cur.data.mode === "sameDay") return { status: 409, error: "not_open" };
+  const field = which === "same" ? "app2" : "app1";
+  if ((cur.data[field] || []).some((x) => String(x).startsWith(uid + "\t"))) return { ok: true, already: true };
+  await deps.firestore.commit([{ update: { name: deps.firestore.docName(`yuslotKaku/${dayId}`), fields: {} }, updateMask: { fieldPaths: [] },
+    updateTransforms: [{ fieldPath: field, appendMissingElements: { values: [{ stringValue: `${uid}\t${me.name}` }] } }], currentDocument: { exists: true } }]);
+  kakuDocCache.delete(dayId);
+  return { ok: true, already: false };
+}
+async function kakuQuick(deps, uid, body) {
+  const idx = Number(body?.slot);
+  if (!Number.isInteger(idx)) return { status: 400, error: "bad_request" };
+  if (!(await kakuGate(deps, uid))) return { status: 403, error: "not_published" };
+  const now = deps.now(), dayId = kakuDayId(now);
+  if (dayId < KAKU_EPOCH) return { status: 409, error: "no_event" };
+  const t = kakuTimes(dayId);
+  if (now < t.quickOpen) return { status: 409, error: "not_open" };
+  const me = await loadMyUser(deps.firestore, uid, body?.username);
+  if (me.error) return me.error;
+  const cur = await kakuGetDay(deps, dayId, 0);
+  if (!cur) return { status: 409, error: "not_open" };
+  const slots = cur.data.slots.map((x) => ({ ...x }));
+  const slot = slots[idx];
+  if (!slot || slot.kind !== "quick") return { status: 400, error: "bad_request" };
+  if (now >= slot.s) return { status: 409, error: "slot_started" };
+  if (slot.uid || slot.name) return { status: 409, error: "taken" };
+  const mine = slots.filter((x) => x.uid === uid);
+  if (mine.some((x) => x.kind === "quick")) return { status: 409, error: "quick_limit" };       // 先着は1人1枠まで
+  if (mine.length >= KAKU_MAX_PER_DAY) return { status: 409, error: "day_limit" };                // 1日最大3枠
+  if (mine.some((x) => x.s < slot.e && slot.s < x.e)) return { status: 409, error: "overlap" };
+  slots[idx] = { ...slot, uid, name: me.name, npc: false };
+  try { await kakuWriteSlots(deps, dayId, { data: { slots }, updateTime: cur.updateTime }, {}); }
+  catch (error) { if (isRetryableCommitError(error)) return { status: 409, error: "busy" }; throw error; }
+  return { ok: true, slot: idx };
+}
+const kakuPublicSlots = (slots, uid) => (slots || []).map((x) => ({ i: x.i, s: x.s, e: x.e, kind: x.kind, name: x.name || "", npc: x.npc === true, mine: !!uid && x.uid === uid }));
+async function kakuStatus(deps, uid, body) {
+  const now = deps.now(), today = kakuDayId(now), tomorrow = kakuNextDay(today);
+  const out = { ok: true, serverNowMs: now, active: today >= KAKU_EPOCH || tomorrow >= KAKU_EPOCH };
+  if (today >= KAKU_EPOCH) {
+    const t = kakuTimes(today);
+    const cur = now >= t.sameOpen - 2 * 3600000 ? await kakuEnsureDay(deps, today) : await kakuGetDay(deps, today);
+    const d = cur ? cur.data : null;
+    out.today = {
+      day: today, machine: kakuMachineFor(today), mode: d ? d.mode : "sameDay", times: t,
+      slots: kakuPublicSlots(d ? d.slots : kakuInitialSlots(today), uid),
+      applied2: !!d && (d.app2 || []).some((x) => String(x).startsWith(uid + "\t")),
+      draw1Done: !!d && d.draw1Done === true, draw2Done: !!d && d.draw2Done === true
+    };
+  }
+  if (tomorrow >= KAKU_EPOCH) {
+    const t = kakuTimes(tomorrow);
+    const cur = now >= t.preOpen ? await kakuGetDay(deps, tomorrow) : null;
+    out.tomorrow = { day: tomorrow, machine: kakuMachineFor(tomorrow), times: t, applied1: !!cur && (cur.data.app1 || []).some((x) => String(x).startsWith(uid + "\t")), mode: cur ? cur.data.mode : "full" };
+  }
+  return out;
+}
+
+/* ----- 着席・スピンの制限（確変台は、その時間の枠をとった人だけ） ----- */
+export async function kakuSeatRight(deps, uid, machine, now) {
+  const dayId = kakuDayId(now);
+  if (kakuMachineFor(dayId) !== machine) return null;
+  const t = kakuTimes(dayId);
+  if (now < t.playStart || now >= t.playEnd) return null;
+  const cur = await kakuGetDay(deps, dayId);
+  const slots = cur ? cur.data.slots : [];
+  const slot = slots.find((x) => x.s <= now && now < x.e);
+  if (!slot || slot.uid !== uid) return { locked: true, slot: slot ? { name: slot.name, npc: slot.npc === true, e: slot.e } : null };
+  let end = slot.e;
+  for (;;) { const nx = slots.find((x) => x.s === end && x.uid === uid); if (!nx) break; end = nx.e; }
+  return { end };
+}
+export function kakuSpinGate(session, now) {
+  const dayId = kakuDayId(now);
+  if (kakuMachineFor(dayId) !== session.machine) return null;
+  const t = kakuTimes(dayId);
+  if (now < t.playStart || now >= t.playEnd) return session.kaku ? "over" : null;
+  return !session.kaku || now >= (session.kakuEnd || 0) ? "over" : null;
+}
+
+/* ----- 通知（個人ごとの設定。先着の通知はなし） ----- */
+async function kakuGetNotify(deps, uid) {
+  const d = await deps.firestore.get(`yuslotPrefs/${uid}`);
+  const n = d && d.kakuNotify && typeof d.kakuNotify === "object" ? d.kakuNotify : {};
+  const out = {};
+  for (const k of Object.keys(KAKU_NOTIFY_DEFAULTS)) out[k] = typeof n[k] === "boolean" ? n[k] : KAKU_NOTIFY_DEFAULTS[k];
+  return out;
+}
+async function kakuSetNotify(deps, uid, body) {
+  const cur = await kakuGetNotify(deps, uid), next = { ...cur };
+  for (const k of Object.keys(KAKU_NOTIFY_DEFAULTS)) if (typeof body?.prefs?.[k] === "boolean") next[k] = body.prefs[k];
+  await deps.firestore.set(`yuslotPrefs/${uid}`, { uid, kakuNotify: next, updatedAtMs: deps.now() });
+  return { ok: true, prefs: next };
+}
+async function kakuPushFilter(deps, kind) {
+  const docs = await deps.firestore.query("yuslotPrefs", []);
+  const m = new Map(docs.map((d) => [d.data.uid, d.data.kakuNotify || {}]));
+  return (uid) => { const p = m.get(uid); return p && typeof p[kind] === "boolean" ? p[kind] : KAKU_NOTIFY_DEFAULTS[kind]; };
+}
+const kakuMd = (ms) => { const d = new Date(ms + KAKU_JST); return `${d.getUTCMonth() + 1}/${d.getUTCDate()}`; };
+const kakuHm = (ms) => { const d = new Date(ms + KAKU_JST); return `${d.getUTCHours()}:${String(d.getUTCMinutes()).padStart(2, "0")}`; };
+const kakuNameOf = (x) => (x.name ? (x.npc ? `${x.name}(NPC)` : `${x.name}さん`) : "（空き）");
+
+/* 毎分の cron から。予定の時刻（前日12:00公開・前日21:00抽選・7:00・7:50・10:45）の直後10分だけ動く */
+const KAKU_EVENTS = [
+  { name: "pub", m: 720, next: true }, { name: "draw1", m: 1260, next: true },
+  { name: "same", m: 420, next: false }, { name: "result1", m: 470, next: false }, { name: "draw2", m: 645, next: false }
+];
+export async function runKakuTick(env = {}, scheduledTime = Date.now(), deps = null) {
+  const minOfDay = Math.floor(((scheduledTime + KAKU_JST) % KAKU_DAY_MS) / KAKU_MIN);
+  const due = KAKU_EVENTS.filter((e) => minOfDay >= e.m && minOfDay < e.m + 10);
+  if (!due.length) return { skipped: "outside" };
+  const today = kakuDayId(scheduledTime);
+  const todo = due.map((e) => ({ e, day: e.next ? kakuNextDay(today) : today })).filter((x) => x.day >= KAKU_EPOCH && !kakuTickDone.has(`${x.e.name}:${x.day}`));
+  if (!todo.length) return { skipped: "done" };
+  const d = deps || createDefaultDeps(env);
+  const results = {};
+  for (const { e, day } of todo) {
+    try {
+      results[e.name] = await kakuRunEvent(d, e.name, day);
+      kakuTickDone.add(`${e.name}:${day}`);
+    } catch (error) { console.error("kaku event error", e.name, String(error?.message || error).slice(0, 200)); }
+  }
+  return results;
+}
+async function kakuPush(deps, kind, day, title, body) {
+  const filter = await kakuPushFilter(deps, kind);
+  return sendBroadcastNotification(deps, `kaku-${kind}-${day}`, { kind: "kaku", title, body: truncate(body, 80), link: "./?open=announcements", tag: `kaku-${kind}-${day}` }, filter);
+}
+export async function kakuRunEvent(deps, name, day) {
+  const machine = KAKU_MACHINE_NAMES[kakuMachineFor(day)];
+  if (name === "pub") {
+    await kakuEnsureDay(deps, day);
+    return kakuPush(deps, "pub", day, "🌈 明日の確変台が決まりました", `明日（${kakuMd(kakuDayStart(day))}）の確変台は「${machine}」。申込は今日の21:00まで！ゆうスロの台の一覧の上から申し込めます。`);
+  }
+  if (name === "draw1") return kakuRunDraw(deps, day, 1);
+  if (name === "same") {
+    await kakuEnsureDay(deps, day);
+    return kakuPush(deps, "same", day, "🌈 今日の確変台：当日分の抽選申込スタート", `今日の確変台は「${machine}」。12:30〜13:20の10分枠の抽選は10:45まで申込OK！`);
+  }
+  if (name === "draw2") {
+    const r = await kakuRunDraw(deps, day, 2);
+    const cur = await kakuGetDay(deps, day, 0);
+    const lots = cur ? cur.data.slots.filter((x) => x.kind === "lot") : [];
+    await kakuPush(deps, "result2", day, "🌈 当日分の抽選結果が出ました", `${lots.map((x) => `${kakuHm(x.s)} ${kakuNameOf(x)}`).join("、")}。先着は11:45から！`);
+    return r;
+  }
+  if (name === "result1") return kakuAnnounceResult(deps, day);
+  return { skipped: "unknown" };
+}
+/* 当日 7:50 の結果のお知らせ（📢）。固定IDで1件だけ。プッシュは通知設定に従う */
+export async function kakuAnnounceResult(deps, day) {
+  const cur = await kakuEnsureDay(deps, day);
+  const d = cur.data, machine = KAKU_MACHINE_NAMES[d.machine];
+  const pre = d.slots.filter((x) => x.kind === "pre");
+  const lines = [`今日の確変台は「${machine}」！ 8:00〜15:20、枠をとった人だけが遊べます（還元率がグンと上がります）。`];
+  if (d.mode === "sameDay") lines.push("今日は前日の抽選がなく、当日分（12:30〜13:20の10分枠）だけの発売です。");
+  else { lines.push("【前日の抽選結果】"); pre.forEach((x) => lines.push(`${kakuHm(x.s)}〜 ${kakuNameOf(x)}`)); }
+  const q = d.slots.filter((x) => x.kind !== "pre");
+  lines.push("【当日分（10分枠）】7:00〜10:45に抽選の申込、先着は11:45から。" + q.map((x) => `${kakuHm(x.s)}${x.kind === "quick" ? "先着" : "抽選"}`).join("・"));
+  const now = new Date(deps.now());
+  await deps.firestore.createIfAbsent(`announcements/kaku-${day}`, { title: truncate(`🌈 今日の確変台は「${machine}」！`, 50), body: truncate(lines.join("\n"), 480), createdAt: now, updatedAt: now, createdByUid: "yuuchat-kaku", createdByName: "ゆうスロ確変台" });
+  return kakuPush(deps, "result1", day, "🌈 今日の確変台の抽選結果", `今日の確変台は「${machine}」。8:00から！結果はお知らせで確認できます。`);
 }
 
 export function createDefaultDeps(env, fetchImpl = (...args) => fetch(...args)) {

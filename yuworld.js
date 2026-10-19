@@ -14,6 +14,8 @@
 
 /* 🎟 ゆう宝くじ売り場の画面（別ファイル。Worker の lottery* アクションを呼んで表示するだけ） */
 import { renderLottery, stopLottery } from "./yulottery.js?v=20261019-lottery6";
+/* 🌈 確変台のパネル（台の一覧の上）。抽選・先着・通知設定。Worker の kaku* アクションを呼んで表示するだけ */
+import { kakuInit, kakuPanelHtml, kakuBind, kakuMachineInfo, startKaku, stopKaku, refreshKaku } from "./yukaku.js?v=20261020-kaku1";
 
 /* 6台（料金・特別役は worker.js の SLOT_MACHINES と同じ。表示用の名前・説明・絵文字・豪華さ(tier)を足す） */
 const MACHINES = [
@@ -47,6 +49,7 @@ function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (_) {} }
 function fxHigh() { return state.fxLevel === "high" && !reduced(); }
 
 const state = {
+  kaku: false, kakuEnd: 0,
   screen: "loading",
   published: false, isTopAdmin: false, open: true,
   clockOffset: 0,
@@ -66,7 +69,10 @@ const state = {
 const $ = (sel) => rootEl && rootEl.querySelector(sel);
 
 /* ---------- 起動・画面切り替え（script.js から呼ぶ） ---------- */
-export function initYuWorld(options) { deps = options; rootEl = document.getElementById("yuworldRoot"); injectStyles(); }
+export function initYuWorld(options) {
+  deps = options; rootEl = document.getElementById("yuworldRoot"); injectStyles();
+  kakuInit({ api, esc, machines: MACHINE_BY_ID, onChange: () => { if (state.screen === "lobby") renderLobby(); } });
+}
 export async function openYuWorldView() { if (!rootEl) return; if (state.screen !== "game") await loadConfigAndRender(); }
 export async function stopYuWorldView() {
   stopFlushTimer(); stopFeverTimer(); stopLobbyTimer(); stopLottery();
@@ -163,7 +169,7 @@ async function onTogglePublish() {
 }
 
 /* ---------- ロビー ---------- */
-async function openLobby() { state.screen = "lobby"; render(); await refreshLobby(); startLobbyTimer(); }
+async function openLobby() { state.screen = "lobby"; render(); await refreshLobby(); startLobbyTimer(); startKaku(); }
 async function refreshLobby() {
   let lobby;
   try { lobby = await api("lobby"); }
@@ -180,19 +186,22 @@ function renderLobby() {
     const s = seats[m.id] || { occupied: false };
     const busy = s.occupied && !s.mine;
     const label = busy ? `満席（${esc(s.name || "だれか")}）` : (s.mine ? "あなたが着席中" : "空いています");
-    const canSit = state.open && !busy;
-    return `<div class="yw-machine yw-tier${m.tier} ${busy ? "is-busy" : ""}">
+    const kk = kakuMachineInfo(m.id);            // 今日の確変台なら、枠の持ち主だけが遊べる
+    const canSit = state.open && !busy && !(kk && kk.locked);
+    const kakuNote = kk && kk.inWindow ? (kk.mine ? `<div class="yw-kaku-note">⭐ いまはあなたの枠！ 確変中🌈</div>` : `<div class="yw-kaku-note">🔒 枠をとった人だけ（いま：${kk.cur ? (kk.cur.name ? esc(kk.cur.name) + (kk.cur.npc ? "(NPC)" : "") : "空き枠") : "枠なし"}）</div>`) : (kk ? `<div class="yw-kaku-note">8:00〜15:20 は確変タイム🌈</div>` : "");
+    return `<div class="yw-machine yw-tier${m.tier} ${busy ? "is-busy" : ""} ${kk ? "yw-kaku" : ""}">${kk ? `<span class="yw-kaku-badge">🌈 確変台</span>` : ""}
         <div class="yw-machine-top"><span class="yw-machine-emoji">${m.emoji}</span><span class="yw-machine-tag">${esc(m.tag)}</span></div>
         <div class="yw-machine-name">${esc(m.name)}</div>
         <div class="yw-machine-price">1回 ${m.price} コイン</div>
         <div class="yw-machine-desc">${esc(m.desc)}</div>
-        <div class="yw-machine-seat ${busy ? "busy" : s.mine ? "mine" : "free"}">${label}</div>
+        <div class="yw-machine-seat ${busy ? "busy" : s.mine ? "mine" : "free"}">${label}</div>${kakuNote}
         <button type="button" class="yw-btn ${canSit ? "" : "yw-btn-disabled"}" data-sit="${m.id}" ${canSit ? "" : "disabled"}>${s.mine ? "続きから遊ぶ" : "この台で遊ぶ"}</button>
       </div>`;
   }).join("");
   rootEl.innerHTML = `<div class="yw-head"><button type="button" class="yw-back" id="ywBackShop">← お店の一覧</button><h2>🎰 ゆうスロ</h2>
       <p>台をえらんで着席してください。1台に1人まで、同時に6人まで遊べます。料金が高い台ほど演出が豪華です。</p></div>
-    ${closedNote}<div class="yw-lobby-grid">${cards}</div>`;
+    ${closedNote}${kakuPanelHtml()}<div class="yw-lobby-grid">${cards}</div>`;
+  kakuBind(rootEl);
   $("#ywBackShop")?.addEventListener("click", () => { stopLobbyTimer(); state.screen = "shop"; render(); });
   rootEl.querySelectorAll("[data-sit]").forEach((b) => b.addEventListener("click", () => { unlockAudio(); seat(b.getAttribute("data-sit")); }));
 }
@@ -212,6 +221,7 @@ async function seat(machineId) {
     state.cachedToken = await deps.getToken();
     const r = await api("seat", { machine: machineId });
     state.session = r.session;
+    state.kaku = r.kaku === true; state.kakuEnd = Number(r.kakuEnd || 0);
     state.machine = MACHINE_BY_ID[machineId];
     state.balance = Number(r.balance || r.startCoins || 0);
     state.freeSpins = Number(r.freeSpins || 0);
@@ -223,7 +233,8 @@ async function seat(machineId) {
     stopLobbyTimer();
     state.screen = "game"; render(); startFlushTimer();
   } catch (e) {
-    if (e.code === "seat_taken") alert("ほかの人が先に着席しました。別の台をお選びください。");
+    if (e.code === "kaku_locked") { alert("この確変台は、いま枠をとった人だけが遊べます。"); refreshKaku(); }
+    else if (e.code === "seat_taken") alert("ほかの人が先に着席しました。別の台をお選びください。");
     else if (e.code === "not_published") { state.published = false; state.screen = "preparing"; render(); }
     else if (e.code === "closed") { state.open = false; alert("ただいま営業時間外です（7:00〜23:00）。"); refreshLobby(); }
     else alert("着席できませんでした（" + (e.code || "エラー") + "）");
@@ -231,9 +242,10 @@ async function seat(machineId) {
 }
 
 /* ---------- 台での遊び画面 ---------- */
+function kakuEndLabel() { const d = new Date((state.kakuEnd || 0) + 9 * 3600000); return `${d.getUTCHours()}:${String(d.getUTCMinutes()).padStart(2, "0")}`; }
 function renderGame() {
   const m = state.machine;
-  rootEl.innerHTML = `
+  rootEl.innerHTML = `${state.kaku ? `<div class="yw-kaku-banner">🌈 確変中！ ${kakuEndLabel()} まで 🌈</div>` : ""}
     <div class="yw-topbar">
       <div class="yw-zoombar">
         <button type="button" class="yw-ctl" id="ywZoomOut" aria-label="縮小">－</button>
@@ -344,6 +356,7 @@ async function startSpin(autoDriven) {
 function handleSpinError(e) {
   if (e.code === "no_funds") { showMsg("コインが足りません。", "warn"); stopAuto(); setSpinEnabled(true); return; }
   if (e.code === "closed") { state.open = false; showMsg("営業時間が終了しました（23:00）。精算して退出します。", "warn"); stopAuto(); finishAndExitSoon(); return; }
+  if (e.code === "kaku_over") { showMsg("確変の枠が終わりました。精算して退出します。", "warn"); stopAuto(); finishAndExitSoon(); return; }
   if (e.code === "day_rollover" || e.code === "session_expired") { showMsg("セッションが切り替わりました。精算して退出します。", "warn"); stopAuto(); finishAndExitSoon(); return; }
   if (e.code === "not_published") { showMsg("ただいま非公開になりました。精算して退出します。", "warn"); stopAuto(); finishAndExitSoon(); return; }
   if (e.code === "bad_session") { showMsg("セッションが無効です。もう一度着席してください。", "warn"); stopAuto(); backToLobbySoon(); return; }
@@ -560,7 +573,7 @@ async function doFlush() {
   } finally { state.busy = false; }
 }
 function startLobbyTimer() { stopLobbyTimer(); state.lobbyTimer = setInterval(() => { if (state.screen === "lobby") refreshLobby(); }, 8000); }
-function stopLobbyTimer() { if (state.lobbyTimer) { clearInterval(state.lobbyTimer); state.lobbyTimer = null; } }
+function stopLobbyTimer() { if (state.lobbyTimer) { clearInterval(state.lobbyTimer); state.lobbyTimer = null; } stopKaku(); }
 function stopFeverTimer() { if (state.feverTimer) { clearInterval(state.feverTimer); state.feverTimer = null; } }
 
 /* ---------- 小さな表示ヘルパー ---------- */
