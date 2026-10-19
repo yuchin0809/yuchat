@@ -2548,6 +2548,7 @@ const LOTTERY_BONUS_CHOICES = [300, 500, 800, 1200, 2000, 3000];
 const LOTTERY_BIG_BONUS = 30000;
 /* 日付を決めて特別回にする（YYYY-MM-DD ＝ 抽選の日本時間の日付） */
 const LOTTERY_OVERRIDES = {
+  "2026-10-23": { name: "🎊 グランドオープン記念！ゆうミリオンジャンボ", bonus: 50000, big: true }, // 最初の回は大きなイベント
   "2026-12-25": { name: "🎄年末ジャンボ宝くじ", bonus: 50000, big: true },
   "2027-01-01": { name: "🎍新春お年玉ジャンボ", bonus: 30000, big: true }
 };

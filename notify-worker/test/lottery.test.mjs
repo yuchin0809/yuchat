@@ -89,8 +89,12 @@ test("毎週名前と賞金（ボーナス）が変わり、6週に1回ビッグ
   const normal = ev.filter((e) => !e.big);
   assert.equal(new Set(ev.slice(0, 5).map((e) => e.name)).size, 5, "連続する週で名前が変わる");
   assert.ok(new Set(ev.slice(0, 5).map((e) => e.bonus)).size >= 4, "週ごとに賞金（ボーナス）が違う");
-  // 6週に1回ビッグ（i=5）。年末(i=9)・新春(i=10)は特別回でビッグ。その隣の週(i=11)はビッグが3週続かないよう見送る
-  assert.deepEqual(ev.map((e) => e.big), [false, false, false, false, false, true, false, false, false, true, true, false]);
+  assert.ok(ev.slice(1, 5).every((e) => !e.big), "最初の回のあとの数週はふつうの週");
+  // 最初の回(i=0)はグランドオープン記念の特別回でビッグ。6週に1回ビッグ（i=5）。年末(i=9)・新春(i=10)も特別回でビッグ。
+  // その隣の週(i=11)はビッグが3週続かないよう見送る
+  assert.deepEqual(ev.map((e) => e.big), [true, false, false, false, false, true, false, false, false, true, true, false]);
+  assert.equal(ev[0].bonus, 50000); assert.match(ev[0].name, /グランドオープン/);
+  assert.ok(ev[0].bonus > ev[5].bonus, "最初の回は通常のビッグより大きい");
   assert.ok(ev.filter((e) => e.big).every((e) => e.bonus >= 30000), "ビッグは大きなボーナス");
   assert.ok(normal.every((e) => e.bonus <= 3000), "ふつうの週は控えめ");
   const nye = lotteryEventFor(Date.UTC(2026, 11, 25, 5, 30, 0));
