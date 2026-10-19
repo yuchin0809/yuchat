@@ -1,10 +1,11 @@
 /* 🌈 ゆうスロ確変台（worker.js の kaku*）のテスト
    実行：node --test "notify-worker/test/*.test.mjs" */
 import test from "node:test";
+import { simulate } from "../yuslot-kaku-sim.mjs";
 import assert from "node:assert/strict";
 import {
   KAKU_EPOCH, KAKU_MACHINE_NAMES, kakuDayId, kakuDayStart, kakuNextDay, kakuTimes, kakuMachineFor, kakuSameKinds, kakuInitialSlots, kakuNpcName,
-  kakuPickWinners, kakuRunDraw, kakuRunEvent, kakuSeatRight, kakuSpinGate, runKakuTick, resetKakuCacheForTest,
+  kakuPickWinners, kakuRunDraw, kakuRunEvent, kakuSeatRight, kakuSpinGate, kakuResultDataFor, runKakuTick, resetKakuCacheForTest,
   handleYuslotAction, resetYuslotCacheForTest, slotApplySpin, SLOT_MACHINES, SLOT_KAKU_RATE
 } from "../worker.js";
 
@@ -245,43 +246,57 @@ test("着席の制限：確変台は、その時間の枠をとった人だけ�
   assert.equal(kakuSpinGate(dayless, at(8, 1)), "over"); assert.equal(kakuSpinGate(dayless, at(7, 59)), null); assert.equal(kakuSpinGate({ machine: other }, at(8, 1)), null);
 });
 
-test("確変の還元率：確変中は当たりが増え、料金が高い台ほど倍率が小さい。通常のセッションは変わらない", () => {
+test("確変の還元率：30分（約900スピン）の平均収支は、どの台も 400〜800 コインの間。高い台ほど倍率は小さい。通常のセッションは変わらない", () => {
   const rng = rngOf(77);
-  const play = (machine, kaku) => {
-    let session = { machine, price: SLOT_MACHINES[machine].price, startCoins: 1e9, delta: 0, freeSpins: 0, feverUntil: 0, feverPending: false, spins: 0, wins: 0, streak: 0, kaku };
-    let now = 0;
-    for (let i = 0; i < 30000; i++) { const r = slotApplySpin(session, now, rng); session = r.session; if (session.feverPending) session = { ...session, feverUntil: now + 20000, feverPending: false }; now += 2000; }
-    return session.delta / (30000 * SLOT_MACHINES[machine].price);
-  };
-  for (const m of ["yubasic", "yujackpot"]) {
-    const normal = play(m, false), kaku = play(m, true);
-    assert.ok(kaku > normal + 0.3, `${m}: 通常 ${normal.toFixed(2)} → 確変 ${kaku.toFixed(2)}（収支/賭け金）`);
-    assert.ok(kaku > 0, `${m}: 確変は平均でプラス`);
+  for (const m of Object.keys(SLOT_MACHINES)) {
+    const r = simulate(m, SLOT_KAKU_RATE[m], rng, 1500);
+    assert.ok(r.mean >= 400 && r.mean <= 800, `${m}: 平均 ${r.mean.toFixed(0)}（400〜800）`);
+    const normal = simulate(m, 0, rng, 400);
+    assert.ok(normal.mean < 0, `${m}: 通常の台は平均でマイナス（${normal.mean.toFixed(0)}）`);
   }
+  const k = SLOT_KAKU_RATE;
+  assert.ok(k.yubasic > k.yurush && k.yurush > k.yuchance && k.yuchance > k.yutreasure, "料金の高い台ほど倍率は小さい");
+  assert.ok(Math.max(k.yurainbow, k.yujackpot) <= k.yutreasure + 0.02, "高級台は料金の低い台より小さい（シミュレーションの誤差は0.02まで）");
 });
 
-test("通知の設定：初期は結果の2つだけON。個人ごとに変えられ、プッシュはその設定どおりに送る（先着の通知はない）", async () => {
+test("通知の設定：初期は結果の2つだけON。個人ごとに変えられる。抽選結果は申し込んだ本人にだけ、その人の結果だけが届く", async () => {
   const { act, deps, fs, sent, state } = setup({ now: TT.preOpen + M, random: rngOf(4) });
-  await act("id2", "u2", { action: "kakuApply", which: "pre" });   // 前日の抽選がある回（前日に作られたドキュメント）
-  state.now = TT.preClose;
   assert.deepEqual((await act("id0", "u0", { action: "kakuGetNotify" })).prefs, { pub: false, same: false, result1: true, result2: true });
   assert.equal((await act("id1", "u1", { action: "kakuSetNotify", prefs: { result1: false, pub: true, bogus: true } })).prefs.result1, false);
   assert.deepEqual((await act("id1", "u1", { action: "kakuGetNotify" })).prefs, { pub: true, same: false, result1: false, result2: true });
-  fs.put("fcmTokens/tokA", encF({ uid: "id0" })); fs.put("fcmTokens/tokB", encF({ uid: "id1" })); fs.put("fcmTokens/tokC", encF({ uid: "id2" }));
+  for (const i of [0, 1, 2, 3, 4]) fs.put(`fcmTokens/tok${i}`, encF({ uid: `id${i}` }));
+  for (const i of [0, 1, 2]) await act(`id${i}`, `u${i}`, { action: "kakuApply", which: "pre" });   // id3・id4 は申し込まない。id1 は結果の通知をOFF
+  state.now = TT.preClose;
   await kakuRunDraw(deps, D, 1);
   state.now = TT.resultAt;
-  const r = await kakuRunEvent(deps, "result1", D);
-  assert.deepEqual(sent.map((x) => x.token).sort(), ["tokA", "tokC"], "7:50の結果は、OFFにした人（id1）には送らない");
-  assert.equal(sent[0].data.kind, "kaku");
-  const ann = fs.plain(`announcements/kaku-${D}`);
-  assert.ok(ann && ann.title.includes(KAKU_MACHINE_NAMES[kakuMachineFor(D)]) && ann.title.length <= 50 && ann.body.length <= 480, "7:50のお知らせ（📢）が1件");
-  assert.match(ann.body, /前日の抽選結果/); assert.match(ann.body, /NPC/);
-  sent.length = 0;
   await kakuRunEvent(deps, "result1", D);
-  assert.equal(sent.length, 0, "2回目は通知を重ねて送らない"); assert.equal([...fs.docs.keys()].filter((k) => k.startsWith("announcements/")).length, 1);
-  // 公開の通知（初期OFF）は、ONにした id1 にだけ
-  await kakuRunEvent(deps, "pub", D);
-  assert.deepEqual(sent.map((x) => x.token), ["tokB"]);
+  const doc = fs.plain(`yuslotKaku/${D}`);
+  assert.deepEqual(sent.map((x) => x.token).sort(), ["tok0", "tok2"], "申し込んだ人（id0・id2）だけ。OFFの id1・申し込んでいない id3・id4 には送らない");
+  for (const x of sent) {
+    const uid = x.token === "tok0" ? "id0" : "id2";
+    const mine = doc.slots.filter((s) => s.uid === uid && s.kind === "pre");
+    if (mine.length) { assert.match(x.data.body, /当選/); const hm = (ms) => { const d = new Date(ms + 9 * H); return `${d.getUTCHours()}:${String(d.getUTCMinutes()).padStart(2, "0")}`; }; assert.ok(mine.every((s) => x.data.body.includes(`${hm(s.s)}〜${hm(s.e)}`)), "自分の枠の時間が入っている"); }
+    else assert.match(x.data.body, /外れ/);
+    assert.ok(!/NPC|さん/.test(x.data.body), "ほかの人の名前・NPCは載らない");
+  }
+  // お知らせ（📢）は全員共通なので、誰が当たったかは載せない
+  const ann = fs.plain(`announcements/kaku-${D}`);
+  assert.ok(ann && ann.title.includes(KAKU_MACHINE_NAMES[kakuMachineFor(D)]) && ann.title.length <= 50 && ann.body.length <= 480);
+  assert.ok(!/NPC|さん|u0|u1|u2/.test(ann.body), "お知らせに個人の結果は載らない"); assert.match(ann.body, /プッシュ通知でお知らせ/);
+  const n = sent.length; await kakuRunEvent(deps, "result1", D);
+  assert.equal(sent.length, n, "2回目は重ねて送らない"); assert.equal([...fs.docs.keys()].filter((k) => k.startsWith("announcements/")).length, 1);
+  // 当日分の結果も同じ：申し込んだ本人にだけ
+  state.now = TT.sameOpen + M; resetKakuCacheForTest();
+  await act("id3", "u3", { action: "kakuApply", which: "same" });
+  state.now = TT.sameClose; sent.length = 0;
+  await kakuRunEvent(deps, "draw2", D);
+  assert.deepEqual(sent.map((x) => x.token), ["tok3"], "申し込んだ id3 にだけ（結果の通知はONが初期）");
+  assert.ok(/当日分/.test(sent[0].data.body));
+  // 公開の通知（初期OFF）は全員向けの内容で、ONにした id1 にだけ
+  sent.length = 0; await kakuRunEvent(deps, "pub", D);
+  assert.deepEqual(sent.map((x) => x.token), ["tok1"]);
+  // 結果の中身（関数）：申し込んでいない人は null
+  assert.equal(kakuResultDataFor(doc, "id4", 1, "x", D), null);
 });
 
 test("最初の日（10/20）は前日の抽選なし：当日分だけ。お知らせにもそう書く。cron は予定の時刻の直後だけ動く", async () => {
@@ -295,7 +310,7 @@ test("最初の日（10/20）は前日の抽選なし：当日分だけ。お知
   assert.equal(st2.today.mode, "sameDay"); assert.equal(fs.plain(`yuslotKaku/${day}`).draw1Done, true);
   await kakuAnnounceResultForTest(deps, day);
   const ann = fs.plain(`announcements/kaku-${day}`);
-  assert.match(ann.body, /当日分/); assert.doesNotMatch(ann.body, /前日の抽選結果/);
+  assert.match(ann.body, /当日分/); assert.doesNotMatch(ann.body, /プッシュ通知でお知らせしました/);
   // cron の間引き
   resetKakuCacheForTest();
   assert.equal((await runKakuTick({}, T1.dayStart + 5 * H, deps)).skipped, "outside");
@@ -308,16 +323,30 @@ test("最初の日（10/20）は前日の抽選なし：当日分だけ。お知
 });
 async function kakuAnnounceResultForTest(deps, day) { const { kakuAnnounceResult } = await import("../worker.js"); return kakuAnnounceResult(deps, day); }
 
-test("状態の取得：今日の確変台・枠（NPC表示つき・自分の枠）・明日の申込。uid は返さない", async () => {
-  const { act, deps, state } = setup({ now: TT.preOpen + M, random: rngOf(6) });
-  await act("id0", "u0", { action: "kakuApply", which: "pre" });
+ test("状態の取得：自分の枠と先着の空き状況（名前なし）だけ。ほかの人の予定・NPC・uid は返さない", async () => {
+  const { act, deps, state, fs } = setup({ now: TT.preOpen + M, random: rngOf(6) });
+  for (let i = 0; i < 3; i++) await act(`id${i}`, `u${i}`, { action: "kakuApply", which: "pre" });
   state.now = TT.preClose; await kakuRunDraw(deps, D, 1);
   state.now = TT.dayStart + 8 * H - 20 * M;
   resetKakuCacheForTest();
+  const doc = fs.plain(`yuslotKaku/${D}`);
   const st = await act("id0", "u0", { action: "kakuStatus" });
-  assert.equal(st.today.day, D); assert.equal(st.today.machine, kakuMachineFor(D)); assert.equal(st.today.slots.length, 18);
-  assert.ok(st.today.slots.filter((x) => x.kind === "pre").every((x) => x.name));
-  assert.ok(st.today.slots.some((x) => x.npc)); assert.ok(typeof st.today.slots[0].mine === "boolean");
+  assert.equal(st.today.day, D); assert.equal(st.today.machine, kakuMachineFor(D));
+  const myCount = doc.slots.filter((x) => x.uid === "id0").length;
+  assert.equal(st.today.slots.filter((x) => x.mine).length, myCount);
+  assert.ok(st.today.slots.every((x) => x.mine || x.kind === "quick"), "自分の枠か、先着の枠（空き状況）だけ");
+  assert.ok(st.today.slots.filter((x) => !x.mine).every((x) => x.kind === "quick" && typeof x.taken === "boolean"));
+  assert.equal(st.today.applied1, true); assert.equal(st.today.draw1Done, true);
+  const json = JSON.stringify(st);
+  assert.ok(!/id0|id1|id2|NPC/.test(json), "uid・NPCは返さない");
+  const others = doc.slots.filter((x) => x.name && x.uid !== "id0").map((x) => x.name);
+  assert.ok(others.length > 0 && others.every((n) => !json.includes(`"${n}"`)), "ほかの人の名前は返さない");
   assert.equal(st.tomorrow.day, kakuNextDay(D)); assert.equal(st.tomorrow.machine, kakuMachineFor(kakuNextDay(D)));
-  assert.ok(!JSON.stringify(st).includes("id0"), "uid を含まない");
+  // 申し込んでいない人には、自分の枠はなく、前日の抽選の結果も出さない
+  const st3 = await act("id5", "u5", { action: "kakuStatus" });
+  assert.equal(st3.today.slots.filter((x) => x.mine).length, 0); assert.equal(st3.today.applied1, false);
+  // 着席の拒否にも、いま誰が使っているかは入れない
+  state.now = TT.dayStart + 8 * H + 5 * M;
+  const locked = await act("id5", "u5", { action: "seat", machine: kakuMachineFor(D) });
+  assert.equal(locked.error, "kaku_locked"); assert.equal(locked.slot, undefined);
 });

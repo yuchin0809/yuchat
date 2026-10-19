@@ -15,7 +15,7 @@
 /* 🎟 ゆう宝くじ売り場の画面（別ファイル。Worker の lottery* アクションを呼んで表示するだけ） */
 import { renderLottery, stopLottery } from "./yulottery.js?v=20261019-lottery6";
 /* 🌈 確変台のパネル（台の一覧の上）。抽選・先着・通知設定。Worker の kaku* アクションを呼んで表示するだけ */
-import { kakuInit, kakuPanelHtml, kakuBind, kakuMachineInfo, startKaku, stopKaku, refreshKaku } from "./yukaku.js?v=20261020-kaku1";
+import { kakuInit, kakuPanelHtml, kakuBind, kakuMachineInfo, startKaku, stopKaku, refreshKaku } from "./yukaku.js?v=20261020-kaku2";
 
 /* 6台（料金・特別役は worker.js の SLOT_MACHINES と同じ。表示用の名前・説明・絵文字・豪華さ(tier)を足す） */
 const MACHINES = [
@@ -188,7 +188,7 @@ function renderLobby() {
     const label = busy ? `満席（${esc(s.name || "だれか")}）` : (s.mine ? "あなたが着席中" : "空いています");
     const kk = kakuMachineInfo(m.id);            // 今日の確変台なら、枠の持ち主だけが遊べる
     const canSit = state.open && !busy && !(kk && kk.locked);
-    const kakuNote = kk && kk.inWindow ? (kk.mine ? `<div class="yw-kaku-note">⭐ いまはあなたの枠！ 確変中🌈</div>` : `<div class="yw-kaku-note">🔒 枠をとった人だけ（いま：${kk.cur ? (kk.cur.name ? esc(kk.cur.name) + (kk.cur.npc ? "(NPC)" : "") : "空き枠") : "枠なし"}）</div>`) : (kk ? `<div class="yw-kaku-note">8:00〜15:20 は確変タイム🌈</div>` : "");
+    const kakuNote = kk && kk.inWindow ? (kk.mine ? `<div class="yw-kaku-note">⭐ いまはあなたの枠！ 確変中🌈</div>` : `<div class="yw-kaku-note">🔒 いまは枠をとった人だけ遊べます</div>`) : (kk ? `<div class="yw-kaku-note">8:00〜15:20 は確変タイム🌈</div>` : "");
     return `<div class="yw-machine yw-tier${m.tier} ${busy ? "is-busy" : ""} ${kk ? "yw-kaku" : ""}">${kk ? `<span class="yw-kaku-badge">🌈 確変台</span>` : ""}
         <div class="yw-machine-top"><span class="yw-machine-emoji">${m.emoji}</span><span class="yw-machine-tag">${esc(m.tag)}</span></div>
         <div class="yw-machine-name">${esc(m.name)}</div>
