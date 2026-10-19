@@ -158,7 +158,7 @@ async function main() {
     const remove = (docPath) => call("DELETE", `${BASE}/${docPath}`);
     const get = (docPath, token) => call("GET", `${BASE}/${docPath}`, undefined, token);
     const check = async (label, expected, promise) => { const r = await promise; record(label, expected, r.status, r.text); };
-    /* 公開直後の反映待ちを考えて、拒否が返るまで確かめ直す（廃止したイベント機能の確認だけに使う） */
+    /* 公開直後の反映待ちを考えて、拒否が返るまで確かめ直す（廃止したイベント機能・宝くじの確認に使う） */
     const checkDeniedAfterPropagation = async (label, attempt, onAllowed) => {
       const r = await waitForDeny(attempt, { onAllowed });
       if (r.tries > 1) propagationNotes.push(`${label}：${r.tries}回目（約${Math.round(r.waitedMs / 1000)}秒後）に${r.status === "DENY" ? "拒否を確認" : "最後まで拒否にならず"}`);
@@ -194,11 +194,15 @@ async function main() {
     await check("ゆうスロの着席をブラウザから直接読む", "DENY", get(`yuslotSeats/${ids.seatEvil}`));
     await check("ゆうスロにブラウザから勝手に着席する", "DENY", create("yuslotSeats", ids.seatEvil, { uid: TEST_UID, nonce: "x", delta: 1000000, flushedTotal: 0 }));
 
-    /* 🎟 ゆう宝くじ：購入枚数・抽選結果はサーバー（通知 Worker）だけ。ブラウザからは書けず、読めもしない */
-    await check("宝くじをタダで買う（購入枚数をブラウザから作る）", "DENY", create("lotteryEntries", ids.lotteryEntryEvil, { uid: TEST_UID, name: "x", round: "2030-01-04", count: 200 }));
-    await check("宝くじの購入枚数をブラウザから直接読む", "DENY", get(`lotteryEntries/${ids.lotteryEntryEvil}`));
-    await check("宝くじの抽選結果をブラウザから書き換える", "DENY", create("lotteryRounds", ids.lotteryRoundEvil, { round: "2030-01-04", status: "done", winners: [] }));
-    await check("宝くじの抽選結果をブラウザから直接読む", "DENY", get(`lotteryRounds/${ids.lotteryRoundEvil}`));
+    /* 🎟 ゆう宝くじ：購入枚数・抽選結果はサーバー（通知 Worker）だけ。ブラウザからは書けず、読めもしない。
+       公開直後は古いルールで判定されることがある（反映に最大1分ほど）ので、イベントの確認と同じく、拒否が返るまで確かめ直す。
+       古いルールのまま書き込めてしまったときは、確認用の文書をその場で消してから確かめ直す */
+    const lotteryEntryRef = db.doc(`lotteryEntries/${ids.lotteryEntryEvil}`);
+    const lotteryRoundRef = db.doc(`lotteryRounds/${ids.lotteryRoundEvil}`);
+    await checkDeniedAfterPropagation("宝くじをタダで買う（購入枚数をブラウザから作る）", () => create("lotteryEntries", ids.lotteryEntryEvil, { uid: TEST_UID, name: "x", round: "2030-01-04", count: 200 }), () => lotteryEntryRef.delete());
+    await checkDeniedAfterPropagation("宝くじの購入枚数をブラウザから直接読む", () => get(`lotteryEntries/${ids.lotteryEntryEvil}`));
+    await checkDeniedAfterPropagation("宝くじの抽選結果をブラウザから書き換える", () => create("lotteryRounds", ids.lotteryRoundEvil, { round: "2030-01-04", status: "done", winners: [] }), () => lotteryRoundRef.delete());
+    await checkDeniedAfterPropagation("宝くじの抽選結果をブラウザから直接読む", () => get(`lotteryRounds/${ids.lotteryRoundEvil}`));
 
     /* ④ 読み取りと、管理用以外のデータ（今まで通りのルール） */
     await check("手動レースの読み取り", "ALLOW", get(`derbyManualRaces/${ids.closedRace}`));
