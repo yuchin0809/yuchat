@@ -61,7 +61,7 @@ service cloud.firestore {
     //   gameInvites：送った人・送られた人だけ／fcmTokens：アプリからは読まない（通知サーバーだけが読む）
     //   gameRooms・gameRoomOwners：専用のルールで判定（gameRooms はロビー表示のため読み取りは今まで通り許可）
     function hasDedicatedReadRules(collection) {
-      return collection in ['messages', 'groups', 'fcmTokens', 'gameInvites', 'gameRooms', 'gameRoomOwners', 'yuslotSeats'];
+      return collection in ['messages', 'groups', 'fcmTokens', 'gameInvites', 'gameRooms', 'gameRoomOwners', 'yuslotSeats', 'lotteryEntries', 'lotteryRounds'];
     }
 
     // 下のコレクションは管理者だけが読める
@@ -81,7 +81,9 @@ service cloud.firestore {
         'races', 'raceLogs', 'raceBets',
         // 🎰 ゆうワールド：公開設定と着席は通知 Worker（サービスアカウント）だけが書く。ブラウザからは書けない
         //   worldConfig：公開/非公開（最上位管理者の操作を受けて Worker が書く）／yuslotSeats：着席の予約・解放は Worker だけ
-        'worldConfig', 'yuslotSeats'];
+        'worldConfig', 'yuslotSeats',
+        // 🎟 ゆう宝くじ売り場：購入枚数（lotteryEntries）と抽選結果（lotteryRounds）は通知 Worker（サービスアカウント）だけが書く
+        'lotteryEntries', 'lotteryRounds'];
     }
 
     // ===== もとのルール（管理者用・自動処理用・廃止したコレクション・専用ルールのあるコレクション以外は今まで通り） =====
@@ -393,6 +395,16 @@ service cloud.firestore {
     // 予約・解放・更新は通知 Worker（サービスアカウント）だけ。ブラウザからは読み書きできない
     // （着席状況はアプリが Worker 経由で取得する。ブラウザが直接いじって不正着席・他人の解放をできないようにする）
     match /yuslotSeats/{machineId} {
+      allow read: if false;
+    }
+
+    // ===== 🎟 ゆう宝くじ売り場（lotteryEntries／lotteryRounds） =====
+    // 購入・抽選・支払いは通知 Worker（サービスアカウント）だけ。ブラウザからは読み書きできない
+    // （誰がいくつ買ったか・抽選の中身を直接いじったり覗いたりできないように。アプリは Worker 経由で表示する）
+    match /lotteryEntries/{entryId} {
+      allow read: if false;
+    }
+    match /lotteryRounds/{roundId} {
       allow read: if false;
     }
 

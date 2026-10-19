@@ -100,7 +100,9 @@ async function main() {
     roomEvil: `roomverify-${stamp}`,
     userMismatch: `uverify-mismatch-${stamp}`,
     worldCfgEvil: `worldcfgverify-${stamp}`,
-    seatEvil: `seatverify-${stamp}`
+    seatEvil: `seatverify-${stamp}`,
+    lotteryEntryEvil: `lotteryverify-${stamp}`,
+    lotteryRoundEvil: `lotteryroundverify-${stamp}`
   };
   const cleanupRefs = [
     db.doc(`derbyManualRaces/${ids.closedRace}`),
@@ -116,7 +118,9 @@ async function main() {
     db.doc(`gameRooms/${ids.roomEvil}`),
     db.doc(`users/${ids.userMismatch}`),
     db.doc(`worldConfig/${ids.worldCfgEvil}`),
-    db.doc(`yuslotSeats/${ids.seatEvil}`)
+    db.doc(`yuslotSeats/${ids.seatEvil}`),
+    db.doc(`lotteryEntries/${ids.lotteryEntryEvil}`),
+    db.doc(`lotteryRounds/${ids.lotteryRoundEvil}`)
   ];
 
   const results = [];
@@ -189,6 +193,12 @@ async function main() {
     await check("ゆうスロの公開設定をブラウザから書き換える", "DENY", create("worldConfig", ids.worldCfgEvil, { yuslotPublished: true }));
     await check("ゆうスロの着席をブラウザから直接読む", "DENY", get(`yuslotSeats/${ids.seatEvil}`));
     await check("ゆうスロにブラウザから勝手に着席する", "DENY", create("yuslotSeats", ids.seatEvil, { uid: TEST_UID, nonce: "x", delta: 1000000, flushedTotal: 0 }));
+
+    /* 🎟 ゆう宝くじ：購入枚数・抽選結果はサーバー（通知 Worker）だけ。ブラウザからは書けず、読めもしない */
+    await check("宝くじをタダで買う（購入枚数をブラウザから作る）", "DENY", create("lotteryEntries", ids.lotteryEntryEvil, { uid: TEST_UID, name: "x", round: "2030-01-04", count: 200 }));
+    await check("宝くじの購入枚数をブラウザから直接読む", "DENY", get(`lotteryEntries/${ids.lotteryEntryEvil}`));
+    await check("宝くじの抽選結果をブラウザから書き換える", "DENY", create("lotteryRounds", ids.lotteryRoundEvil, { round: "2030-01-04", status: "done", winners: [] }));
+    await check("宝くじの抽選結果をブラウザから直接読む", "DENY", get(`lotteryRounds/${ids.lotteryRoundEvil}`));
 
     /* ④ 読み取りと、管理用以外のデータ（今まで通りのルール） */
     await check("手動レースの読み取り", "ALLOW", get(`derbyManualRaces/${ids.closedRace}`));
