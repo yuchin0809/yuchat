@@ -56,6 +56,8 @@ export default {
   /* Cron Triggers（wrangler.toml の [triggers]）：毎分、ゆうダービー開始1分前の通知を確かめる */
   async scheduled(event, env, ctx) {
     ctx.waitUntil(runScheduled(env, event.scheduledTime).catch((error) => console.error("scheduled error", String(error?.message || error).slice(0, 300))));
+    /* 🎟 毎週金曜 14:30（日本時間）の宝くじの抽選。抽選の直後以外は Firestore に触れずにすぐ戻る */
+    ctx.waitUntil(runLotteryTick(env, event.scheduledTime).catch((error) => console.error("lottery tick error", String(error?.message || error).slice(0, 300))));
   }
 };
 
@@ -2325,6 +2327,9 @@ export async function handleYuslotAction(deps, uid, body) {
       case "feverStart": return await yuslotFeverStart(deps, uid, body);
       case "flush": return await yuslotFlush(deps, uid, body);
       case "settle": return await yuslotSettle(deps, uid, body);
+      case "lotteryStatus": return await lotteryStatus(deps, uid, body);
+      case "lotteryBuy": return await lotteryBuy(deps, uid, body);
+      case "lotterySetPublished": return await lotterySetPublished(deps, uid, body);
       default: return { status: 400, error: "unknown_action" };
     }
   } catch (error) {
@@ -2500,6 +2505,304 @@ async function yuslotSettle(deps, uid, body) {
   catch (error) { if (isRetryableCommitError(error)) { res = { ok: true, applied: 0 }; } else throw error; }
   // FEVER・無料スピンは退出で破棄（セッション限りで Firestore に保存していない）
   return { ok: true, applied: res.applied || 0, finalBalance: session.startCoins + session.delta };
+}
+
+/* =========================================================
+   🎟 ゆう宝くじ売り場（毎週金曜 14:30（日本時間）に抽選。週ごとに名前・賞金が変わる）
+   ・抽選・購入・賞金の支払いはすべてサーバーが確定する（クライアントは表示だけ）。
+   ・券は1枚ずつ保存せず、ユーザーごとの「購入枚数」だけを lotteryEntries/{回}_{uid} に持つ。
+     抽選は枚数に比例した確率で、券を重複なく引く（10枚買うと1枚の10倍当たりやすい）。
+   ・賞金総額 ＝ 売上の70% ＋ その週のボーナス ＋ 前回の持ち越し。等級ごとに割合で分ける（売上を超えて配る心配は
+     ボーナス分だけ。ボーナスはこのファイルの設定で管理者が決める。ビッグイベントの週は大きなボーナス）。
+   ・誰も当たらなかった・払えなかった分は次回へ持ち越し（上限あり）。
+   ・販売は抽選の5分前に締め切る（抽選と購入が重ならないように）。
+   ・抽選は毎分の cron（scheduled）から。決まった時刻に1回だけ実行し、支払い・結果の記録は1回の commit で行う（二重払いなし）。
+   ・購入は Firestore の読み取り（残高・自分の枚数・着席確認）と commit 1回。抽選は参加者ぶんの読み取りだけ。
+   ・ゆうスロに着席中は購入できない（同じコインを二重に使えないように）。
+   ・公開設定は worldConfig/lottery（最上位管理者だけが変更）。非公開中は最上位管理者以外は使えない。
+   ========================================================= */
+
+export const LOTTERY = {
+  price: 10,                 // 1枚の値段（ゆうコイン）
+  returnRate: 0.7,           // 売上のうち賞金に回す割合（残りはシンク＝消える）
+  maxPerBuy: 100,            // 1回の購入の上限（枚）
+  maxPerRound: 200,          // 1人が1回の抽選で持てる上限（枚）
+  closeBeforeMs: 5 * 60000,  // 抽選の何ミリ秒前に販売を締め切るか
+  carryMax: 100000,          // 持ち越しの上限
+  tiers: [
+    { name: "1等", winners: 1, share: 0.4 },
+    { name: "2等", winners: 3, share: 0.3 },
+    { name: "3等", winners: 10, share: 0.3 }
+  ]
+};
+const LOTTERY_WEEK_MS = 7 * 86400000;
+const LOTTERY_EPOCH_MS = Date.UTC(2026, 9, 23, 5, 30, 0); // 最初の抽選：2026-10-23（金）14:30 JST ＝ 05:30 UTC
+/* 毎週変わる宝くじの名前（順番に回る） */
+const LOTTERY_NAMES = [
+  "虹のきらめき宝くじ", "黄金のクローバー宝くじ", "星降る夜の宝くじ", "ゆうドリーム宝くじ", "ハッピーラッキー宝くじ", "七福神の宝くじ",
+  "月見だんご宝くじ", "わくわく大漁宝くじ", "ミラクルスターズ宝くじ", "スマイル福引宝くじ", "桜吹雪の宝くじ", "ゆう花火宝くじ"
+];
+const LOTTERY_BIG_NAMES = ["超ビッグ！ゆうドリームジャンボ", "黄金ミリオン宝くじ", "ゆうスーパージャンボ宝くじ", "レインボー・メガジャンボ"];
+/* ふつうの週のボーナス（毎週ちがう金額）／ビッグイベントの週（6週に1回）のボーナス */
+const LOTTERY_BONUS_CHOICES = [300, 500, 800, 1200, 2000, 3000];
+const LOTTERY_BIG_BONUS = 30000;
+/* 日付を決めて特別回にする（YYYY-MM-DD ＝ 抽選の日本時間の日付） */
+const LOTTERY_OVERRIDES = {
+  "2026-12-25": { name: "🎄年末ジャンボ宝くじ", bonus: 50000, big: true },
+  "2027-01-01": { name: "🎍新春お年玉ジャンボ", bonus: 30000, big: true }
+};
+
+const lotteryMod = (n, m) => ((n % m) + m) % m;
+
+/* 今より後の、いちばん近い金曜 14:30（JST）の抽選時刻（ミリ秒）。ちょうどの時刻は次の回になる */
+export function lotteryNextDrawMs(nowMs) {
+  const d = new Date(nowMs);
+  let t = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 5, 30, 0) + lotteryMod(5 - d.getUTCDay(), 7) * 86400000;
+  if (t <= nowMs) t += LOTTERY_WEEK_MS;
+  return t;
+}
+export function lotteryRoundId(drawMs) {
+  const d = new Date(drawMs + 9 * 3600000);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+}
+/* その回の名前・ボーナス・ビッグイベントかどうか（計算だけで決まる。Firestore には保存しない） */
+export function lotteryEventFor(drawMs) {
+  const id = lotteryRoundId(drawMs);
+  const idx = Math.round((drawMs - LOTTERY_EPOCH_MS) / LOTTERY_WEEK_MS);
+  // 6週に1回のビッグイベント。ただし、前後の週が特別回（年末・新春など）のときは、ビッグが続かないように見送る
+  const nearSpecial = [-1, 1].some((k) => LOTTERY_OVERRIDES[lotteryRoundId(drawMs + k * LOTTERY_WEEK_MS)]);
+  let big = lotteryMod(idx, 6) === 5 && !nearSpecial, name, bonus;
+  if (big) { name = LOTTERY_BIG_NAMES[lotteryMod(Math.floor(idx / 6), LOTTERY_BIG_NAMES.length)]; bonus = LOTTERY_BIG_BONUS; }
+  else { name = LOTTERY_NAMES[lotteryMod(idx, LOTTERY_NAMES.length)]; bonus = LOTTERY_BONUS_CHOICES[lotteryMod(idx * 5 + 2, LOTTERY_BONUS_CHOICES.length)]; }
+  const o = LOTTERY_OVERRIDES[id];
+  if (o) { name = o.name; bonus = o.bonus; big = o.big === true; }
+  return { id, drawMs, closeMs: drawMs - LOTTERY.closeBeforeMs, index: idx, name, bonus, big, price: LOTTERY.price };
+}
+export function lotteryPotOf(salesCoins, bonus, carryIn) {
+  return Math.floor(salesCoins * LOTTERY.returnRate) + bonus + Math.min(Math.max(0, Number(carryIn) || 0), LOTTERY.carryMax);
+}
+export function lotteryPrizeEach(pot, tier) { return Math.floor((pot * tier.share) / tier.winners); }
+
+/* 抽選（純粋関数）：券を枚数に比例して重複なく引く。1人が複数の等級に当たることもある */
+export function lotteryDrawWinners(entries, pot, random) {
+  const pool = entries.filter((e) => e.count > 0).map((e) => ({ ...e, left: e.count }));
+  let total = pool.reduce((s, e) => s + e.left, 0);
+  const winners = [];
+  for (const tier of LOTTERY.tiers) {
+    const amount = lotteryPrizeEach(pot, tier);
+    for (let k = 0; k < tier.winners && total > 0; k++) {
+      let r = Math.floor(random() * total);
+      for (const e of pool) {
+        if (r < e.left) { e.left--; total--; if (amount > 0) winners.push({ uid: e.uid, name: e.name, tier: tier.name, amount }); break; }
+        r -= e.left;
+      }
+    }
+  }
+  return winners;
+}
+
+let lotteryConfigCache = { value: null, at: 0 };
+let lotteryDocCache = new Map();
+const lotteryDrawDone = new Set();
+export function resetLotteryCacheForTest() { lotteryConfigCache = { value: null, at: 0 }; lotteryDocCache = new Map(); lotteryDrawDone.clear(); }
+
+async function lotteryGetPublished(deps, maxAgeMs = 30000) {
+  const now = deps.now();
+  if (lotteryConfigCache.value !== null && now - lotteryConfigCache.at < maxAgeMs) return lotteryConfigCache.value;
+  try {
+    const doc = await deps.firestore.get("worldConfig/lottery");
+    lotteryConfigCache = { value: doc?.lotteryPublished === true, at: now };
+    return lotteryConfigCache.value;
+  } catch (error) {
+    console.warn("lottery config read failed", String(error?.message || error).slice(0, 120));
+    return false; // 取得失敗は非公開扱い
+  }
+}
+async function lotteryCachedGet(deps, path, ttlMs = 20000) {
+  const now = deps.now();
+  const hit = lotteryDocCache.get(path);
+  if (hit && now - hit.at < ttlMs) return hit.data;
+  const data = await deps.firestore.get(path);
+  lotteryDocCache.set(path, { data, at: now });
+  return data;
+}
+
+const lotteryYen = (n) => Number(n || 0).toLocaleString("ja-JP");
+
+/* 結果発表のお知らせ（📢）＋プッシュ通知。お知らせは固定IDで1件だけ、通知は notificationLogs で二重送信しない */
+async function lotteryAnnounce(deps, id, round) {
+  const fs = deps.firestore;
+  const ws = Array.isArray(round.winners) ? round.winners : [];
+  const lines = [`「${round.name}」の抽選結果です。賞金総額は ${lotteryYen(round.pot)} コイン！`];
+  for (const t of LOTTERY.tiers) {
+    const w = ws.filter((x) => x.tier === t.name);
+    if (!w.length) continue;
+    const names = w.length <= 3 ? w.map((x) => x.name).join("、") : `${w.slice(0, 3).map((x) => x.name).join("、")} ほか${w.length - 3}名`;
+    lines.push(`${t.name}（1名 ${lotteryYen(w[0].amount)} コイン）：${names}`);
+  }
+  lines.push(ws.length ? "当選したみなさんには、ゆうコインをお渡ししました🎁" : "今回は当選者がいませんでした。賞金は次回に持ち越しです！");
+  const now = new Date(deps.now());
+  await fs.createIfAbsent(`announcements/lottery-${id}`, {
+    title: truncate(`🎟 ${round.name} 結果発表！`, 50), body: truncate(lines.join("\n"), 480),
+    createdAt: now, updatedAt: now, createdByUid: "yuuchat-lottery", createdByName: "ゆう宝くじ売り場"
+  });
+  try { await notifyNewAnnouncement(deps, `lottery-${id}`); }
+  catch (error) { console.warn("lottery notify failed", String(error?.message || error).slice(0, 120)); }
+  await fs.update(`lotteryRounds/${id}`, { announced: true });
+}
+
+/* 抽選の実行。売上が1枚も無い回（ドキュメントが無い）は何もしない。支払いと結果の記録は1回の commit（二重払いなし） */
+export async function lotteryRunDraw(deps, drawMs) {
+  const fs = deps.firestore, ev = lotteryEventFor(drawMs);
+  const roundPath = `lotteryRounds/${ev.id}`;
+  const raw = await fs.getRaw(roundPath);
+  if (!raw) return { status: "no_sales", id: ev.id };
+  const round = decodeFields(raw.fields);
+  if (round.status === "done") {
+    if (round.announced !== true) await lotteryAnnounce(deps, ev.id, round);
+    return { status: "done", id: ev.id };
+  }
+  const docs = await fs.query("lotteryEntries", [["round", "EQUAL", ev.id]]);
+  const entries = docs.map((d) => ({ uid: d.data.uid, name: d.data.name, count: Number(d.data.count) || 0 })).filter((e) => e.count > 0 && e.uid && e.name);
+  const tickets = entries.reduce((s, e) => s + e.count, 0);
+  const salesCoins = tickets * ev.price;
+  const prev = await fs.get(`lotteryRounds/${lotteryRoundId(drawMs - LOTTERY_WEEK_MS)}`);
+  const carryIn = prev && prev.status === "done" ? Number(prev.carryOut) || 0 : 0;
+  const pot = lotteryPotOf(salesCoins, ev.bonus, carryIn);
+  let winners = lotteryDrawWinners(entries, pot, deps.random);
+
+  // 実在するユーザー（uid が一致）だけに払う。払えない分は持ち越しに回る
+  const uidOf = new Map(entries.map((e) => [e.name, e.uid]));
+  const names = [...new Set(winners.map((w) => w.name))];
+  const userDocs = names.length ? await fs.batchGet(names.map((n) => `users/${n}`)) : [];
+  const valid = new Set(names.filter((n, i) => userDocs[i] && userDocs[i].uid === uidOf.get(n)));
+  winners = winners.filter((w) => valid.has(w.name));
+
+  const paid = winners.reduce((s, w) => s + w.amount, 0);
+  const carryOut = Math.min(Math.max(0, pot - paid), LOTTERY.carryMax);
+  const byName = new Map();
+  winners.forEach((w) => byName.set(w.name, (byName.get(w.name) || 0) + w.amount));
+  const writes = [...byName].map(([name, amount]) => ({
+    update: { name: fs.docName(`users/${name}`), fields: {} },
+    updateMask: { fieldPaths: [] },
+    updateTransforms: [{ fieldPath: "coins", increment: restInt(amount) }],
+    currentDocument: { exists: true }
+  }));
+  const done = {
+    status: "done", name: ev.name, big: ev.big, drawMs, tickets, sales: salesCoins, bonus: ev.bonus, carryIn, pot, paid, carryOut,
+    winners: winners.map((w) => ({ uid: w.uid, name: w.name, tier: w.tier, amount: w.amount })), drawnAtMs: deps.now(), announced: false
+  };
+  writes.push({
+    update: { name: fs.docName(roundPath), fields: encodeFields(done) },
+    updateMask: { fieldPaths: Object.keys(done) },
+    currentDocument: { updateTime: raw.updateTime } // 同時に別の抽選が走っても、先に終わった1回だけが有効
+  });
+  await fs.commit(writes);
+  lotteryDocCache.delete(roundPath);
+  await lotteryAnnounce(deps, ev.id, done);
+  return { status: "drawn", id: ev.id, pot, paid, tickets, winners: winners.length };
+}
+
+/* 毎分の cron から呼ぶ。直近の抽選時刻の直後（最初の10分は毎分、そのあと24時間は15分ごと）だけ動く。
+   それ以外の分は Firestore に触れずにすぐ戻る */
+export async function runLotteryTick(env = {}, scheduledTime = Date.now(), deps = null) {
+  const drawMs = lotteryNextDrawMs(scheduledTime) - LOTTERY_WEEK_MS;
+  const since = scheduledTime - drawMs;
+  if (since < 0 || since > 24 * 3600000) return { skipped: "outside" };
+  const mins = Math.floor(since / 60000);
+  if (!(mins < 10 || mins % 15 === 0)) return { skipped: "throttle" };
+  const id = lotteryRoundId(drawMs);
+  if (lotteryDrawDone.has(id)) return { skipped: "done" };
+  const d = deps || createDefaultDeps(env);
+  const r = await lotteryRunDraw(d, drawMs);
+  if (r.status === "done" || r.status === "drawn" || r.status === "no_sales") lotteryDrawDone.add(id);
+  return r;
+}
+
+async function lotterySeatedElsewhere(deps, uid, now) {
+  const raws = await Promise.all(Object.keys(SLOT_MACHINES).map((id) => deps.firestore.getRaw(`yuslotSeats/${id}`)));
+  return raws.some((raw) => { if (!raw) return false; const d = decodeFields(raw.fields); return d.uid === uid && Number(d.graceUntilMs || 0) > now; });
+}
+
+async function lotterySetPublished(deps, uid, body) {
+  if (!slotIsTopAdmin(deps, uid)) return { status: 403, error: "not_top_admin" };
+  const published = body?.published === true;
+  await deps.firestore.commit([{
+    update: { name: deps.firestore.docName("worldConfig/lottery"), fields: { lotteryPublished: { booleanValue: published }, updatedAtMs: { integerValue: String(deps.now()) }, updatedByUid: { stringValue: uid } } },
+    updateMask: { fieldPaths: ["lotteryPublished", "updatedAtMs", "updatedByUid"] }
+  }]);
+  lotteryConfigCache = { value: published, at: deps.now() };
+  return { ok: true, published };
+}
+
+async function lotteryStatus(deps, uid, body) {
+  const now = deps.now();
+  const admin = slotIsTopAdmin(deps, uid);
+  const published = await lotteryGetPublished(deps);
+  if (!published && !admin) return { ok: true, published: false, isTopAdmin: false, serverNowMs: now };
+  const drawMs = lotteryNextDrawMs(now);
+  const ev = lotteryEventFor(drawMs);
+  const prevId = lotteryRoundId(drawMs - LOTTERY_WEEK_MS);
+  const [round, prev, entry, me] = await Promise.all([
+    lotteryCachedGet(deps, `lotteryRounds/${ev.id}`),
+    lotteryCachedGet(deps, `lotteryRounds/${prevId}`),
+    deps.firestore.get(`lotteryEntries/${ev.id}_${uid}`),
+    loadMyUser(deps.firestore, uid, body?.username)
+  ]);
+  const tickets = Number(round?.tickets) || 0;
+  const carryIn = prev && prev.status === "done" ? Number(prev.carryOut) || 0 : 0;
+  const pot = lotteryPotOf(tickets * ev.price, ev.bonus, carryIn);
+  const ws = prev && prev.status === "done" && Array.isArray(prev.winners) ? prev.winners : [];
+  return {
+    ok: true, published, isTopAdmin: admin, serverNowMs: now,
+    event: { id: ev.id, name: ev.name, big: ev.big, price: ev.price, drawMs: ev.drawMs, closeMs: ev.closeMs, bonus: ev.bonus },
+    open: now < ev.closeMs,
+    tickets, pot, carryIn,
+    tiers: LOTTERY.tiers.map((t) => ({ name: t.name, winners: t.winners, prize: lotteryPrizeEach(pot, t) })),
+    myTickets: Number(entry?.count) || 0,
+    balance: me.error ? null : Number(decodeFields(me.raw.fields).coins || 0),
+    limits: { maxPerBuy: LOTTERY.maxPerBuy, maxPerRound: LOTTERY.maxPerRound },
+    last: prev && prev.status === "done" ? {
+      id: prevId, name: prev.name, big: prev.big === true, drawMs: prev.drawMs, pot: prev.pot, tickets: prev.tickets,
+      winners: ws.map((w) => ({ name: w.name, tier: w.tier, amount: w.amount })),
+      myWin: ws.filter((w) => w.uid === uid).reduce((s, w) => s + (Number(w.amount) || 0), 0)
+    } : null
+  };
+}
+
+async function lotteryBuy(deps, uid, body) {
+  const count = Number(body?.count);
+  if (!Number.isInteger(count) || count < 1 || count > LOTTERY.maxPerBuy) return { status: 400, error: "bad_count" };
+  const now = deps.now();
+  const published = await lotteryGetPublished(deps);
+  if (!published && !slotIsTopAdmin(deps, uid)) return { status: 403, error: "not_published" };
+  const ev = lotteryEventFor(lotteryNextDrawMs(now));
+  if (now >= ev.closeMs) return { status: 409, error: "sales_closed" };
+
+  const me = await loadMyUser(deps.firestore, uid, body?.username);
+  if (me.error) return me.error;
+  if (await lotterySeatedElsewhere(deps, uid, now)) return { status: 409, error: "seated" };
+  const entryPath = `lotteryEntries/${ev.id}_${uid}`;
+  const entry = await deps.firestore.get(entryPath);
+  const owned = Number(entry?.count) || 0;
+  if (owned + count > LOTTERY.maxPerRound) return { status: 409, error: "limit_reached", remaining: Math.max(0, LOTTERY.maxPerRound - owned) };
+  const coins = Number(decodeFields(me.raw.fields).coins || 0);
+  const cost = ev.price * count;
+  if (coins < cost) return { status: 409, error: "insufficient_coins" };
+
+  const roundPath = `lotteryRounds/${ev.id}`;
+  try {
+    await deps.firestore.commit([
+      { update: { name: deps.firestore.docName(`users/${me.name}`), fields: { coins: restInt(coins - cost) } }, updateMask: { fieldPaths: ["coins"] }, currentDocument: { updateTime: me.raw.updateTime } },
+      { update: { name: deps.firestore.docName(entryPath), fields: { uid: { stringValue: uid }, name: { stringValue: me.name }, round: { stringValue: ev.id } } }, updateMask: { fieldPaths: ["uid", "name", "round"] }, updateTransforms: [{ fieldPath: "count", increment: restInt(count) }] },
+      { update: { name: deps.firestore.docName(roundPath), fields: { round: { stringValue: ev.id }, name: { stringValue: ev.name } } }, updateMask: { fieldPaths: ["round", "name"] }, updateTransforms: [{ fieldPath: "tickets", increment: restInt(count) }, { fieldPath: "sales", increment: restInt(cost) }] }
+    ]);
+  } catch (error) {
+    if (isRetryableCommitError(error)) return { status: 409, error: "busy" }; // 残高が同時に変わった等。もう一度
+    throw error;
+  }
+  lotteryDocCache.delete(roundPath);
+  return { ok: true, bought: count, myTickets: owned + count, balance: coins - cost, cost };
 }
 
 export function createDefaultDeps(env, fetchImpl = (...args) => fetch(...args)) {

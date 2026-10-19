@@ -41,6 +41,9 @@ async function ng(n, p) { try { await assertFails(p); pass++; logs.push("PASS �
     // 🎰 ゆうワールド：公開設定（worldConfig/yuslot）と着席（yuslotSeats/{台ID}）。どちらも Worker（サービスアカウント）だけが書く
     await setDoc(doc(d, "worldConfig/yuslot"), { yuslotPublished: false });
     await setDoc(doc(d, "yuslotSeats/yubasic"), { uid: "uidA", name: "alice", nonce: "n1", delta: 0, flushedTotal: 0 });
+    // 🎟 ゆう宝くじ：購入枚数（lotteryEntries）と抽選結果（lotteryRounds）は Worker（サービスアカウント）だけが書く
+    await setDoc(doc(d, "lotteryEntries/2026-10-23_uidA"), { uid: "uidA", name: "alice", round: "2026-10-23", count: 3 });
+    await setDoc(doc(d, "lotteryRounds/2026-10-23"), { round: "2026-10-23", tickets: 3, sales: 30, status: "open" });
   });
 
   logs.push("--- ① ゲームルーム：読み取りはロビー公開、作成は作成者が自分");
@@ -112,6 +115,18 @@ async function ng(n, p) { try { await assertFails(p); pass++; logs.push("PASS �
   await ng("一般ユーザーが他人の着席を書き換えて不正にコインを増やす", updateDoc(doc(bob, "yuslotSeats/yubasic"), { delta: 1000000 }));
   await ng("一般ユーザーが他人の着席を解放（削除）する", deleteDoc(doc(bob, "yuslotSeats/yubasic")));
   await ng("最上位管理者でもブラウザから直接は着席を書き換えられない", updateDoc(doc(admin, "yuslotSeats/yubasic"), { delta: 1000000 }));
+
+  logs.push("--- ⑧ ゆう宝くじ：購入枚数・抽選結果はサーバー（Worker）だけ。ブラウザからは読み書きできない");
+  await ng("本人でも自分の購入枚数（lotteryEntries）を直接読めない（Worker 経由だけ）", getDoc(doc(alice, "lotteryEntries/2026-10-23_uidA")));
+  await ng("他人の購入枚数を覗く", getDoc(doc(bob, "lotteryEntries/2026-10-23_uidA")));
+  await ng("最上位管理者でも購入枚数を直接読めない", getDoc(doc(admin, "lotteryEntries/2026-10-23_uidA")));
+  await ng("自分の購入枚数を勝手に増やす（当選確率の水増し）", updateDoc(doc(alice, "lotteryEntries/2026-10-23_uidA"), { count: 100000 }));
+  await ng("タダで宝くじを買う（購入枚数を作る）", setDoc(doc(bob, "lotteryEntries/2026-10-23_uidB"), { uid: "uidB", name: "bob", round: "2026-10-23", count: 200 }));
+  await ng("購入枚数を削除する", deleteDoc(doc(alice, "lotteryEntries/2026-10-23_uidA")));
+  await ng("抽選結果（lotteryRounds）を直接読めない", getDoc(doc(alice, "lotteryRounds/2026-10-23")));
+  await ng("抽選結果を書き換えて自分を当選させる", setDoc(doc(alice, "lotteryRounds/2026-10-23"), { status: "done", winners: [{ uid: "uidA", name: "alice", tier: "1等", amount: 999999 }] }));
+  await ng("最上位管理者でもブラウザから抽選結果を書けない", updateDoc(doc(admin, "lotteryRounds/2026-10-23"), { status: "done" }));
+  await ng("未ログインが購入枚数を作る", setDoc(doc(anon, "lotteryEntries/2026-10-23_uidZ"), { uid: "uidZ", count: 1 }));
 
   await env.cleanup();
   console.log(logs.join("\n"));

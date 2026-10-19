@@ -12,6 +12,9 @@
      演出・音・倍率・演出強弱は抽選結果を一切変えない（結果は常に Worker が決める）。
 ========================================================= */
 
+/* 🎟 ゆう宝くじ売り場の画面（別ファイル。Worker の lottery* アクションを呼んで表示するだけ） */
+import { renderLottery, stopLottery } from "./yulottery.js?v=20261019-lottery1";
+
 /* 6台（料金・特別役は worker.js の SLOT_MACHINES と同じ。表示用の名前・説明・絵文字・豪華さ(tier)を足す） */
 const MACHINES = [
   { id: "yubasic",    name: "ゆうベーシック",     price: 1, special: "orig",    emoji: "🔰", tag: "入門",   tier: 1, desc: "いちばん遊びやすい入門台。オリジナル絵柄が揃うと大当たり＆FEVER！" },
@@ -66,7 +69,7 @@ const $ = (sel) => rootEl && rootEl.querySelector(sel);
 export function initYuWorld(options) { deps = options; rootEl = document.getElementById("yuworldRoot"); injectStyles(); }
 export async function openYuWorldView() { if (!rootEl) return; if (state.screen !== "game") await loadConfigAndRender(); }
 export async function stopYuWorldView() {
-  stopFlushTimer(); stopFeverTimer(); stopLobbyTimer();
+  stopFlushTimer(); stopFeverTimer(); stopLobbyTimer(); stopLottery();
   if (state.session) { try { await settle(); } catch (_) {} }
 }
 
@@ -112,11 +115,24 @@ function render() {
   if (state.screen === "shop") return renderShop();
   if (state.screen === "lobby") return renderLobby();
   if (state.screen === "game") return renderGame();
+  if (state.screen === "lottery") return openLotteryScreen();
 }
 function renderMessage(title, body) {
   rootEl.innerHTML = `<div class="yw-head"><h2>🎡 ゆうワールド</h2></div>
     <div class="yw-notice"><div class="yw-notice-title">${esc(title)}</div>${body ? `<p>${esc(body)}</p>` : ""}</div>`;
 }
+/* 🎟 宝くじ売り場の画面。音は yuworld の音（ON/OFF設定）を使う */
+function openLotteryScreen() {
+  renderLottery({
+    root: rootEl, api, esc,
+    sfx: {
+      buy: () => playSeq([[660, 0.08], [880, 0.1], [1100, 0.12]], 0.03, "triangle", 0.07),
+      win: () => playSeq([[523, 0.12], [659, 0.12], [784, 0.14], [1047, 0.12], [1319, 0.34]], 0.045, "square", 0.11)
+    },
+    onBack: () => { state.screen = "shop"; render(); }
+  });
+}
+
 function renderShop() {
   const adminPanel = state.isTopAdmin ? `<div class="yw-admin"><span>管理者メニュー：ゆうスロの公開状態 <b>${state.published ? "公開中" : "非公開（準備中）"}</b></span>
       <button type="button" id="ywToggle" class="yw-btn yw-btn-sub">${state.published ? "非公開にする" : "公開する"}</button></div>` : "";
@@ -128,8 +144,14 @@ function renderShop() {
         <div class="yw-shop-body"><div class="yw-shop-name">ゆうスロ${state.published ? "" : " <span class=\"yw-badge\">準備中</span>"}</div>
           <div class="yw-shop-desc">6台のスロット。777やオリジナル絵柄で大当たり＆FEVER！営業時間 7:00〜21:00。</div></div>
       </button>
+      <button type="button" class="yw-shop-card" id="ywOpenLottery">
+        <div class="yw-shop-banner yw-lottery-banner"><span>🎟</span></div>
+        <div class="yw-shop-body"><div class="yw-shop-name">ゆう宝くじ売り場</div>
+          <div class="yw-shop-desc">毎週金曜14:30に抽選。毎週名前と賞金が変わって、たまにビッグイベント！1枚10コイン。</div></div>
+      </button>
     </div>`;
   $("#ywOpenSlot")?.addEventListener("click", () => { unlockAudio(); openLobby(); });
+  $("#ywOpenLottery")?.addEventListener("click", () => { unlockAudio(); state.screen = "lottery"; render(); });
   $("#ywToggle")?.addEventListener("click", onTogglePublish);
 }
 async function onTogglePublish() {
@@ -744,6 +766,7 @@ function injectStyles() {
   .yw-shop-card { text-align: left; border: none; background: #fff; border-radius: 16px; overflow: hidden; box-shadow: 0 6px 24px rgba(0,0,0,.08); cursor: pointer; padding: 0; }
   .yw-shop-banner { height: 110px; display: flex; align-items: center; justify-content: center; font-size: 54px; }
   .yw-slot-banner { background: linear-gradient(135deg, #7b2ff7, #f107a3); }
+  .yw-lottery-banner { background: linear-gradient(135deg, #ff8a00, #ff2d78 55%, #7b2ff7); }
   .yw-shop-body { padding: 12px 14px 16px; }
   .yw-shop-name { font-weight: 800; font-size: 16px; margin-bottom: 4px; }
   .yw-shop-desc { color: #666; font-size: 12.5px; line-height: 1.6; }

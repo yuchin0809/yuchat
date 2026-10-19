@@ -160,6 +160,15 @@ const TEST_CASES = [
   testCase("DENY", "yuslotSeats：一般が勝手に着席する", userA, "create", "yuslotSeats/yurush", { data: { uid: userA.uid, nonce: "x", delta: 0, flushedTotal: 0 } }),
   testCase("DENY", "yuslotSeats：他人の着席を書き換えてコインを増やす", userA, "update", "yuslotSeats/yubasic", { data: { uid: userA.uid, delta: 1000000 }, existing: { uid: "someoneElse", nonce: "n1", delta: 0 } }),
   testCase("DENY", "yuslotSeats：着席を削除して解放する", userA, "delete", "yuslotSeats/yubasic", { existing: { uid: userA.uid, nonce: "n1", delta: 0 } }),
+  // 🎟 ゆう宝くじ：購入枚数（lotteryEntries）・抽選結果（lotteryRounds）はサーバー（通知 Worker）だけ。ブラウザからは読み書きできない
+  testCase("DENY", "lotteryEntries：本人でも購入枚数を直接読めない（Worker 経由だけ）", userA, "get", `lotteryEntries/2030-01-04_${userA.uid}`, { existing: { uid: userA.uid, round: "2030-01-04", count: 3 } }),
+  testCase("DENY", "lotteryEntries：最上位管理者でも直接読めない", admin, "get", `lotteryEntries/2030-01-04_${userA.uid}`, { existing: { uid: userA.uid, round: "2030-01-04", count: 3 } }),
+  testCase("DENY", "lotteryEntries：購入枚数を勝手に増やす（確率の水増し）", userA, "update", `lotteryEntries/2030-01-04_${userA.uid}`, { data: { uid: userA.uid, round: "2030-01-04", count: 100000 }, existing: { uid: userA.uid, round: "2030-01-04", count: 3 } }),
+  testCase("DENY", "lotteryEntries：タダで宝くじを買う（作成）", userA, "create", `lotteryEntries/2030-01-04_${userA.uid}`, { data: { uid: userA.uid, round: "2030-01-04", count: 200 } }),
+  testCase("DENY", "lotteryEntries：購入枚数を削除する", userA, "delete", `lotteryEntries/2030-01-04_${userA.uid}`, { existing: { uid: userA.uid, round: "2030-01-04", count: 3 } }),
+  testCase("DENY", "lotteryRounds：抽選結果を直接読めない", userA, "get", "lotteryRounds/2030-01-04", { existing: { round: "2030-01-04", status: "open", tickets: 3 } }),
+  testCase("DENY", "lotteryRounds：抽選結果を書き換えて当選する", userA, "update", "lotteryRounds/2030-01-04", { data: { status: "done", winners: [{ uid: userA.uid, tier: "1等", amount: 999999 }] }, existing: { round: "2030-01-04", status: "open" } }),
+  testCase("DENY", "lotteryRounds：最上位管理者でもブラウザから書けない", admin, "update", "lotteryRounds/2030-01-04", { data: { status: "done" }, existing: { round: "2030-01-04", status: "open" } }),
   // お知らせ（announcements）：読み取りはログイン済みなら誰でも・作成/編集/削除は管理者だけ
   testCase("ALLOW", "一般：お知らせの読み取り", userA, "get", "announcements/a1", { existing: announcementDoc }),
   testCase("ALLOW", "管理者：お知らせの削除", admin, "delete", "announcements/a1", { existing: announcementDoc }),

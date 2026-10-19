@@ -23,6 +23,8 @@ ALLOWED_ORIGINS = "https://yuchin0809.github.io"
 
 # 毎分：ゆうダービー開始1分前の通知を確かめる（worker.js の scheduled → notifyDerbyStartingSoon）
 # 自動開催の回（11:30・15:02）は計算だけで決まり、手動レースだけ1回問い合わせる
+# あわせて、毎週金曜 14:30（日本時間）の宝くじの抽選も確かめる（worker.js の scheduled → runLotteryTick）
+# 抽選時刻の直後以外の分は計算だけで終わり、Firestore には触れない
 [triggers]
 crons = ["* * * * *"]
 
