@@ -4,6 +4,7 @@
    ・抽選・購入・賞金・公開/非公開の判定はすべて通知 Worker（/yuslot の lottery* アクション）が行う。
      ここは Worker が返した内容を表示して、購入ボタンを押したら Worker に頼むだけ。Firebase には直接触れない。
    ・毎週金曜 14:30（日本時間）に抽選。名前・賞金は毎週変わり、6週に1回ビッグイベント（Worker が決める）。
+     販売は抽選の週の月曜 8:00 に始まる。抽選のあと次の販売開始までは「準備中」（前回の結果のリプレイだけ見られる）。購入上限はない。
    ・券には番号（30組×100番＝全3,000通り）が付く。買い方は「連番」（同じ組の続き番号）か「バラ」（ランダム）。番号の割り当て・当選番号・
      前後賞（1等の前後の番号）はすべて Worker が決める。1等は全体で1本。確率は Worker が返した値から計算して表示。
    ・結果発表は「抽選会ショー」（yulotteryshow.js）。ブラウザ内の演出だけで、Worker が確定した結果を見せる。
@@ -94,13 +95,23 @@ function renderError() {
 
 /* 1回に買える最大枚数（1回の上限・この回の上限・所持コイン） */
 function maxBuyable() {
-  if (!st || !st.event) return 0;
-  const byRound = (st.limits?.maxPerRound || 0) - (st.myTickets || 0);
+  if (!st || !st.event || st.phase === "preparing") return 0;
   const byCoins = st.balance == null ? Infinity : Math.floor(st.balance / st.event.price);
   const byStock = st.remaining == null ? Infinity : st.remaining;
-  return Math.max(0, Math.min(st.limits?.maxPerBuy || 0, byRound, byCoins, byStock));
+  const bySeq = buyMode === "seq" ? (st.limits?.seqMax || 100) : Infinity;   // 連番は1組（100枚）まで。バラは何枚でも
+  return Math.max(0, Math.min(byCoins, byStock, bySeq));
 }
 function clampBuy(n) { const m = maxBuyable(); return m < 1 ? 0 : Math.max(1, Math.min(m, Math.floor(n) || 1)); }
+
+/* 前回の結果のカード（リプレイボタン付き）。準備中の画面でも使う */
+function lastCardHtml() {
+  const esc = ctx.esc;
+  return st.last ? `<div class="yl-card yl-last"><h3>📣 前回の結果：${esc(st.last.name)}</h3>
+      <p class="yl-sub">販売 ${fmt(st.last.tickets)} 枚 ／ 当選 ${fmt(st.last.winnerCount || 0)} 口 ／ 賞金 ${fmt(st.last.paid || 0)} コイン</p>
+      <button type="button" class="yw-btn yl-replay" id="ylReplay">🎬 抽選会をもう一度見る</button>
+      ${(st.last.numbers || []).map((w) => `<div class="yl-winner"><span>${esc(w.tier)}</span><span>${fmtNo(w.number)}　${w.name ? esc(w.name) + " さん" : "<small>（売れ残り）</small>"}</span></div>`).join("")}
+      ${(st.last.myWins || []).length ? `<div class="yl-mywin">🎉 あなたの当選：${st.last.myWins.map((w) => `${esc(w.tier)} ${fmtNo(w.number)}（+${fmt(w.amount)}）`).join("、")}<br>合計 ${fmt(st.last.myWin)} コイン</div>` : ""}</div>` : "";
+}
 
 function draw() {
   const head = `<div class="yl-head"><button type="button" class="yw-back" id="ylBack">← お店の一覧</button><h2>🎟 ゆう宝くじ売り場</h2></div>`;
@@ -112,16 +123,25 @@ function draw() {
   const e = st.event, esc = ctx.esc;
   const admin = st.isTopAdmin ? `<div class="yw-admin"><span>管理者メニュー：宝くじ売り場の公開状態 <b>${st.published ? "公開中" : "非公開（準備中）"}</b></span>
       <button type="button" id="ylToggle" class="yw-btn yw-btn-sub">${st.published ? "非公開にする" : "公開する"}</button></div>` : "";
+  const last = lastCardHtml();
+  if (st.phase === "preparing") {
+    ctx.root.innerHTML = `${head}${admin}
+      <div class="yl-card yl-prep"><div class="yl-prep-icon">🚧</div><b>次の宝くじは準備中です</b>
+        <p>販売開始：${fmtDraw(e.saleStartMs)}（毎週月曜 8:00）<br>次の抽選：${fmtDraw(e.drawMs)}（毎週金曜 14:30）</p>
+        <div class="yl-count" id="ylCount"></div>
+        <p class="yl-sub">名前と賞金は、販売が始まってからのお楽しみ！</p></div>
+      ${last || `<div class="yl-card yl-msg"><p>${st.prev && nowMs() >= st.prev.drawMs && nowMs() < st.prev.drawMs + 5 * 60000 ? "🥁 抽選結果を集計中…まもなく発表！" : "前回の結果はまだありません。"}</p></div>`}`;
+    $("#ylBack")?.addEventListener("click", () => { stopLottery(); ctx.onBack(); });
+    $("#ylToggle")?.addEventListener("click", togglePublished);
+    $("#ylReplay")?.addEventListener("click", () => startShow(st.last));
+    tick();
+    return;
+  }
   const medals = { "1等": "🥇", "前後賞": "🎀", "2等": "🥈", "3等": "🥉" };
   const pool = st.pool || 3000;
   const pct = (n) => { const v = (n / pool) * 100; return (v >= 1 ? String(Math.round(v * 10) / 10) : String(Math.round(v * 100) / 100)) + "%"; };
   const tiers = (st.tiers || []).map((t) => `<div class="yl-tier"><span>${medals[t.name] || "🎖"} ${esc(t.name)}</span><span class="yl-tier-n">${t.count}本・1枚 ${pct(t.count)}</span><b>${fmt(t.prize)} <small>コイン</small></b></div>`).join("");
   const top = (st.tiers || [])[0];
-  const last = st.last ? `<div class="yl-card yl-last"><h3>📣 前回の結果：${esc(st.last.name)}</h3>
-      <p class="yl-sub">販売 ${fmt(st.last.tickets)} 枚 ／ 当選 ${fmt(st.last.winnerCount || 0)} 口 ／ 賞金 ${fmt(st.last.paid || 0)} コイン</p>
-      <button type="button" class="yw-btn yl-replay" id="ylReplay">🎬 抽選会をもう一度見る</button>
-      ${(st.last.numbers || []).map((w) => `<div class="yl-winner"><span>${esc(w.tier)}</span><span>${fmtNo(w.number)}　${w.name ? esc(w.name) + " さん" : "<small>（売れ残り）</small>"}</span></div>`).join("")}
-      ${(st.last.myWins || []).length ? `<div class="yl-mywin">🎉 あなたの当選：${st.last.myWins.map((w) => `${esc(w.tier)} ${fmtNo(w.number)}（+${fmt(w.amount)}）`).join("、")}<br>合計 ${fmt(st.last.myWin)} コイン</div>` : ""}</div>` : "";
   const mineNums = (st.myNumbers || []).length ? `<details class="yl-nums"><summary>あなたの番号を見る（${fmt(st.myNumbers.length)}枚）</summary><p>${esc(fmtNumbers(st.myNumbers))}</p></details>` : "";
   ctx.root.innerHTML = `${head}${admin}
     <div class="yl-banner ${e.big ? "big" : ""}">
@@ -135,10 +155,10 @@ function draw() {
     </div>
     <div class="yl-card"><h3>🏆 賞金</h3>${tiers}<p class="yl-sub">番号は 30組×100番（全${fmt(pool)}通り）。抽選で決まった当選番号と同じ番号の券が当たりです。1等は全体で1本だけ。「前後賞」は1等の前後の番号なので、連番で買うと1等と一緒に当たることも！7等は元返しです。</p></div>
     <div class="yl-card yl-buy">
-      <div class="yl-mine">あなたの宝くじ <b>${fmt(st.myTickets)}枚</b>（この回は最大 ${fmt(st.limits?.maxPerRound)} 枚まで）${st.balance == null ? "" : ` ／ 所持 💰 ${fmt(st.balance)}`}</div>
+      <div class="yl-mine">あなたの宝くじ <b>${fmt(st.myTickets)}枚</b>（購入上限なし）${st.balance == null ? "" : ` ／ 所持 💰 <span id="ylBal">${fmt(st.balance)}</span>`}</div>
       <div class="yl-modes"><button type="button" class="yl-mode ${buyMode === "seq" ? "on" : ""}" data-mode="seq">連番<small>同じ組の続き番号</small></button><button type="button" class="yl-mode ${buyMode === "random" ? "on" : ""}" data-mode="random">バラ<small>ランダムな番号</small></button></div>
-      <div class="yl-stepper"><button type="button" class="yw-ctl" id="ylMinus" aria-label="へらす">－</button><span class="yl-n" id="ylN">0</span><button type="button" class="yw-ctl" id="ylPlus" aria-label="ふやす">＋</button></div>
-      <div class="yl-quick">${[1, 5, 10].map((n) => `<button type="button" class="yw-ctl" data-q="${n}">${n}枚</button>`).join("")}<button type="button" class="yw-ctl" data-q="max">最大</button></div>
+      <div class="yl-stepper"><button type="button" class="yw-ctl" id="ylMinus" aria-label="へらす">－</button><input class="yl-n" id="ylN" type="number" inputmode="numeric" min="1" value="1" aria-label="枚数"><button type="button" class="yw-ctl" id="ylPlus" aria-label="ふやす">＋</button></div>
+      <div class="yl-quick">${[1, 10, 50, 100].map((n) => `<button type="button" class="yw-ctl" data-q="${n}">${n}枚</button>`).join("")}<button type="button" class="yw-ctl" data-q="max">最大</button></div>
       <button type="button" class="yl-buybtn" id="ylBuy">買う</button>
       <div class="yl-note" id="ylNote"></div>
       <div class="yl-toast ${lastBought ? "on" : ""}" id="ylToast">${esc(lastBought)}</div>
@@ -150,28 +170,32 @@ function draw() {
   $("#ylMinus")?.addEventListener("click", () => { buyCount = clampBuy(buyCount - 1); updateBuyUi(); });
   $("#ylPlus")?.addEventListener("click", () => { buyCount = clampBuy(buyCount + 1); updateBuyUi(); });
   ctx.root.querySelectorAll("[data-q]").forEach((b) => b.addEventListener("click", () => { const q = b.getAttribute("data-q"); buyCount = clampBuy(q === "max" ? maxBuyable() : Number(q)); updateBuyUi(); }));
+  $("#ylN")?.addEventListener("input", (ev) => { buyCount = clampBuy(parseInt(ev.target.value, 10)); updateBuyUi(); });
+  $("#ylN")?.addEventListener("change", () => { buyCount = clampBuy(buyCount); updateBuyUi(true); });
   ctx.root.querySelectorAll("[data-mode]").forEach((b) => b.addEventListener("click", () => {
     buyMode = b.getAttribute("data-mode");
     ctx.root.querySelectorAll("[data-mode]").forEach((x) => x.classList.toggle("on", x.getAttribute("data-mode") === buyMode));
+    buyCount = clampBuy(buyCount); updateBuyUi(true);
   }));
   $("#ylBuy")?.addEventListener("click", buy);
   $("#ylReplay")?.addEventListener("click", () => startShow(st.last));
-  updateBuyUi();
+  updateBuyUi(true);
   tick();
 }
 
-function updateBuyUi() {
+function updateBuyUi(force) {
   const n = $("#ylN"), btn = $("#ylBuy"), note = $("#ylNote");
   if (!n || !btn || !st?.event) return;
   const cost = buyCount * st.event.price;
-  n.textContent = buyCount;
+  if (force || document.activeElement !== n) n.value = buyCount || 0;   // 入力中は打っている値を勝手に書き換えない
   const open = st.open && nowMs() < st.event.closeMs;
   const can = open && buyCount >= 1 && !busy;
   btn.disabled = !can;
   btn.textContent = buyCount >= 1 ? `買う（${fmt(cost)}コイン）` : "買えません";
-  let msg = `1枚 ${st.event.price} コイン。抽選の5分前に締め切ります。`;
-  if (!open) msg = "⏰ 今回の販売は締め切りました。次の回は抽選後に発売します。";
-  else if (maxBuyable() < 1) msg = (st.limits?.maxPerRound || 0) - (st.myTickets || 0) < 1 ? "この回に持てる枚数の上限に達しました。" : "コインが足りません。";
+  let msg = `1枚 ${st.event.price} コイン。抽選の5分前に締め切ります。` + (buyMode === "seq" ? "連番は1組（100枚）までです。" : "");
+  if (!open) msg = "⏰ 今回の販売は締め切りました。次の回は抽選のあと、月曜 8:00 から発売します。";
+  else if ((st.remaining ?? 1) < 1) msg = "売り切れです。次の回は抽選のあと、月曜 8:00 から発売します。";
+  else if (maxBuyable() < 1) msg = "コインが足りません。";
   if (note) note.textContent = msg;
 }
 
@@ -179,6 +203,7 @@ function tick() {
   const el = $("#ylCount");
   if (!el || !st?.event) return;
   const e = st.event, now = nowMs();
+  if (st.phase === "preparing") { el.textContent = now < e.saleStartMs ? `販売開始まで ${fmtRemain(e.saleStartMs - now)}` : "まもなく販売開始！"; return; }
   if (now < e.closeMs) el.textContent = `販売締切まで ${fmtRemain(e.closeMs - now)}`;
   else if (now < e.drawMs) el.textContent = `締切済み・抽選まで ${fmtRemain(e.drawMs - now)}`;
   else el.textContent = "🥁 抽選中…まもなく結果発表！";
@@ -188,11 +213,16 @@ function startTimer() {
   if (timer) clearInterval(timer);
   timer = setInterval(() => {
     tick();
-    // 抽選時刻を過ぎたら、結果が出るまで6秒おきに読み直す（抽選は通常1分以内に終わる。5分たっても出なければ待つのをやめる）
     if (!st?.event || playing || busy) return;
-    if (!waiting && nowMs() >= st.event.drawMs) waiting = { id: st.event.id, until: st.event.drawMs + 5 * 60000 };
+    // 抽選時刻を過ぎたら、結果が出るまで6秒おきに読み直す（抽選は通常1分以内に終わる。5分たっても出なければ待つのをやめる）
+    // ※抽選のあとは次の回の「準備中」になるので、準備中かどうかより先に確かめる
+    if (!waiting && st.phase !== "preparing" && nowMs() >= st.event.drawMs) waiting = { id: st.event.id, until: st.event.drawMs + 5 * 60000 };
+    // 抽選の直後（結果の集計中）にこの画面を開いたときも、結果が出るまで待つ
+    if (!waiting && st.phase === "preparing" && !st.last && st.prev && nowMs() >= st.prev.drawMs && nowMs() < st.prev.drawMs + 5 * 60000) waiting = { id: st.prev.id, until: st.prev.drawMs + 5 * 60000 };
     if (waiting && nowMs() > waiting.until) waiting = null;
-    if (waiting && Date.now() - lastLoadAt > 6000) load();
+    if (waiting) { if (Date.now() - lastLoadAt > 6000) load(); return; }
+    // 準備中：販売開始の時刻になったら、売り場を読み直す
+    if (st.phase === "preparing" && nowMs() >= st.event.saleStartMs && Date.now() - lastLoadAt > 4000) load();
   }, 1000);
 }
 
@@ -205,8 +235,9 @@ async function togglePublished() {
 
 const ERRORS = {
   sales_closed: "販売は抽選の5分前に締め切りました。次の回をお楽しみに！",
+  not_started: "まだ販売が始まっていません（月曜 8:00 から発売）。",
   sold_out: "売り切れです（この回の番号は全部売れました）。",
-  no_consecutive: "その枚数の連番はもう取れません。枚数を減らすか、「バラ」で買ってください。",
+  no_consecutive: "その枚数の連番は取れません（連番は1組＝100枚まで、空きも必要です）。枚数を減らすか、「バラ」で買ってください。",
   seated: "ゆうスロに着席中は買えません。先に「やめる」で退出してね。",
   insufficient_coins: "コインが足りません。",
   busy: "混み合っています。もう一度お試しください。",
@@ -218,19 +249,27 @@ async function buy() {
   const cost = buyCount * st.event.price;
   if (cost >= 500 && !confirm(`${buyCount}枚（${fmt(cost)}コイン）で購入しますか？`)) return;
   busy = true; updateBuyUi();
-  let msg = "";
+  let msg = "", stale = false;
   try {
     const r = await ctx.api("lotteryBuy", { count: buyCount, mode: buyMode });
     msg = `🎟 ${buyCount}枚 購入しました！ あなたの番号：${fmtNumbers(r && r.numbers)}`;
     markBought(st.event.id);
+    // 買った結果は返事からそのまま画面に反映する（状態を読み直さない＝Firebase の読み取りを増やさない）
+    st.myNumbers = [...(st.myNumbers || []), ...((r && r.numbers) || [])];
+    st.myTickets = st.myNumbers.length;
+    if (typeof r.balance === "number") st.balance = r.balance;
+    if (typeof r.remaining === "number") st.remaining = r.remaining;
+    if (typeof r.tickets === "number") st.tickets = r.tickets;
     if (ctx.sfx && ctx.sfx.buy) ctx.sfx.buy();
     if (!reduced()) confetti(14);
   } catch (e) {
-    msg = e.code === "sold_out" && e.detail?.remaining > 0 ? `売り切れ間近です（残り ${e.detail.remaining} 枚）。` : e.code === "limit_reached" ? `この回に持てるのは最大 ${st.limits?.maxPerRound} 枚までです（あと ${e.detail?.remaining ?? 0} 枚）。` : (ERRORS[e.code] || `購入できませんでした（${e.code || "エラー"}）`);
+    msg = e.code === "sold_out" && e.detail?.remaining > 0 ? `売り切れ間近です（残り ${e.detail.remaining} 枚）。` : (ERRORS[e.code] || `購入できませんでした（${e.code || "エラー"}）`);
+    stale = ["sold_out", "busy", "not_started", "sales_closed", "seated"].includes(e.code); // 状態が変わっていそうなときだけ読み直す
   }
   busy = false;
   lastBought = msg;
-  await load();             // 残高・枚数・番号を最新に（メッセージは再描画後も残す）
+  buyCount = clampBuy(buyCount);
+  if (stale) await load(); else { draw(); }
 }
 
 /* 抽選会ショーを流す条件：
@@ -308,7 +347,9 @@ function injectStyles() {
   .yl-nums { margin-top: 10px; font-size: 13px; color: #445; } .yl-nums summary { cursor: pointer; font-weight: 700; } .yl-nums p { line-height: 1.9; margin: 6px 0 0; word-break: break-all; }
   .yl-mine { font-size: 13px; color: #445; line-height: 1.7; }
   .yl-stepper { display: flex; align-items: center; justify-content: center; gap: 16px; margin: 10px 0 6px; }
-  .yl-n { min-width: 70px; text-align: center; font-size: 34px; font-weight: 900; font-variant-numeric: tabular-nums; }
+  .yl-n { width: 130px; text-align: center; font-size: 30px; font-weight: 900; font-variant-numeric: tabular-nums; border: 2px solid #d9d9e3; border-radius: 10px; padding: 2px 4px; background: #fff; color: inherit; }
+  .yl-prep { text-align: center; padding: 22px 16px; } .yl-prep-icon { font-size: 40px; } .yl-prep b { font-size: 18px; } .yl-prep p { color: #556; line-height: 1.9; margin: 8px 0; }
+  .yl-prep .yl-count { color: #7a1bd6; background: #f3e9ff; }
   .yl-quick { display: flex; justify-content: center; gap: 8px; margin-bottom: 10px; }
   .yl-buybtn { width: 100%; border: none; border-radius: 12px; padding: 14px; font-size: 17px; font-weight: 900; color: #3a2a00; cursor: pointer;
     background: linear-gradient(135deg,#ffd700,#ff9a00); box-shadow: 0 4px 14px rgba(255,160,0,.45); }
