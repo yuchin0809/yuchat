@@ -13,7 +13,7 @@
 ========================================================= */
 
 /* 🎟 ゆう宝くじ売り場の画面（別ファイル。Worker の lottery* アクションを呼んで表示するだけ） */
-import { renderLottery, stopLottery } from "./yulottery.js?v=20261019-lottery2";
+import { renderLottery, stopLottery } from "./yulottery.js?v=20261019-lottery3";
 
 /* 6台（料金・特別役は worker.js の SLOT_MACHINES と同じ。表示用の名前・説明・絵文字・豪華さ(tier)を足す） */
 const MACHINES = [
@@ -147,7 +147,7 @@ function renderShop() {
       <button type="button" class="yw-shop-card" id="ywOpenLottery">
         <div class="yw-shop-banner yw-lottery-banner"><span>🎟</span></div>
         <div class="yw-shop-body"><div class="yw-shop-name">ゆう宝くじ売り場</div>
-          <div class="yw-shop-desc">毎週金曜14:30に抽選。1等は全体で1本・1万コイン！毎週名前と賞金が変わって、たまにビッグイベント。1枚30コイン。</div></div>
+          <div class="yw-shop-desc">毎週金曜14:30に抽選。1等は全体で1本・1万コイン！毎週名前と賞金が変わって、たまにビッグイベント。1枚10コイン。</div></div>
       </button>
     </div>`;
   $("#ywOpenSlot")?.addEventListener("click", () => { unlockAudio(); openLobby(); });

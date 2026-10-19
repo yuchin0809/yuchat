@@ -4,7 +4,7 @@
    ・抽選・購入・賞金・公開/非公開の判定はすべて通知 Worker（/yuslot の lottery* アクション）が行う。
      ここは Worker が返した内容を表示して、購入ボタンを押したら Worker に頼むだけ。Firebase には直接触れない。
    ・毎週金曜 14:30（日本時間）に抽選。名前・賞金は毎週変わり、6週に1回ビッグイベント（Worker が決める）。
-   ・全1,000口の枠から券ごとに当たりが決まる（1等は全体で1本）。枚数が多いほど当たりやすい。確率は Worker が返した値から計算して表示。
+   ・全3,000口の枠から券ごとに当たりが決まる（1等は全体で1本）。枚数が多いほど当たりやすい。確率は Worker が返した値から計算して表示。
    ・演出（紙吹雪・数字のカウント）はブラウザ内だけ。当選のお祝いは、その回の結果を初めて見たときに1回だけ出す
      （見たかどうかは端末内 localStorage に保存。Firebase には保存しない）。
 ========================================================= */
@@ -87,7 +87,7 @@ function draw() {
   const admin = st.isTopAdmin ? `<div class="yw-admin"><span>管理者メニュー：宝くじ売り場の公開状態 <b>${st.published ? "公開中" : "非公開（準備中）"}</b></span>
       <button type="button" id="ylToggle" class="yw-btn yw-btn-sub">${st.published ? "非公開にする" : "公開する"}</button></div>` : "";
   const medals = ["🥇", "🥈", "🥉"];
-  const pool = st.pool || 1000;
+  const pool = st.pool || 3000;
   const pct = (n) => { const v = (n / pool) * 100; return (v >= 1 ? String(Math.round(v * 10) / 10) : String(Math.round(v * 100) / 100)) + "%"; };
   const tiers = (st.tiers || []).map((t, i) => `<div class="yl-tier"><span>${medals[i] || "🎖"} ${esc(t.name)}</span><span class="yl-tier-n">${t.count}本・1枚 ${pct(t.count)}</span><b>${fmt(t.prize)} <small>コイン</small></b></div>`).join("");
   const top = (st.tiers || [])[0];

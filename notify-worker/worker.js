@@ -2511,10 +2511,10 @@ async function yuslotSettle(deps, uid, body) {
    🎟 ゆう宝くじ売り場（毎週金曜 14:30（日本時間）に抽選。週ごとに名前・賞金が変わる）
    ・抽選・購入・賞金の支払いはすべてサーバーが確定する（クライアントは表示だけ）。
    ・券は1枚ずつ保存せず、ユーザーごとの「購入枚数」だけを lotteryEntries/{回}_{uid} に持つ。
-   ・1回につき全1,000口の枠があり、当たりの本数は固定（1等は全体で1本・7等級）。買った券は枠からランダムに重複なく割り当てる。
-     → 1枚あたりの1等の確率は 1/1,000。買う枚数が多いほど当たりやすい（30枚で3%）。売れ残った枠の賞金は払わない。
-     1,000枚を超えて売れたときは枠を券の数まで広げる（当たりの本数は変えない）。1枚しか売れなくても確定当選にはならない。
-   ・賞金の額は週ごとの倍率で変わる（ふつうの週は ×0.9 / ×1 / ×1.1、ビッグイベントは ×2 など）。7等だけは元返し固定。
+   ・1回につき全3,000口の枠があり、当たりの本数は固定（1等は全体で1本・7等級）。買った券は枠からランダムに重複なく割り当てる。
+     → 1枚あたりの1等の確率は 1/3,000。買う枚数が多いほど当たりやすい（100枚で約3.3%）。売れ残った枠の賞金は払わない。
+     3,000枚を超えて売れたときは枠を券の数まで広げる（当たりの本数は変えない）。1枚しか売れなくても確定当選にはならない。
+   ・賞金の額は週ごとの倍率で変わる（ふつうの週は ×0.9 / ×0.95 / ×1、ビッグイベントは ×2 など）。7等だけは元返し固定。
    ・販売は抽選の5分前に締め切る（抽選と購入が重ならないように）。
    ・抽選は毎分の cron（scheduled）から。決まった時刻に1回だけ実行し、支払い・結果の記録は1回の commit で行う（二重払いなし）。
    ・購入は Firestore の読み取り（残高・自分の枚数・着席確認）と commit 1回。抽選は参加者ぶんの読み取りだけ。
@@ -2523,19 +2523,19 @@ async function yuslotSettle(deps, uid, body) {
    ========================================================= */
 
 export const LOTTERY = {
-  price: 30,                 // 1枚の値段（ゆうコイン）
-  poolSize: 1000,            // 1回の枠の数（これ以上売れたら枠を広げる）
-  maxPerBuy: 30,             // 1回の購入の上限（枚）
-  maxPerRound: 30,           // 1人が1回の抽選で持てる上限（枚）
+  price: 10,                 // 1枚の値段（ゆうコイン）
+  poolSize: 3000,            // 1回の枠の数（これ以上売れたら枠を広げる）
+  maxPerBuy: 100,            // 1回の購入の上限（枚）
+  maxPerRound: 100,          // 1人が1回の抽選で持てる上限（枚）
   closeBeforeMs: 5 * 60000,  // 抽選の何ミリ秒前に販売を締め切るか
   tiers: [                   // count＝当たりの本数、prize＝倍率1のときの賞金（fixed は倍率をかけない元返し）
     { name: "1等", count: 1, prize: 10000 },
     { name: "2等", count: 2, prize: 3000 },
-    { name: "3等", count: 3, prize: 500 },
-    { name: "4等", count: 8, prize: 200 },
-    { name: "5等", count: 20, prize: 100 },
-    { name: "6等", count: 50, prize: 50 },
-    { name: "7等", count: 100, prize: 30, fixed: true }
+    { name: "3等", count: 3, prize: 1000 },
+    { name: "4等", count: 10, prize: 300 },
+    { name: "5等", count: 20, prize: 150 },
+    { name: "6等", count: 80, prize: 30 },
+    { name: "7等", count: 110, prize: 10, fixed: true }
   ]
 };
 const LOTTERY_WEEK_MS = 7 * 86400000;
@@ -2547,7 +2547,7 @@ const LOTTERY_NAMES = [
 ];
 const LOTTERY_BIG_NAMES = ["超ビッグ！ゆうドリームジャンボ", "黄金ミリオン宝くじ", "ゆうスーパージャンボ宝くじ", "レインボー・メガジャンボ"];
 /* ふつうの週の賞金の倍率（3週で一回り）／ビッグイベントの週（6週に1回）の倍率 */
-const LOTTERY_SCALES = [0.9, 1, 1.1];
+const LOTTERY_SCALES = [0.9, 0.95, 1];
 const LOTTERY_BIG_SCALE = 2;
 /* 日付を決めて特別回にする（YYYY-MM-DD ＝ 抽選の日本時間の日付） */
 const LOTTERY_OVERRIDES = {
@@ -2583,7 +2583,11 @@ export function lotteryEventFor(drawMs) {
   return { id, drawMs, closeMs: drawMs - LOTTERY.closeBeforeMs, index: idx, name, scale, big, price: LOTTERY.price };
 }
 /* 等級ごとの賞金（その回の倍率を反映。元返し等級は倍率をかけない） */
-export function lotteryPrizeOf(tier, scale) { return tier.fixed ? tier.prize : Math.round(tier.prize * scale); }
+export function lotteryPrizeOf(tier, scale) {
+  if (tier.fixed) return tier.prize;
+  const v = tier.prize * scale;
+  return v >= 100 ? Math.round(v / 10) * 10 : Math.round(v); // 100以上は10コイン単位に丸める
+}
 /* その回の等級の一覧（表示用）。枠の数は売れた枚数が1,000を超えたら券の数まで広がる */
 export function lotteryTiersFor(scale) { return LOTTERY.tiers.map((t) => ({ name: t.name, count: t.count, prize: lotteryPrizeOf(t, scale) })); }
 export function lotteryPoolFor(tickets) { return Math.max(LOTTERY.poolSize, Math.floor(Number(tickets) || 0)); }
