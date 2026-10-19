@@ -5,7 +5,7 @@ import { simulate } from "../yuslot-kaku-sim.mjs";
 import assert from "node:assert/strict";
 import {
   KAKU_EPOCH, KAKU_MACHINE_NAMES, kakuDayId, kakuDayStart, kakuNextDay, kakuTimes, kakuMachineFor, kakuSameKinds, kakuInitialSlots, kakuNpcName,
-  kakuIsWeekend, kakuPoolFor, kakuPickWinners, kakuRunDraw, kakuRunEvent, kakuSeatRight, kakuSpinGate, kakuResultDataFor, runKakuTick, resetKakuCacheForTest,
+  kakuCurrentHolder, kakuIsWeekend, kakuPoolFor, kakuPickWinners, kakuRunDraw, kakuRunEvent, kakuSeatRight, kakuSpinGate, kakuResultDataFor, runKakuTick, resetKakuCacheForTest,
   handleYuslotAction, resetYuslotCacheForTest, slotApplySpin, SLOT_MACHINES, SLOT_KAKU_RATE
 } from "../worker.js";
 
@@ -457,4 +457,30 @@ test("土日は抽選に当たる割合が約10%（平日は約1/3）。申込�
   assert.ok(pre.filter((x) => x.npc).length >= 10, "土曜は実在の当選者が少なく、NPCが多い");
   const st = await w.act("id0", "u0", { action: "kakuStatus" });
   assert.equal(st.tomorrow.weekend, true, "金曜の夜から見た「明日」（土曜）は土日扱い"); assert.equal(st.today.weekend, false, "金曜は平日");
+});
+
+test("台のカード用：いまの枠を使っているのは「NPC／ほかのプレイヤー／自分／いない」のどれかだけ返す（名前・uid は返さない）", async () => {
+  const at = (h, m = 0) => TT.dayStart + (h * 60 + m) * M;
+  const slots = kakuInitialSlots(D).map((x) => ({ ...x }));
+  const byStart = (h, m) => slots.find((x) => x.s === at(h, m));
+  Object.assign(byStart(8, 0), { uid: "idA", name: "はなこ" });                  // ほかのプレイヤー
+  Object.assign(byStart(8, 30), { uid: "", name: "ほしぞら", npc: true });          // NPC
+  Object.assign(byStart(9, 0), { uid: "idMe", name: "me" });                    // 自分
+  const h = (hh, mm) => kakuCurrentHolder(slots, "idMe", TT, at(hh, mm));
+  assert.equal(h(8, 10).holder, "player"); assert.equal(h(8, 40).holder, "npc"); assert.equal(h(9, 10).holder, "me"); assert.equal(h(9, 40).holder, "none");
+  assert.deepEqual(h(8, 40), { s: at(8, 30), e: at(9, 0), holder: "npc" });
+  assert.equal(h(7, 59), null, "8:00より前は通常の台"); assert.equal(kakuCurrentHolder(slots, "idMe", TT, at(15, 20)), null, "15:20以降は通常の台");
+  assert.ok(!JSON.stringify(h(8, 10)).match(/idA|はなこ/) && !JSON.stringify(h(8, 40)).match(/ほしぞら/), "名前は含まない");
+  // 状態の取得にも入る
+  const env = setup({ now: TT.preOpen + M, random: rngOf(31) });
+  for (let i = 0; i < 2; i++) await env.act(`id${i}`, `u${i}`, { action: "kakuApply", which: "pre" });
+  env.state.now = TT.preClose + 6000; await kakuRunDraw(env.deps, D, 1);
+  env.state.now = at(8, 5); resetKakuCacheForTest();
+  const st = await env.act("id0", "u0", { action: "kakuStatus" });
+  assert.ok(st.today.cur && ["me", "player", "npc", "none"].includes(st.today.cur.holder));
+  const first = env.fs.plain(`yuslotKaku/${D}`).slots[0];
+  assert.equal(st.today.cur.holder, first.uid ? (first.uid === "id0" ? "me" : "player") : first.npc ? "npc" : "none");
+  assert.ok(!JSON.stringify(st.today.cur).match(/id0|id1|u0|u1/));
+  env.state.now = at(7, 0); resetKakuCacheForTest();
+  assert.equal((await env.act("id0", "u0", { action: "kakuStatus" })).today.cur, null, "8:00前は null");
 });

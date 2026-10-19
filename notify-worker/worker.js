@@ -3117,6 +3117,14 @@ async function kakuQuick(deps, uid, body) {
   return { ok: true, slot: idx };
 }
 /* 画面に返すのは「自分の枠」と「先着の空き状況（名前なし）」だけ。ほかの人（NPC を含む）の予定・結果は返さない */
+/* いまの枠を使っている（使う）のが「NPC」「ほかのプレイヤー」「自分」「いない」のどれかだけを返す（名前は返さない）。台のカードに表示する */
+export function kakuCurrentHolder(slots, uid, t, now) {
+  if (now < t.playStart || now >= t.playEnd) return null;
+  const x = (slots || []).find((y) => y.s <= now && now < y.e);
+  if (!x) return null;
+  const holder = x.uid ? (uid && x.uid === uid ? "me" : "player") : x.npc ? "npc" : "none";
+  return { s: x.s, e: x.e, holder };
+}
 const kakuPersonalSlots = (slots, uid) => (slots || [])
   .filter((x) => (!!uid && x.uid === uid) || x.kind === "quick")
   .map((x) => ({ i: x.i, s: x.s, e: x.e, kind: x.kind, mine: !!uid && x.uid === uid, taken: !!(x.uid || x.name) }));
@@ -3130,6 +3138,7 @@ async function kakuStatus(deps, uid, body) {
     out.today = {
       day: today, machine: kakuMachineFor(today), mode: d ? d.mode : "sameDay", times: t, weekend: kakuIsWeekend(today),
       slots: kakuPersonalSlots(d ? d.slots : kakuInitialSlots(today), uid),
+      cur: kakuCurrentHolder(d ? d.slots : [], uid, t, now),
       applied1: !!d && (d.app1 || []).some((x) => String(x).startsWith(uid + "\t")),
       applied2: !!d && (d.app2 || []).some((x) => String(x).startsWith(uid + "\t")),
       draw1Done: !!d && d.draw1Done === true, draw2Done: !!d && d.draw2Done === true

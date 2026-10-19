@@ -42,7 +42,7 @@ function scheduleBoundary() {
   if (!data || !running) return;
   const now = nowMs(), cand = [];
   const t = data.today, tm = data.tomorrow;
-  if (t) { const T = t.times; cand.push(T.sameOpen, T.sameClose, T.quickOpen, T.playStart, T.playEnd, ...t.slots.filter((x) => x.kind === "quick").map((x) => x.s)); }
+  if (t) { const T = t.times; if (t.cur) cand.push(t.cur.e); cand.push(T.sameOpen, T.sameClose, T.quickOpen, T.playStart, T.playEnd, ...t.slots.filter((x) => x.kind === "quick").map((x) => x.s)); }
   if (tm) { cand.push(tm.times.preOpen, tm.times.preClose); }
   const next = cand.filter((x) => x > now).sort((a, b) => a - b)[0];
   if (!next) return;
@@ -64,9 +64,10 @@ export function kakuMachineInfo(machineId) {
   if (!t || t.machine !== machineId) return null;
   const now = nowMs(), tm = t.times;
   const inWindow = now >= tm.playStart && now < tm.playEnd;
-  const cur = inWindow ? t.slots.find((x) => x.s <= now && now < x.e) : null;
-  const mine = !!cur && cur.mine;
-  return { inWindow, locked: inWindow && !mine, cur, mine, times: tm };
+  // いまの枠を使っているのが「NPC／ほかのプレイヤー／自分／いない」のどれか（サーバーが教えてくれる。名前は出さない）
+  const cur = inWindow && t.cur && now >= t.cur.s && now < t.cur.e ? t.cur : null;
+  const mine = !!cur && cur.holder === "me";
+  return { inWindow, locked: inWindow && !mine, cur, holder: cur ? cur.holder : null, mine, times: tm };
 }
 
 export function kakuPanelHtml() {
