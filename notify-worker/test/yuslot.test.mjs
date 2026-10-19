@@ -149,14 +149,14 @@ test("slotApplySpin：無料スピンはコイン消費なし、残高不足は 
   assert.equal(r.session.feverPending, true); assert.equal(r.session.feverUntil || 0, 0);
 });
 
-test("営業時間（JST 07:00〜21:00）と日次（07:00境界）", () => {
+test("営業時間（JST 07:00〜23:00）と日次（07:00境界）", () => {
   const jst = (h, mi = 0) => Date.UTC(2026, 0, 2, h - 9, mi, 0); // JST h時 → UTC
   assert.equal(slotBusinessOpen(jst(6, 59)), false);
   assert.equal(slotBusinessOpen(jst(7, 0)), true);
-  assert.equal(slotBusinessOpen(jst(20, 59)), true);
-  assert.equal(slotBusinessOpen(jst(21, 0)), false);
+  assert.equal(slotBusinessOpen(jst(22, 59)), true);
+  assert.equal(slotBusinessOpen(jst(23, 0)), false);
   assert.notEqual(slotBusinessDay(jst(6, 59)), slotBusinessDay(jst(7, 1)), "07:00で日付が変わる");
-  assert.equal(slotBusinessDay(jst(7, 1)), slotBusinessDay(jst(20, 0)), "同じ営業日は同じ");
+  assert.equal(slotBusinessDay(jst(7, 1)), slotBusinessDay(jst(22, 0)), "同じ営業日は同じ");
 });
 
 test("公開設定：既定は非公開、最上位管理者だけ変更できる", async () => {

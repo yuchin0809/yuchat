@@ -2168,9 +2168,9 @@ const SLOT_FLUSH_INTERVAL_MS = 15000;   // クライアントがこの間隔で 
 const SLOT_SEAT_GRACE_MS = 90000;       // 復旧猶予（約1分）＋flush の間隔ぶんの余裕
 const SLOT_SESSION_MAX_MS = 24 * 3600 * 1000;
 
-/* 営業時間（日本時間 07:00〜21:00）。日次リセットは 07:00 */
+/* 営業時間（日本時間 07:00〜23:00）。日次リセットは 07:00 */
 function slotJstHour(nowMs) { return new Date(nowMs + 9 * 3600000).getUTCHours(); }
-export function slotBusinessOpen(nowMs) { const h = slotJstHour(nowMs); return h >= 7 && h < 21; }
+export function slotBusinessOpen(nowMs) { const h = slotJstHour(nowMs); return h >= 7 && h < 23; }
 export function slotBusinessDay(nowMs) {
   // 07:00 JST で日付が変わるように、JST から 7 時間引いた日付を使う
   const d = new Date(nowMs + 9 * 3600000 - 7 * 3600000);
