@@ -355,13 +355,17 @@ function runReachReveal(i, strong, pairSym) {
   if (reels) reels.classList.add("yw-reach-dim");
   stopReelAnimation();
   const rdc = reduced();
-  const base = strong ? 1500 : (fxHigh() ? 380 : 240);
+  // この強リーチが本物の大当たり（3つとも特別絵柄）で確定か。確定のときだけ、たまに（約1/3）確定カットインを出す
+  const winSpecial = strong && state.target && state.target.every((s) => s === pairSym);
+  const showConfirm = winSpecial && !rdc && Math.random() < 0.35;
+  const base = strong ? (showConfirm ? 2100 : 1500) : (fxHigh() ? 380 : 240);
   const dur = rdc ? (strong ? 450 : 160) : base;
   const slowMs = strong ? (rdc ? 150 : 190) : 90;
   const slow = setInterval(() => { setCell(i, randSym()); setNeighbors(i); }, slowMs);
   if (!rdc) {
     if (strong) { sfxReachTicks(dur); burstSparkles(reel, fxHigh() ? 12 : 6, "reach"); if (reels && fxHigh()) reels.classList.add("yw-zoomfx"); if (fxHigh()) screenFlash(dur, "fever"); }
     else sfxReachTick1();
+    if (showConfirm) confirmCutin(); // 「大当たり確定！」カットイン（本物の大当たりのときだけ）
   }
   setTimeout(() => {
     clearInterval(slow);
@@ -623,6 +627,16 @@ function confetti(n) {
 function highlightWinCells() {
   for (let i = 0; i < 3; i++) { const el = $("#ywC" + i); if (el) el.parentElement && el.classList.add("yw-hit"); }
 }
+/* 大当たり確定カットイン（本物の大当たりのときだけ・たまに）。全画面で「大当たり確定！」をドーンと出す */
+function confirmCutin() {
+  let el = document.getElementById("yw-cutin");
+  if (!el) { el = document.createElement("div"); el.id = "yw-cutin"; (document.body || document.documentElement).appendChild(el); }
+  el.className = fxHigh() ? "on strong" : "on";
+  el.innerHTML = `<span class="yw-cutin-text">大当たり確定！</span>`;
+  sfxConfirm();
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.className = ""; el.innerHTML = ""; }, 2000);
+}
 function treasureOpen(prize) {
   if (reduced()) return;
   burstSparkles($("#ywReels"), fxHigh() ? 14 : 5, "big");
@@ -660,6 +674,8 @@ function clearScreenFx() {
   const el = document.getElementById("yw-screen-fx");
   if (el) el.classList.remove("flash-win", "flash-fever", "fever-on");
   clearTimeout(screenFlashTimer);
+  const cut = document.getElementById("yw-cutin");
+  if (cut) { cut.className = ""; cut.innerHTML = ""; clearTimeout(cut._t); }
 }
 
 /* ---------- 音（オリジナル。既存の有名スロットの音はコピーしない。iOSは操作後に解禁） ---------- */
@@ -697,6 +713,7 @@ function sfxWin() { const t = state.machine.tier; const notes = [[660, 0.12], [8
 function sfxTreasure() { playSeq([[500, 0.1], [700, 0.12], [950, 0.16], [1200, 0.2]], tierVol(0.03), "triangle", 0.1); }
 function sfxSpecial() { const t = state.machine.tier; const notes = [[523, 0.12], [659, 0.12], [784, 0.14], [1047, 0.24]]; if (t >= 3) notes.push([1319, 0.24]); if (t >= 5) notes.push([1568, 0.3]); playSeq(notes, tierVol(0.037), "square", 0.12); }
 function sfxFever() { playSeq([[392, 0.12], [523, 0.12], [659, 0.14], [784, 0.16], [988, 0.18], [1175, 0.3]], tierVol(0.042), "square", 0.1); }
+function sfxConfirm() { playSeq([[523, 0.1], [784, 0.1], [1047, 0.12], [1319, 0.14], [1568, 0.34]], tierVol(0.045), "square", 0.13); }
 function sfxReachTick1() { playTone([620, 0.08], 0.02, "square"); }
 function sfxSpecialTease(level) { playTone([700 + level * 160, 0.12], 0.024 + level * 0.006, "square"); }
 function sfxReachTicks(durMs) { const t = state.machine.tier, beats = Math.max(4, Math.floor(durMs / 230)); for (let k = 0; k < beats; k++) playTone([480 + k * 75, 0.09], 0.02 + t * 0.001, "square", k * (durMs / 1000 / beats)); }
@@ -848,6 +865,17 @@ function injectStyles() {
   @keyframes yw-screenfever { 0%{opacity:.15; background-position:0% 50%} 50%{opacity:.92; background-position:100% 50%} 100%{opacity:.15; background-position:0% 50%} }
   #yw-screen-fx.fever-on { opacity: 1; background: repeating-linear-gradient(60deg,#ff2d78 0 10%,#ff8a00 10% 20%,#ffe14a 20% 30%,#17e36a 30% 40%,#17b6ff 40% 50%,#b14cff 50% 60%); background-size: 300% 300%; animation: yw-screenfeveron 1.6s linear infinite; }
   @keyframes yw-screenfeveron { 0%{background-position:0% 0%; opacity:.42} 50%{opacity:.6} 100%{background-position:60% 60%; opacity:.42} }
+  /* 大当たり確定カットイン（本物の大当たりのときだけ・たまに） */
+  #yw-cutin { position: fixed; inset: 0; pointer-events: none; z-index: 2147483100; display: none; align-items: center; justify-content: center; }
+  #yw-cutin.on { display: flex; }
+  #yw-cutin.on.strong { animation: yw-cutinbg .12s steps(1) 14; background: linear-gradient(135deg,#ff2d78,#ff8a00,#ffe14a,#17b6ff,#b14cff); background-size: 300% 300%; }
+  @keyframes yw-cutinbg { 0%{opacity:.15} 50%{opacity:.85} 100%{opacity:.15} }
+  #yw-cutin .yw-cutin-text { font-weight: 900; font-size: 46px; letter-spacing: 2px; padding: 10px 18px; text-align: center;
+    color: #fff; -webkit-text-stroke: 3px #b00020; text-stroke: 3px #b00020;
+    text-shadow: 0 0 14px #ffe14a, 0 0 28px #ff2d78, 0 4px 8px rgba(0,0,0,.5);
+    background: linear-gradient(180deg,#fff6b0,#ffd24a 45%,#ff8a00); -webkit-background-clip: text; background-clip: text;
+    animation: yw-cutintext 1.9s cubic-bezier(.15,1.5,.4,1) forwards; }
+  @keyframes yw-cutintext { 0%{transform:scale(.2) rotate(-12deg);opacity:0} 25%{transform:scale(1.3) rotate(4deg);opacity:1} 45%{transform:scale(1) rotate(-2deg)} 80%{transform:scale(1.05) rotate(1deg);opacity:1} 100%{transform:scale(1);opacity:0} }
   @media (prefers-reduced-motion: reduce) {
     .yw-game.is-fever, .yw-feverstart { animation: none; }
     .yw-bounce, .yw-reels.yw-win, .yw-reel.yw-reach, .yw-reel.yw-reach-strong, .yw-game.yw-celebrate, .yw-game.yw-shake, .yw-spark, .yw-coin, .yw-reels.yw-zoomfx { animation: none; transform: none; }
