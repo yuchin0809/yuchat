@@ -3036,20 +3036,26 @@ async function kakuWriteSlots(deps, dayId, cur, extra) {
 
 /* 抽選の実行（冪等：done フラグ＋更新時刻の条件）。type 1＝前日の抽選（30分枠）、2＝当日の抽選（10分枠・抽選用の3個） */
 export async function kakuRunDraw(deps, dayId, type) {
-  const cur = await kakuEnsureDay(deps, dayId);
   const doneKey = type === 1 ? "draw1Done" : "draw2Done";
-  if (cur.data[doneKey]) return { skipped: "done" };
-  const slots = cur.data.slots.map((x) => ({ ...x }));
-  const targets = slots.map((x, i) => i).filter((i) => (type === 1 ? slots[i].kind === "pre" : slots[i].kind === "lot"));
-  const apps = kakuParseApplicants(type === 1 ? cur.data.app1 : cur.data.app2);
-  const winners = kakuPickWinners({ applicants: apps, poolTarget: type === 1 ? KAKU_PRE_POOL : KAKU_SAME_POOL, count: targets.length, wins: kakuWinsOf(slots), random: deps.random, dayId });
-  kakuShuffle(targets, deps.random).forEach((slotIdx, k) => {
-    const w = winners[k]; if (!w) return;
-    slots[slotIdx] = { ...slots[slotIdx], uid: w.npc ? "" : w.uid, name: w.name, npc: w.npc };
-  });
-  try { await kakuWriteSlots(deps, dayId, { data: { slots }, updateTime: cur.updateTime }, { [doneKey]: true, [type === 1 ? "applied1" : "applied2"]: apps.length }); }
-  catch (error) { if (isRetryableCommitError(error)) return { skipped: "raced" }; throw error; }
-  return { drawn: true, applicants: apps.length, real: slots.filter((x) => x.uid).length };
+  // 抽選の読み取りと書き込みの間に、申込や先着が入って更新時刻が変わったら、読み直してやり直す（最大4回）。
+  // 申込は受付の締切までに入ったものが必ず抽選に入るようにするため（やり直さないと、抽選が行われないままになってしまう）
+  for (let attempt = 0; attempt < 4; attempt++) {
+    kakuDocCache.delete(dayId);
+    const cur = await kakuEnsureDay(deps, dayId);
+    if (cur.data[doneKey]) return { skipped: "done" };
+    const slots = cur.data.slots.map((x) => ({ ...x }));
+    const targets = slots.map((x, i) => i).filter((i) => (type === 1 ? slots[i].kind === "pre" : slots[i].kind === "lot"));
+    const apps = kakuParseApplicants(type === 1 ? cur.data.app1 : cur.data.app2);
+    const winners = kakuPickWinners({ applicants: apps, poolTarget: type === 1 ? KAKU_PRE_POOL : KAKU_SAME_POOL, count: targets.length, wins: kakuWinsOf(slots), random: deps.random, dayId });
+    kakuShuffle(targets, deps.random).forEach((slotIdx, k) => {
+      const w = winners[k]; if (!w) return;
+      slots[slotIdx] = { ...slots[slotIdx], uid: w.npc ? "" : w.uid, name: w.name, npc: w.npc };
+    });
+    try { await kakuWriteSlots(deps, dayId, { data: { slots }, updateTime: cur.updateTime }, { [doneKey]: true, [type === 1 ? "applied1" : "applied2"]: apps.length }); }
+    catch (error) { if (isRetryableCommitError(error)) continue; throw error; }
+    return { drawn: true, applicants: apps.length, real: slots.filter((x) => x.uid).length };
+  }
+  return { skipped: "raced" };
 }
 
 /* ----- 申込・先着・状態 ----- */
@@ -3192,7 +3198,7 @@ export async function runKakuTick(env = {}, scheduledTime = Date.now(), deps = n
   for (const { e, day } of todo) {
     try {
       results[e.name] = await kakuRunEvent(d, e.name, day);
-      kakuTickDone.add(`${e.name}:${day}`);
+      if (!(results[e.name] && results[e.name].skipped === "raced")) kakuTickDone.add(`${e.name}:${day}`); // 競合でできなかったときは、次の分にやり直す
     } catch (error) { console.error("kaku event error", e.name, String(error?.message || error).slice(0, 200)); }
   }
   return results;
@@ -3219,6 +3225,11 @@ export async function kakuRunEvent(deps, name, day) {
   if (name === "pub") {
     await kakuEnsureDay(deps, day);
     return kakuPush(deps, "pub", day, "🌈 明日の確変台が決まりました", `明日（${kakuMd(kakuDayStart(day))}）の確変台は「${machine}」。申込は今日の21:00まで！ゆうスロの台の一覧の上から申し込めます。`);
+  }
+  if (name === "draw1" || name === "draw2") { // 締切の瞬間に送られた申込が書き込み終わるまで、数秒待ってから抽選する
+    const closeMs = name === "draw1" ? kakuTimes(day).preClose : kakuTimes(day).sameClose;
+    const wait = closeMs + 5000 - deps.now();
+    if (wait > 0 && wait <= 10000) await (deps.sleep ? deps.sleep(wait) : new Promise((r) => setTimeout(r, wait)));
   }
   if (name === "draw1") return kakuRunDraw(deps, day, 1);
   if (name === "same") {

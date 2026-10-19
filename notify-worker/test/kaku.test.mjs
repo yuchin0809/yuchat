@@ -288,7 +288,7 @@ test("通知の設定：初期は結果の2つだけON。個人ごとに変え�
   // 当日分の結果も同じ：申し込んだ本人にだけ
   state.now = TT.sameOpen + M; resetKakuCacheForTest();
   await act("id3", "u3", { action: "kakuApply", which: "same" });
-  state.now = TT.sameClose; sent.length = 0;
+  state.now = TT.sameClose + 6000; sent.length = 0;   // 締切の5秒後に抽選する
   await kakuRunEvent(deps, "draw2", D);
   assert.deepEqual(sent.map((x) => x.token), ["tok3"], "申し込んだ id3 にだけ（結果の通知はONが初期）");
   assert.ok(/当日分/.test(sent[0].data.body));
@@ -349,4 +349,81 @@ async function kakuAnnounceResultForTest(deps, day) { const { kakuAnnounceResult
   state.now = TT.dayStart + 8 * H + 5 * M;
   const locked = await act("id5", "u5", { action: "seat", machine: kakuMachineFor(D) });
   assert.equal(locked.error, "kaku_locked"); assert.equal(locked.slot, undefined);
+});
+
+test("先着：11:45ちょうどから買える（その1ミリ秒前は買えない）", async () => {
+  const { act, state, deps } = setup({ now: TT.sameOpen + M, random: rngOf(12) });
+  await act("id0", "u0", { action: "kakuApply", which: "same" });
+  state.now = TT.sameClose + 6000; await kakuRunDraw(deps, D, 2);
+  const q = (await act("id1", "u1", { action: "kakuStatus" })).today.slots.filter((x) => x.kind === "quick");
+  state.now = TT.quickOpen - 1;
+  assert.equal((await act("id1", "u1", { action: "kakuQuick", slot: q[0].i })).error, "not_open");
+  state.now = TT.quickOpen;
+  assert.equal((await act("id1", "u1", { action: "kakuQuick", slot: q[0].i })).ok, true, "11:45:00.000 から買える");
+});
+
+test("先着の同時購入：同じ枠を同時に押しても1人だけ。同じ人が別々の枠を同時に押しても1枠だけ（二重取りなし）", async () => {
+  const { act, state, deps, fs } = setup({ now: TT.sameOpen + M, random: rngOf(12) });
+  await act("id0", "u0", { action: "kakuApply", which: "same" });
+  state.now = TT.sameClose + 6000; await kakuRunDraw(deps, D, 2);
+  state.now = TT.quickOpen;
+  const q = fs.plain(`yuslotKaku/${D}`).slots.filter((x) => x.kind === "quick");
+  // ① 6人が同じ枠を同時に押す
+  const res = await Promise.all(Array.from({ length: 6 }, (_, i) => act(`id${i}`, `u${i}`, { action: "kakuQuick", slot: q[0].i })));
+  assert.equal(res.filter((r) => r.ok).length, 1, "同じ枠を取れるのは1人だけ");
+  assert.ok(res.filter((r) => !r.ok).every((r) => ["busy", "taken"].includes(r.error)), JSON.stringify(res.map((r) => r.error)));
+  assert.ok(res.some((r) => r.error === "busy"), "同時に押した人は「もう一度」になる（更新時刻の条件で弾かれる）");
+  const owners = fs.plain(`yuslotKaku/${D}`).slots.filter((x) => x.i === q[0].i);
+  assert.equal(owners.length, 1); assert.ok(owners[0].uid, "持ち主は1人");
+  // ② 同じ人が、2つの先着枠を同時に押す
+  const free = setup({ now: TT.sameOpen + M, random: rngOf(13) });
+  free.state.now = TT.sameClose + 6000; await kakuRunDraw(free.deps, D, 2); free.state.now = TT.quickOpen;
+  const q2 = free.fs.plain(`yuslotKaku/${D}`).slots.filter((x) => x.kind === "quick");
+  const both = await Promise.all([free.act("id5", "u5", { action: "kakuQuick", slot: q2[0].i }), free.act("id5", "u5", { action: "kakuQuick", slot: q2[1].i })]);
+  assert.equal(both.filter((r) => r.ok).length, 1, "1人が先着で取れるのは1枠だけ");
+  assert.equal(free.fs.plain(`yuslotKaku/${D}`).slots.filter((x) => x.uid === "id5").length, 1);
+  // もう一度押すと、理由が分かる
+  const again = await free.act("id5", "u5", { action: "kakuQuick", slot: both[0].ok ? q2[1].i : q2[0].i });
+  assert.equal(again.error, "quick_limit");
+});
+
+test("申込の二重送信：同じ人が同時に何度押しても申込は1件", async () => {
+  const { act, fs } = setup({ now: TT.preOpen + M });
+  const r = await Promise.all(Array.from({ length: 5 }, () => act("id0", "u0", { action: "kakuApply", which: "pre" })));
+  assert.ok(r.every((x) => x.ok));
+  assert.equal(fs.plain(`yuslotKaku/${D}`).app1.length, 1);
+});
+
+test("抽選と申込がぶつかっても、抽選は必ず行われる（読み直してやり直す）。競合で失敗したら次の分にやり直す", async () => {
+  // ① 読み取りと書き込みの間に申込が入る → 読み直して、その人も抽選に入る
+  const a = setup({ now: TT.sameOpen + M, random: rngOf(21) });
+  await a.act("id0", "u0", { action: "kakuApply", which: "same" });
+  const orig = a.fs.commit.bind(a.fs); let injected = false;
+  a.fs.commit = async (writes) => {
+    if (!injected && writes.some((w) => w.update?.name?.includes("yuslotKaku") && w.currentDocument?.updateTime)) {
+      injected = true;
+      const keep = a.state.now; a.state.now = TT.sameClose - 1000;               // 締切の直前に送られた申込が、抽選の読み取りのあとに書き込まれた
+      await a.act("id1", "u1", { action: "kakuApply", which: "same" });
+      a.state.now = keep;
+    }
+    return orig(writes);
+  };
+  a.state.now = TT.sameClose + 6000;
+  const r = await kakuRunDraw(a.deps, D, 2);
+  assert.equal(r.drawn, true); assert.equal(r.applicants, 2, "遅れて入った申込も抽選に入る");
+  assert.equal(a.fs.plain(`yuslotKaku/${D}`).draw2Done, true);
+  // ② 4回続けて競合した場合は「raced」で、次の分の cron でやり直される（完了扱いにしない）
+  const b = setup({ now: TT.sameOpen + M, random: rngOf(22) });
+  await b.act("id0", "u0", { action: "kakuApply", which: "same" });
+  const orig2 = b.fs.commit.bind(b.fs); let fails = 0;
+  b.fs.commit = async (writes) => {
+    if (fails < 4 && writes.some((w) => w.update?.name?.includes("yuslotKaku") && w.currentDocument?.updateTime)) { fails++; throw Object.assign(new Error("firestore commit 400 FAILED_PRECONDITION"), { status: 400 }); }
+    return orig2(writes);
+  };
+  const at = TT.sameClose + 30000;
+  const t1 = await runKakuTick({}, at, b.deps); b.state.now = at;
+  assert.equal(t1.draw2.skipped, "raced");
+  const t2 = await runKakuTick({}, at + 60000, b.deps);
+  assert.equal(t2.draw2.drawn, true, "次の分にやり直して、抽選が行われる");
+  assert.equal((await runKakuTick({}, at + 120000, b.deps)).skipped, "done");
 });

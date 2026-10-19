@@ -10,7 +10,9 @@ let deps = null;          // { api, esc, machines(id→{name,emoji}), onChange }
 let data = null;          // 直近の kakuStatus
 let prefs = null;         // 通知の設定
 let offset = 0;
-let timer = null;
+let timer = null;          // 定期的な読み直し
+let running = false;       // ロビーを開いている間だけ true（離れたらタイマーを止める）
+let boundaryTimer = null;  // 「次の節目の時刻ちょうど」に画面を切り替えるタイマー
 let busy = false;
 let msg = "";
 let stylesDone = false;
@@ -23,14 +25,36 @@ function md(ms) { const d = new Date(ms + 9 * 3600000); return `${d.getUTCMonth(
 const KIND = { pre: "前日抽選", lot: "当日抽選", quick: "先着" };
 
 export function kakuInit(d) { deps = d; injectStyles(); }
-export function stopKaku() { if (timer) { clearInterval(timer); timer = null; } }
-export function startKaku() { stopKaku(); refreshKaku(); timer = setInterval(refreshKaku, 30000); }
+export function stopKaku() { running = false; if (timer) { clearTimeout(timer); timer = null; } if (boundaryTimer) { clearTimeout(boundaryTimer); boundaryTimer = null; } }
+export function startKaku() { stopKaku(); running = true; pollLoop(); }
+/* 先着の受付中（11:45〜枠が始まるまで）は、売り切れの表示を早く更新するため10秒おき、ふだんは30秒おきに読み直す */
+function pollDelay() {
+  const t = data && data.today;
+  if (t) { const now = nowMs(); if (now >= t.times.quickOpen && t.slots.some((x) => x.kind === "quick" && !x.taken && now < x.s)) return 10000; }
+  return 30000;
+}
+async function pollLoop() { await refreshKaku(); if (running) timer = setTimeout(pollLoop, pollDelay()); }
+
+/* 申込・先着の開始や締切の「時刻ちょうど」に、画面を切り替える（ボタンが出る・押せる）。
+   サーバーは時刻ちょうどから受け付けるので、画面もその瞬間に合わせる（30秒おきの読み直しを待たない） */
+function scheduleBoundary() {
+  if (boundaryTimer) { clearTimeout(boundaryTimer); boundaryTimer = null; }
+  if (!data || !running) return;
+  const now = nowMs(), cand = [];
+  const t = data.today, tm = data.tomorrow;
+  if (t) { const T = t.times; cand.push(T.sameOpen, T.sameClose, T.quickOpen, T.playStart, T.playEnd, ...t.slots.filter((x) => x.kind === "quick").map((x) => x.s)); }
+  if (tm) { cand.push(tm.times.preOpen, tm.times.preClose); }
+  const next = cand.filter((x) => x > now).sort((a, b) => a - b)[0];
+  if (!next) return;
+  boundaryTimer = setTimeout(() => { deps.onChange && deps.onChange(); refreshKaku(); }, Math.min(next - now + 20, 2147000000));
+}
 
 export async function refreshKaku() {
   try {
     data = await deps.api("kakuStatus");
     if (typeof data.serverNowMs === "number") offset = data.serverNowMs - Date.now();
   } catch (_) { /* 取れなくても、台の一覧は使える */ }
+  scheduleBoundary();
   deps.onChange && deps.onChange();
 }
 
@@ -69,14 +93,15 @@ export function kakuPanelHtml() {
     else if (now < T.sameClose) html += t.applied2 ? `<div class="yk-ok">✓ 当日分の抽選に申込済み（${hm(T.sameClose)}に抽選。結果はあなたにだけ届きます）</div>` : `<button type="button" class="yk-btn" data-kk="apply" data-which="same">🎟 当日分の抽選に申し込む（${hm(T.sameClose)}まで・無料）</button>`;
     else if (t.applied2) html += lotMine ? `<div class="yk-ok">🎉 当日分の抽選に当選しました！</div>` : `<div class="yk-sub">当日分の抽選は外れでした。${now < T.quickOpen ? `先着は ${hm(T.quickOpen)} から！` : "先着に挑戦してみよう！"}</div>`;
     else html += `<div class="yk-sub">当日分の抽選は終わりました。${now < T.quickOpen ? `先着は ${hm(T.quickOpen)} から！` : ""}</div>`;
-    if (now >= T.quickOpen) {
-      html += `<div class="yk-quick">${quicks.map((x) => {
+    // 先着：2つの枠のうち、好きなほうを自分で選んで取れる。11:45ちょうどから押せる（それまでは押せない）
+    const open = now >= T.quickOpen;
+    html += `<div class="yk-sub">先着は ${hm(T.quickOpen)} から・1人1枠。下の${quicks.length}つの枠から、好きなほうを選べます。</div>
+      <div class="yk-quick">${quicks.map((x) => {
         const started = now >= x.s;
-        return `<div class="yk-q"><span>${hm(x.s)}〜${hm(x.e)} 先着</span>${x.mine ? `<em>⭐ あなたが獲得！</em>` : x.taken ? `<em>売り切れ</em>` : started ? `<em>受付終了</em>` : `<button type="button" class="yk-btn small" data-kk="quick" data-slot="${x.i}">先着で申し込む</button>`}</div>`;
+        const right = x.mine ? `<em>⭐ あなたが獲得！</em>` : x.taken ? `<em>売り切れ</em>` : started ? `<em>受付終了</em>`
+          : `<button type="button" class="yk-btn small" data-kk="quick" data-slot="${x.i}" ${open ? "" : "disabled"}>${open ? "この枠をとる" : `${hm(T.quickOpen)}から`}</button>`;
+        return `<div class="yk-q"><span>${hm(x.s)}〜${hm(x.e)}（先着）</span>${right}</div>`;
       }).join("")}</div>`;
-    } else {
-      html += `<div class="yk-sub">先着：${quicks.map((x) => hm(x.s)).join("・")} の枠（${hm(T.quickOpen)}から・1人1枠）</div>`;
-    }
     if (t.mode === "sameDay") html += `<div class="yk-sub">※今日は前日の抽選がなく、当日分だけの発売です。</div>`;
     html += `</div>`;
   }
@@ -142,6 +167,7 @@ function injectStyles() {
   .yk-msg { margin: 6px 0; padding: 8px 10px; border-radius: 10px; background: #fff6d6; color: #7a4a00; font-weight: 800; font-size: 13px; }
   .yk-btn { display: block; width: 100%; margin: 8px 0; border: none; border-radius: 12px; padding: 11px 10px; font-size: 14px; font-weight: 900; color: #3a2a00; cursor: pointer; background: linear-gradient(135deg,#ffd700,#ff9a00); box-shadow: 0 3px 12px rgba(255,160,0,.5); }
   .yk-btn.small { display: inline-block; width: auto; margin: 0; padding: 7px 14px; font-size: 12px; }
+  .yk-btn:disabled { background: rgba(255,255,255,.28); color: rgba(255,255,255,.85); box-shadow: none; cursor: default; }
   .yk-quick { display: flex; flex-direction: column; gap: 6px; margin: 6px 0; } .yk-q { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 10px; background: rgba(255,255,255,.14); font-size: 13px; } .yk-q em { font-style: normal; font-weight: 800; color: #ffe14a; }
   .yk-notify summary { cursor: pointer; font-weight: 800; font-size: 13px; margin-top: 10px; } .yk-tomorrow { margin-top: 6px; padding-top: 6px; border-top: 1px dashed rgba(255,255,255,.35); }
   .yk-chk { display: block; padding: 5px 0; font-size: 13px; }
