@@ -5,7 +5,7 @@ import { simulate } from "../yuslot-kaku-sim.mjs";
 import assert from "node:assert/strict";
 import {
   KAKU_EPOCH, KAKU_MACHINE_NAMES, kakuDayId, kakuDayStart, kakuNextDay, kakuTimes, kakuMachineFor, kakuSameKinds, kakuInitialSlots, kakuNpcName,
-  kakuCurrentHolder, kakuIsWeekend, kakuPoolFor, kakuPickWinners, kakuRunDraw, kakuRunEvent, kakuSeatRight, kakuSpinGate, kakuResultDataFor, runKakuTick, resetKakuCacheForTest,
+  kakuCurrentHolder, kakuIsWeekend, kakuPoolFor, kakuPickWinners, kakuPoorness, kakuRunDraw, kakuRunEvent, kakuSeatRight, kakuSpinGate, kakuResultDataFor, runKakuTick, resetKakuCacheForTest,
   handleYuslotAction, resetYuslotCacheForTest, slotApplySpin, SLOT_MACHINES, SLOT_KAKU_RATE
 } from "../worker.js";
 
@@ -138,6 +138,38 @@ test("抽選の重み：実在の申込者が当たるのは約1/3。同じ人�
   const prior = new Map([["r0", 3]]);
   const capped = kakuPickWinners({ applicants: apps(3), poolTarget: 3, count: 6, wins: prior, random: rng, dayId: D });
   assert.ok(!capped.some((x) => x.uid === "r0"), "すでに3枠の人は当たらない");
+});
+
+test("総資産が少ない人ほど当たりやすい（確定ではない・全体の当選割合は変わらない）", () => {
+  const rows = Array.from({ length: 10 }, (_, i) => ({ name: `r${i}`, total: (10 - i) * 1000 })); // r0 が最多、r9 が最少
+  const poor = kakuPoorness(rows, ["r0", "r9", "r4", "新人"]);
+  assert.equal(poor.get("r0"), 0); assert.equal(poor.get("r9"), 1); assert.equal(poor.get("新人"), 0.5, "ランキングにない人は真ん中");
+  assert.ok(poor.get("r4") > 0.3 && poor.get("r4") < 0.7);
+  assert.equal(kakuPoorness(rows.map((r) => ({ ...r, total: 500 })), ["r3"]).get("r3"), 0.5, "全員同額なら差はつかない");
+  const rng = rngOf(77);
+  const apps = rows.map((r) => ({ uid: r.name, name: r.name }));
+  const won = new Map(); let real = 0, N = 6000;
+  for (let t = 0; t < N; t++) {
+    const w = kakuPickWinners({ applicants: apps, poolTarget: 30, count: 10, random: rng, dayId: D, poor });
+    w.filter((x) => !x.npc).forEach((x) => { won.set(x.uid, (won.get(x.uid) || 0) + 1); real++; });
+  }
+  const rich = won.get("r0") || 0, low = won.get("r9") || 0;
+  assert.ok(low > rich * 2.2, `いちばん少ない人(${low})はいちばん多い人(${rich})より当たりやすい`);
+  assert.ok(rich > 0, "多い人も当たる（確定ではない）");
+  const flat = new Map(); let realFlat = 0;
+  for (let t = 0; t < N; t++) kakuPickWinners({ applicants: apps, poolTarget: 30, count: 10, random: rng, dayId: D }).filter((x) => !x.npc).forEach((x) => { flat.set(x.uid, 1); realFlat++; });
+  assert.ok(Math.abs(real - realFlat) / realFlat < 0.06, `実在の人が当たる総数は変わらない（${real} / ${realFlat}）`);
+});
+
+test("抽選：rankings/assets の総資産を使う。読めない・無いときは全員同じ重みで止まらない", async () => {
+  for (const withRanking of [true, false]) {
+    resetKakuCacheForTest();
+    const { fs, deps } = setup({ now: TT.preClose + 1 });
+    if (withRanking) fs.put("rankings/assets", encF({ date: D, users: [{ name: "n0", total: 100 }, { name: "n1", total: 99999 }] }));
+    fs.put(`yuslotKaku/${D}`, encF({ day: D, machine: kakuMachineFor(D), mode: "full", slots: kakuInitialSlots(D), app1: ["u0\tn0", "u1\tn1"], app2: [], draw1Done: false, draw2Done: false, createdAtMs: 1 }));
+    const r = await kakuRunDraw(deps, D, 1);
+    assert.equal(r.drawn, true); assert.equal(r.applicants, 2);
+  }
 });
 
 test("申込の受付時間：前日12:00〜21:00（前日抽選）／当日7:00〜10:45（当日抽選）。二重申込は1回、時間外は断る", async () => {

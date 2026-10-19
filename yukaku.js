@@ -81,7 +81,8 @@ export function kakuPanelHtml() {
     const mi = deps.machines[t.machine] || { name: t.machine, emoji: "🎰" };
     const T = t.times;
     html += `<div class="yk-today"><div class="yk-today-name">${mi.emoji} 今日の確変台：<b>${esc(mi.name)}</b></div>
-      <div class="yk-sub">${hm(T.playStart)}〜${hm(T.playEnd)}／枠をとった人だけが遊べます（当たりの確率が大きくアップ）</div>`;
+      <div class="yk-sub">${hm(T.playStart)}〜${hm(T.playEnd)}／枠をとった人だけが遊べます（当たりの確率が大きくアップ）</div>
+      <div class="yk-sub">💡 抽選は、総資産が少ない人ほど当たりやすくなります（確実ではありません）。</div>`;
     // 自分の予定だけを表示する（ほかの人の枠・名前は出さない）
     const mine = t.slots.filter((x) => x.mine).sort((a, b) => a.s - b.s);
     html += `<div class="yk-mine">⭐ あなたの今日の予定：${mine.length ? mine.map((x) => `${hm(x.s)}〜${hm(x.e)}（${KIND[x.kind]}）`).join("、") : "まだありません"}</div>`;
