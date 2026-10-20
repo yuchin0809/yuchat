@@ -283,11 +283,14 @@ test("確変の還元率：30分（約900スピン）の平均収支は、どの
   for (const m of Object.keys(SLOT_MACHINES)) {
     const r = simulate(m, SLOT_KAKU_RATE[m], rng, 1500);
     assert.ok(r.mean >= 700 && r.mean <= 1500, `${m}: 平均 ${r.mean.toFixed(0)}（700〜1500）`);
-    const normal = simulate(m, 0, rng, 400);
+    const normal = simulate(m, 0, rng, 1500);
     assert.ok(normal.mean < 0, `${m}: 通常の台は平均でマイナス（${normal.mean.toFixed(0)}）`);
+    const rtp = (normal.mean + SLOT_MACHINES[m].price * 900) / (SLOT_MACHINES[m].price * 900);
+    assert.ok(rtp < 0.995, `${m}: 通常の台の還元率は100%未満（${(rtp * 100).toFixed(1)}%）`);
   }
   const ra = slotRates("yubasic", SLOT_KAKU_RATE.yubasic), rb = slotRates("yubasic", 1);
-  assert.ok(Math.abs(ra.special / rb.special - SLOT_KAKU_RATE.yubasic * SLOT_KAKU_SPECIAL_BOOST) < 1e-9, "確変中の大当たりは、倍率×1.5");
+  assert.ok(Math.abs(ra.special / SLOT_MACHINES.yubasic.kakuSpecial - SLOT_KAKU_RATE.yubasic * SLOT_KAKU_SPECIAL_BOOST) < 1e-9, "確変中の大当たりは、（通常の台を増やす前の確率）×倍率×1.5");
+  assert.ok(rb.special > SLOT_MACHINES.yubasic.kakuSpecial, "通常の台の大当たりは、以前より出やすい");
   assert.equal(slotRates("yubasic", 1).special, slotRates("yubasic").special, "通常のときは変わらない");
   const k = SLOT_KAKU_RATE;
   assert.ok(k.yubasic > k.yurush && k.yurush > k.yuchance && k.yuchance > k.yutreasure, "料金の高い台ほど倍率は小さい");
