@@ -174,6 +174,11 @@ const TEST_CASES = [
   testCase("DENY", "yuslotKaku：最上位管理者でもブラウザから書けない", admin, "update", "yuslotKaku/2030-01-04", { data: { draw1Done: true }, existing: { day: "2030-01-04", machine: "yubasic" } }),
   testCase("DENY", "yuslotPrefs：通知の好みを直接読めない", userA, "get", `yuslotPrefs/${userA.uid}`, { existing: { uid: userA.uid, kakuNotify: { result1: true } } }),
   testCase("DENY", "yuslotPrefs：他人の通知の好みを書き換える", userA, "update", "yuslotPrefs/someoneElse", { data: { kakuNotify: { result1: false } }, existing: { uid: "someoneElse", kakuNotify: { result1: true } } }),
+  // 💸 コインの送金：申請と状態（coinTransfers）はサーバー（通知 Worker）だけ
+  testCase("DENY", "coinTransfers：申請を直接読めない", userA, "get", "coinTransfers/t1", { existing: { senderUid: userA.uid, receiverUid: "uidB", amount: 100, status: "pending" } }),
+  testCase("DENY", "coinTransfers：自分で承認する", userA, "update", "coinTransfers/t1", { data: { status: "approved" }, existing: { senderUid: userA.uid, receiverUid: "uidB", amount: 100, status: "pending" } }),
+  testCase("DENY", "coinTransfers：最上位管理者でもブラウザから承認できない", admin, "update", "coinTransfers/t1", { data: { status: "approved" }, existing: { senderUid: "uidA", receiverUid: "uidB", amount: 100, status: "pending" } }),
+  testCase("DENY", "coinTransfers：勝手に申請を作る", userA, "create", "coinTransfers/t2", { data: { senderUid: userA.uid, receiverUid: "uidB", amount: 5, status: "pending" } }),
   testCase("DENY", "lotteryRounds：最上位管理者でもブラウザから書けない", admin, "update", "lotteryRounds/2030-01-04", { data: { status: "done" }, existing: { round: "2030-01-04", status: "open" } }),
   // お知らせ（announcements）：読み取りはログイン済みなら誰でも・作成/編集/削除は管理者だけ
   testCase("ALLOW", "一般：お知らせの読み取り", userA, "get", "announcements/a1", { existing: announcementDoc }),

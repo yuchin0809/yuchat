@@ -36,6 +36,9 @@ import {
   initYuWorld, openYuWorldView, stopYuWorldView
 } from "./yuworld.js?v=20261019-yuworld20";
 
+/* 💸 コインの送金（申請は本人・OK/却下は管理者）。中身の確定は Worker */
+import { transferInit, transferOpenUser, transferOpenAdmin, transferReset } from "./yutransfer.js?v=20261020-transfer1";
+
 import {
   getFirestore, collection, addDoc, getDocs, getDoc, doc, setDoc,
   updateDoc, deleteDoc, query, where, onSnapshot, orderBy, limit, arrayUnion, arrayRemove, deleteField,
@@ -3639,7 +3642,7 @@ function switchView(view) {
   /* ルーム一覧の監視はゲーム画面を開いている間だけ（戻ったときに最新の一覧を読み直す）。開いているルームの監視は続ける */
   if (view === "games") loadGameRooms();
   else stopGameRoomsSubscription();
-  if (view === "economy") openEconomyView();
+  if (view === "economy") { openEconomyView(); transferOpenUser(); }
   if (view === "yuworld") openYuWorldView();
   else stopYuWorldView();
   if (view === "announcements") openAnnouncementsView();
@@ -3654,6 +3657,18 @@ initYuWorld({
   getUsername: () => username,
   isTopAdmin: () => isAdminUser(),
   onSettled: () => { /* 精算後は既存の coins リスナーが users の残高を拾って各画面を更新する */ }
+});
+
+/* 💸 コインの送金の画面 */
+transferInit({
+  callEconomy: (action, payload) => callEconomyApi(action, payload),
+  callAdmin: (action, payload) => callAdminApi(action, payload),
+  isLoggedIn: () => Boolean(currentUser && username),
+  isAdmin: () => isAdminUser(),
+  getMyCoins: () => myCoins,
+  getFriends: () => friendsData.map((f) => f.friend).filter(Boolean),
+  esc: (v) => escapeHTML(v),
+  toast: (title, body) => showAppToast(title, body)
 });
 
 /* =========================================================
@@ -3680,6 +3695,7 @@ logoutButton?.addEventListener("click", async () => {
     document.getElementById("derbyAdminPanel")?.classList.add("hidden");
     resetAnnouncementsState();
     resetUserManageState();
+    transferReset();
     pendingGameInvites = [];
     gameInvitesInitialized = false;
     if (unsubscribeMyCoins) { unsubscribeMyCoins(); unsubscribeMyCoins = null; }
@@ -5936,6 +5952,7 @@ function umBadges(entry) {
 
 async function openUserManageView() {
   if (!isAdminUser()) { switchView("chat"); return; }
+  transferOpenAdmin();
   if (!userManageData && !userManageLoading) await loadUserManageList();
   else renderUserManageList();
 }
@@ -6516,7 +6533,7 @@ function renderUserManageDeleteAuthOnly(info) {
   });
 }
 
-document.getElementById("userManageRefreshButton")?.addEventListener("click", () => loadUserManageList());
+document.getElementById("userManageRefreshButton")?.addEventListener("click", () => { loadUserManageList(); transferOpenAdmin(); });
 userManageSearchInput?.addEventListener("input", renderUserManageList);
 userManageSortSelect?.addEventListener("change", renderUserManageList);
 userManageView?.addEventListener("click", (event) => {

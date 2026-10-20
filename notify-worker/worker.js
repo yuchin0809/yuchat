@@ -60,6 +60,8 @@ export default {
     ctx.waitUntil(runLotteryTick(env, event.scheduledTime).catch((error) => console.error("lottery tick error", String(error?.message || error).slice(0, 300))));
     /* 🌈 ゆうスロ確変台：前日12:00の公開・21:00の抽選・当日7:00/7:50/10:45。予定の時刻の直後以外は Firestore に触れずにすぐ戻る */
     ctx.waitUntil(runKakuTick(env, event.scheduledTime).catch((error) => console.error("kaku tick error", String(error?.message || error).slice(0, 300))));
+    /* 💸 コイン送金：3日たっても承認されない申請を、1日1回（日本時間 3:07）自動で却下して返金する。それ以外の分は Firestore に触れずにすぐ戻る */
+    ctx.waitUntil(runTransferExpiryTick(env, event.scheduledTime).catch((error) => console.error("transfer expiry error", String(error?.message || error).slice(0, 300))));
   }
 };
 
@@ -461,7 +463,7 @@ export async function handleAdminAction(deps, callerUid, body) {
 
   const action = typeof body?.action === "string" ? body.action : "";
   const uid = typeof body?.uid === "string" ? body.uid : "";
-  const noUidActions = ["listUsers", "notifyAnnouncement", "renameUserRefs"];
+  const noUidActions = ["listUsers", "notifyAnnouncement", "renameUserRefs", "transferList", "transferApprove", "transferReject"];
   if (!noUidActions.includes(action) && !UID_PATTERN.test(uid)) return { status: 400, error: "invalid_uid" };
 
   try {
@@ -478,6 +480,9 @@ export async function handleAdminAction(deps, callerUid, body) {
       case "adjustAssets": return await adminAdjustAssets(deps, callerUid, uid, body);
       case "notifyAnnouncement": return await adminNotifyAnnouncement(deps, body);
       case "renameUserRefs": return await adminRenameUserRefs(deps, body);
+      case "transferList": return await adminTransferList(deps);
+      case "transferApprove": return await adminTransferApprove(deps, callerUid, body);
+      case "transferReject": return await adminTransferReject(deps, callerUid, body);
       default: return { status: 400, error: "unknown_action" };
     }
   } catch (error) {
@@ -1307,7 +1312,7 @@ const DERBY_SERVER_GENERATORS = ["github-actions", "worker"];
    null のあいだは確かめない（Firestore Rules でブラウザからの書き込みを止めるときに日付を入れる） */
 const DERBY_SERVER_RESULTS_FROM = null;
 
-const ECONOMY_ACTIONS = ["bankDeposit", "bankWithdraw", "bankBorrow", "bankRepay", "stockTrade", "loginBonus", "bonus500", "placeBet", "ensureRaceResult", "settleMyBets", "startingCoins", "renameCarry", "syncNameClaim"];
+const ECONOMY_ACTIONS = ["bankDeposit", "bankWithdraw", "bankBorrow", "bankRepay", "stockTrade", "loginBonus", "bonus500", "placeBet", "ensureRaceResult", "settleMyBets", "startingCoins", "renameCarry", "syncNameClaim", "transferRequest", "transferCancel", "transferMine"];
 const ECON_CARRY_FIELDS = ["coins", "bonus500Granted", "bonus500GrantedAt", "totalBetAmount", "bank", "stocks", "lastLoginBonusDate", "lastAnnouncementReadAt"];
 
 export function jstDateString(ms) {
@@ -1696,6 +1701,9 @@ export async function handleEconomyAction(deps, uid, body) {
       case "startingCoins": return await econStartingCoins(deps, uid, name);
       case "renameCarry": return await econRenameCarry(deps, uid, body);
       case "syncNameClaim": return await econSyncNameClaim(deps, uid, name);
+      case "transferRequest": return await transferRequest(deps, uid, body);
+      case "transferCancel": return await transferCancel(deps, uid, body);
+      case "transferMine": return await transferMine(deps, uid);
       default: return econError(400, "unknown_action");
     }
   } catch (error) {
@@ -3299,6 +3307,220 @@ export async function kakuAnnounceResult(deps, day) {
   await deps.firestore.createIfAbsent(`announcements/kaku-${day}`, { title: truncate(`🌈 今日の確変台は「${machine}」！`, 50), body: truncate(lines.join("\n"), 480), createdAt: now, updatedAt: now, createdByUid: "yuuchat-kaku", createdByName: "ゆうスロ確変台" });
   if (d.mode === "sameDay") return { announced: true };
   return kakuPush(deps, "result1", day, "🌈 確変台の抽選結果", "", (uid) => kakuResultDataFor(d, uid, 1, machine, day));
+}
+
+/* =========================================================
+   💸 コインの送金（管理者の承認制）
+   ・本人が「誰に・いくら」を申請すると、送る人のコインを先に預かる（引く）。コインは増えない・二重に使えない。
+   ・最上位管理者だけが、管理者画面で「OK」（相手にコインが届く）か「却下」（送った人に全額戻る）を押せる。
+   ・3日たっても承認されない申請は、自動で却下して返金する（毎日 3:07）。送った人が自分で取り消すこともできる。
+   ・金額の上限・手数料・メッセージはなし。ゆうスロに着席中は申請できない（スロのコインと二重にならないように）。
+   ・Firestore：coinTransfers/{id}（サーバー専用）。コインの移動・状態の更新・操作の記録は1回の commit（更新時刻の条件つき）で行い、二重送金・二重返金は起きない。
+========================================================= */
+const TRANSFER_EXPIRE_MS = 3 * 24 * 3600 * 1000;
+const TRANSFER_RETRY = 8;
+
+/* uid から、いまの users/{名前} を探す（名前が変わっていても追えるように、まず記録した名前を試す） */
+async function transferFindUser(fs, uid, hintName) {
+  if (typeof hintName === "string" && hintName && hintName.length <= 100 && !hintName.includes("/")) {
+    const raw = await fs.getRaw(`users/${hintName}`);
+    if (raw && raw.fields?.uid?.stringValue === uid) return { name: hintName, raw };
+  }
+  const docs = await findUserDocsByUid(fs, uid);
+  if (docs.length !== 1) return null;
+  const raw = await fs.getRaw(`users/${docs[0].id}`);
+  return raw && raw.fields?.uid?.stringValue === uid ? { name: docs[0].id, raw } : null;
+}
+
+/* 特定の1人にだけ、プッシュ通知（失敗しても処理は続ける） */
+async function transferNotify(deps, uid, title, body) {
+  try {
+    const tokens = await deps.firestore.query("fcmTokens", [["uid", "EQUAL", uid]], { select: ["uid"] });
+    await Promise.all(tokens.map(async (t) => {
+      const outcome = await deps.sendFcm(t.id, { kind: "transfer", title, body: truncate(body, 80), link: "./", tag: "coin-transfer" }).catch(() => ({ ok: false }));
+      if (outcome && outcome.invalidToken) await deps.firestore.delete(`fcmTokens/${t.id}`).catch(() => {});
+    }));
+  } catch (error) {
+    console.warn("transfer notify failed", String(error?.message || error).slice(0, 200));
+  }
+}
+
+const transferFields = (id, d) => ({ id, senderUid: d.senderUid, senderName: d.senderName, receiverUid: d.receiverUid, receiverName: d.receiverName, amount: d.amount, createdAtMs: d.createdAtMs });
+
+/* 申請：送る人のコインを預かり、申請を作る（1回の commit） */
+async function transferRequest(deps, uid, body) {
+  const fs = deps.firestore;
+  const to = typeof body?.to === "string" ? body.to.trim() : "";
+  const amount = body?.amount;
+  if (!to || to.length > 100 || to.includes("/")) return { status: 400, error: "invalid_receiver" };
+  if (typeof amount !== "number" || !Number.isSafeInteger(amount) || amount <= 0 || amount > ADMIN_COIN_BALANCE_MAX) return { status: 400, error: "invalid_amount" };
+  const me = await loadMyUser(fs, uid, body?.username);
+  if (me.error) return me.error;
+  if (to === me.name) return { status: 400, error: "self" };
+  if (await lotterySeatedElsewhere(deps, uid, deps.now())) return { status: 409, error: "seated" };
+  const target = await fs.getRaw(`users/${to}`);
+  const receiverUid = target?.fields?.uid?.stringValue || "";
+  if (!target || !receiverUid) return { status: 404, error: "user_not_found" };
+  if (receiverUid === uid) return { status: 400, error: "self" };
+  const gone = await fs.get(`userDeletions/${receiverUid}`);
+  if (gone) return { status: 404, error: "user_not_found" };
+
+  const id = crypto.randomUUID().replace(/-/g, "");
+  let senderRaw = me.raw;
+  for (let attempt = 1; attempt <= TRANSFER_RETRY; attempt++) {
+    const coins = readIntegerField(senderRaw.fields?.coins);
+    if (!Number.isSafeInteger(coins)) return { status: 409, error: "invalid_balance" };
+    if (coins < amount) return { status: 409, error: "insufficient_coins", coins };
+    try {
+      await fs.commit([
+        { update: { name: fs.docName(`users/${me.name}`), fields: { coins: { integerValue: String(coins - amount) } } }, updateMask: { fieldPaths: ["coins"] }, currentDocument: { updateTime: senderRaw.updateTime } },
+        { update: { name: fs.docName(`coinTransfers/${id}`), fields: encodeFields({ senderUid: uid, senderName: me.name, receiverUid, receiverName: to, amount, status: "pending", createdAtMs: deps.now() }) }, currentDocument: { exists: false } }
+      ]);
+      return { ok: true, id, coins: coins - amount };
+    } catch (error) {
+      if (!isRetryableCommitError(error)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 20 + Math.random() * 60 * attempt));
+      senderRaw = await fs.getRaw(`users/${me.name}`);
+      if (!senderRaw || senderRaw.fields?.uid?.stringValue !== uid) return { status: 409, error: "NO_USER" };
+    }
+  }
+  return { status: 409, error: "busy" };
+}
+
+/* 却下・取り消し・期限切れ：預かったコインを送った人に戻して、状態を変える（1回の commit） */
+async function transferRefund(deps, id, status, by, extra = {}) {
+  const fs = deps.firestore;
+  for (let attempt = 1; attempt <= TRANSFER_RETRY; attempt++) {
+    const raw = await fs.getRaw(`coinTransfers/${id}`);
+    if (!raw) return { status: 404, error: "not_found" };
+    const d = decodeFields(raw.fields);
+    if (d.status !== "pending") return { status: 409, error: "not_pending", transferStatus: d.status };
+    if (extra.onlySender && d.senderUid !== extra.onlySender) return { status: 404, error: "not_found" };
+    const sender = await transferFindUser(fs, d.senderUid, d.senderName);
+    const now = deps.now();
+    const fields = { status, resolvedAtMs: now, resolvedBy: by, refunded: Boolean(sender) };
+    const writes = [{ update: { name: fs.docName(`coinTransfers/${id}`), fields: encodeFields(fields) }, updateMask: { fieldPaths: Object.keys(fields) }, currentDocument: { updateTime: raw.updateTime } }];
+    if (sender) writes.push({ update: { name: fs.docName(`users/${sender.name}`), fields: {} }, updateMask: { fieldPaths: [] }, updateTransforms: [{ fieldPath: "coins", increment: restInt(d.amount) }], currentDocument: { exists: true } });
+    if (extra.audit) writes.push({ update: { name: fs.docName(`adminAuditLogs/${crypto.randomUUID().replace(/-/g, "")}`), fields: encodeFields({ action: extra.audit, transferId: id, targetUid: d.senderUid, targetName: d.senderName, receiverUid: d.receiverUid, receiverName: d.receiverName, amount: d.amount, byUid: extra.byUid || "", result: "ok" }) }, updateTransforms: [{ fieldPath: "at", setToServerValue: "REQUEST_TIME" }], currentDocument: { exists: false } });
+    try {
+      await fs.commit(writes);
+      return { ok: true, id, status, refunded: Boolean(sender), transfer: transferFields(id, d) };
+    } catch (error) {
+      if (!isRetryableCommitError(error)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 20 + Math.random() * 60 * attempt));
+    }
+  }
+  return { status: 409, error: "busy" };
+}
+
+async function transferCancel(deps, uid, body) {
+  const id = typeof body?.id === "string" ? body.id : "";
+  if (!/^[0-9a-f]{32}$/.test(id)) return { status: 400, error: "invalid_id" };
+  const r = await transferRefund(deps, id, "cancelled", "sender", { onlySender: uid });
+  return r.ok ? { ok: true, id } : r;
+}
+
+/* 自分が出した、承認待ちの申請（取り消せる） */
+async function transferMine(deps, uid) {
+  const docs = await deps.firestore.query("coinTransfers", [["senderUid", "EQUAL", uid], ["status", "EQUAL", "pending"]]);
+  const list = docs.map((x) => ({ id: x.id, to: x.data.receiverName, amount: x.data.amount, createdAtMs: x.data.createdAtMs, expiresAtMs: x.data.createdAtMs + TRANSFER_EXPIRE_MS }))
+    .sort((a, b) => b.createdAtMs - a.createdAtMs);
+  return { ok: true, requests: list, serverNowMs: deps.now() };
+}
+
+/* 管理者：承認待ちの一覧（誰から誰へ・いくら。判断の材料に、二人の今のコイン・アカウントを作った日・最後のログインも付ける） */
+async function adminTransferList(deps) {
+  const fs = deps.firestore;
+  const docs = await fs.query("coinTransfers", [["status", "EQUAL", "pending"]]);
+  const rows = docs.map((x) => ({ id: x.id, ...x.data })).sort((a, b) => a.createdAtMs - b.createdAtMs);
+  const info = new Map();
+  const uids = [...new Set(rows.flatMap((r) => [r.senderUid, r.receiverUid]))];
+  await Promise.all(uids.map(async (u) => {
+    const rec = { coins: null, createdAt: null, lastLoginAt: null, exists: false };
+    try {
+      const found = await transferFindUser(fs, u, rows.find((r) => r.senderUid === u)?.senderName || rows.find((r) => r.receiverUid === u)?.receiverName);
+      if (found) { rec.exists = true; rec.name = found.name; rec.coins = readIntegerField(found.raw.fields?.coins); }
+      const auth = summarizeAuthUser(await deps.authAdmin.lookup(u));
+      if (auth) { rec.createdAt = auth.createdAt; rec.lastLoginAt = auth.lastLoginAt; rec.disabled = auth.disabled; }
+    } catch { /* 材料が取れなくても一覧は出す */ }
+    info.set(u, rec);
+  }));
+  const toReceiver = new Map();
+  rows.forEach((r) => { const t = toReceiver.get(r.receiverUid) || { count: 0, total: 0 }; t.count++; t.total += r.amount; toReceiver.set(r.receiverUid, t); });
+  return {
+    ok: true,
+    serverNowMs: deps.now(),
+    requests: rows.map((r) => ({
+      id: r.id, senderName: r.senderName, receiverName: r.receiverName, amount: r.amount, createdAtMs: r.createdAtMs, expiresAtMs: r.createdAtMs + TRANSFER_EXPIRE_MS,
+      sender: info.get(r.senderUid), receiver: info.get(r.receiverUid),
+      toReceiver: toReceiver.get(r.receiverUid)
+    }))
+  };
+}
+
+async function adminTransferApprove(deps, callerUid, body) {
+  const fs = deps.firestore;
+  const id = typeof body?.id === "string" ? body.id : "";
+  if (!/^[0-9a-f]{32}$/.test(id)) return { status: 400, error: "invalid_id" };
+  for (let attempt = 1; attempt <= TRANSFER_RETRY; attempt++) {
+    const raw = await fs.getRaw(`coinTransfers/${id}`);
+    if (!raw) return { status: 404, error: "not_found" };
+    const d = decodeFields(raw.fields);
+    if (d.status !== "pending") return { status: 409, error: "not_pending", transferStatus: d.status };
+    const receiver = await transferFindUser(fs, d.receiverUid, d.receiverName);
+    if (!receiver || await fs.get(`userDeletions/${d.receiverUid}`)) return { status: 409, error: "receiver_missing" };
+    const before = readIntegerField(receiver.raw.fields?.coins);
+    if (!Number.isSafeInteger(before)) return { status: 409, error: "invalid_balance" };
+    if (before + d.amount > ADMIN_COIN_BALANCE_MAX) return { status: 400, error: "balance_too_large" };
+    const fields = { status: "approved", resolvedAtMs: deps.now(), resolvedBy: "admin", receiverName: receiver.name };
+    try {
+      await fs.commit([
+        { update: { name: fs.docName(`coinTransfers/${id}`), fields: encodeFields(fields) }, updateMask: { fieldPaths: Object.keys(fields) }, currentDocument: { updateTime: raw.updateTime } },
+        { update: { name: fs.docName(`users/${receiver.name}`), fields: {} }, updateMask: { fieldPaths: [] }, updateTransforms: [{ fieldPath: "coins", increment: restInt(d.amount) }], currentDocument: { exists: true } },
+        { update: { name: fs.docName(`adminAuditLogs/${crypto.randomUUID().replace(/-/g, "")}`), fields: encodeFields({ action: "coinTransferApprove", transferId: id, targetUid: d.receiverUid, targetName: receiver.name, senderUid: d.senderUid, senderName: d.senderName, amount: d.amount, byUid: callerUid, result: "ok" }) }, updateTransforms: [{ fieldPath: "at", setToServerValue: "REQUEST_TIME" }], currentDocument: { exists: false } }
+      ]);
+    } catch (error) {
+      if (!isRetryableCommitError(error)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 20 + Math.random() * 60 * attempt));
+      continue;
+    }
+    await transferNotify(deps, d.receiverUid, "💸 コインが届きました", `${d.senderName}さんから ${d.amount} コインが届きました。`);
+    await transferNotify(deps, d.senderUid, "💸 コインを送りました", `${receiver.name}さんへの ${d.amount} コインの送金が承認されました。`);
+    return { ok: true, id, amount: d.amount, senderName: d.senderName, receiverName: receiver.name };
+  }
+  return { status: 409, error: "busy" };
+}
+
+async function adminTransferReject(deps, callerUid, body) {
+  const id = typeof body?.id === "string" ? body.id : "";
+  if (!/^[0-9a-f]{32}$/.test(id)) return { status: 400, error: "invalid_id" };
+  const r = await transferRefund(deps, id, "rejected", "admin", { audit: "coinTransferReject", byUid: callerUid });
+  if (!r.ok) return r;
+  await transferNotify(deps, r.transfer.senderUid, "💸 コインの送金は承認されませんでした", `${r.transfer.receiverName}さんへの ${r.transfer.amount} コインは、送られずに戻りました。`);
+  return { ok: true, id, refunded: r.refunded };
+}
+
+/* 期限切れ：毎日 日本時間 3:07 に、3日たっても承認されていない申請を、却下して返金する（それ以外の分は何も読まない） */
+const transferExpiryDone = new Set();
+export function resetTransferCacheForTest() { transferExpiryDone.clear(); }
+export async function runTransferExpiryTick(env = {}, scheduledTime = Date.now(), deps = null) {
+  const jst = new Date(scheduledTime + 9 * 3600000);
+  if (jst.getUTCHours() !== 3 || jst.getUTCMinutes() !== 7) return { skipped: "outside" };
+  const day = jst.toISOString().slice(0, 10);
+  if (transferExpiryDone.has(day)) return { skipped: "done" };
+  const d = deps || createDefaultDeps(env);
+  const docs = await d.firestore.query("coinTransfers", [["status", "EQUAL", "pending"]], { select: ["createdAtMs"] });
+  const old = docs.filter((x) => Number(x.data.createdAtMs) <= scheduledTime - TRANSFER_EXPIRE_MS);
+  let expired = 0;
+  for (const x of old) {
+    const r = await transferRefund(d, x.id, "expired", "auto");
+    if (r.ok) {
+      expired++;
+      await transferNotify(d, r.transfer.senderUid, "💸 コインの送金の申請が期限切れになりました", `${r.transfer.receiverName}さんへの ${r.transfer.amount} コインは、承認されなかったため戻りました。`);
+    }
+  }
+  transferExpiryDone.add(day);
+  return { expired, checked: docs.length };
 }
 
 export function createDefaultDeps(env, fetchImpl = (...args) => fetch(...args)) {
