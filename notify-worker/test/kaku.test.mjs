@@ -466,13 +466,13 @@ test("抽選と申込がぶつかっても、抽選は必ず行われる（読�
   assert.equal((await runKakuTick({}, at + 120000, b.deps)).skipped, "done");
 });
 
-test("土日は抽選に当たる割合が約10%（平日は約1/3）。申込者が多い日は、さらに低くなる", async () => {
+test("抽選に当たる割合は、土日が約5%・平日が約20%。申込者が多い日は、さらに低くなる", async () => {
   assert.equal(kakuIsWeekend("2026-10-23"), false, "金曜"); assert.equal(kakuIsWeekend("2026-10-24"), true, "土曜"); assert.equal(kakuIsWeekend("2026-10-25"), true, "日曜"); assert.equal(kakuIsWeekend("2026-10-26"), false, "月曜");
-  assert.equal(kakuPoolFor("2026-10-21", 1), 39); assert.equal(kakuPoolFor("2026-10-21", 2), 9);
-  assert.equal(kakuPoolFor("2026-10-24", 1), 130); assert.equal(kakuPoolFor("2026-10-24", 2), 30);
+  assert.equal(kakuPoolFor("2026-10-21", 1), 65); assert.equal(kakuPoolFor("2026-10-21", 2), 15);
+  assert.equal(kakuPoolFor("2026-10-24", 1), 260); assert.equal(kakuPoolFor("2026-10-24", 2), 60);
   const rng = rngOf(404);
   const apps = (n) => Array.from({ length: n }, (_, i) => ({ uid: `r${i}`, name: `r${i}` }));
-  for (const [day, type, A, lo, hi] of [["2026-10-24", 1, 3, 0.07, 0.14], ["2026-10-24", 1, 20, 0.07, 0.14], ["2026-10-25", 2, 5, 0.07, 0.14], ["2026-10-21", 1, 8, 0.27, 0.40]]) {
+  for (const [day, type, A, lo, hi] of [["2026-10-24", 1, 3, 0.035, 0.075], ["2026-10-24", 1, 20, 0.035, 0.075], ["2026-10-25", 2, 5, 0.035, 0.075], ["2026-10-21", 1, 8, 0.15, 0.25]]) {
     const cnt = type === 1 ? 13 : 3; let won = 0, two = 0; const N = 6000;
     for (let t = 0; t < N; t++) {
       const w = kakuPickWinners({ applicants: apps(A), poolTarget: kakuPoolFor(day, type), count: cnt, random: rng, dayId: day });
@@ -483,7 +483,7 @@ test("土日は抽選に当たる割合が約10%（平日は約1/3）。申込�
     assert.ok(rate >= lo && rate <= hi, `${day} 種類${type} 申込${A}人：当たる割合 ${(rate * 100).toFixed(1)}%`);
     assert.ok(two / Math.max(1, won) < 0.1, "複数枠はまれ");
   }
-  // 申込が非常に多い土日：実在の人だけで枠が埋まり、割合は10%より低い
+  // 申込が非常に多い土日：実在の人だけで枠が埋まり、割合は5%より低い
   const many = kakuPickWinners({ applicants: apps(400), poolTarget: kakuPoolFor("2026-10-24", 1), count: 13, random: rng, dayId: "2026-10-24" });
   assert.ok(many.every((x) => !x.npc));
   // 抽選の実行にも反映される：土曜は申込3人でも、ほとんどの枠がNPC
