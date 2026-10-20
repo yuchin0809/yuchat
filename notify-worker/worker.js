@@ -60,6 +60,8 @@ export default {
     ctx.waitUntil(runLotteryTick(env, event.scheduledTime).catch((error) => console.error("lottery tick error", String(error?.message || error).slice(0, 300))));
     /* 🌈 ゆうスロ確変台：前日12:00の公開・21:00の抽選・当日7:00/7:50/10:45。予定の時刻の直後以外は Firestore に触れずにすぐ戻る */
     ctx.waitUntil(runKakuTick(env, event.scheduledTime).catch((error) => console.error("kaku tick error", String(error?.message || error).slice(0, 300))));
+    /* 🏅 ゆうスロの会員ランク：毎週月曜 7:00（日本時間）に、先週の使ったコインでランクを決める。それ以外の分は Firestore に触れずにすぐ戻る */
+    ctx.waitUntil(runRankTick(env, event.scheduledTime).catch((error) => console.error("rank tick error", String(error?.message || error).slice(0, 300))));
     /* 💸 コイン送金：3日たっても承認されない申請を、1日1回（日本時間 3:07）自動で却下して返金する。それ以外の分は Firestore に触れずにすぐ戻る */
     ctx.waitUntil(runTransferExpiryTick(env, event.scheduledTime).catch((error) => console.error("transfer expiry error", String(error?.message || error).slice(0, 300))));
   }
@@ -2354,6 +2356,7 @@ export async function handleYuslotAction(deps, uid, body) {
       case "kakuStatus": return await kakuStatus(deps, uid, body);
       case "kakuApply": return await kakuApply(deps, uid, body);
       case "kakuQuick": return await kakuQuick(deps, uid, body);
+      case "rankStatus": return await rankStatus(deps, uid, body);
       case "kakuGetNotify": return { ok: true, prefs: await kakuGetNotify(deps, uid) };
       case "kakuSetNotify": return await kakuSetNotify(deps, uid, body);
       default: return { status: 400, error: "unknown_action" };
@@ -2965,6 +2968,7 @@ export function kakuPoolFor(dayId, type) {
 }
 const KAKU_MAX_PER_DAY = 3, KAKU_REPEAT_WEIGHT = 0.2;
 const KAKU_POOR_BOOST = 4; // 総資産がいちばん少ない人の重みは、いちばん多い人の4倍（当たりやすくなるだけで、確定ではない）
+const KAKU_WEIGHT_CAP = 6;   // 総資産の重み×会員ランクの重み の合計の上限（いちばん当たりにくい人の重みを1としたとき、最大6倍まで）
 export const KAKU_MACHINE_NAMES = { yubasic: "ゆうベーシック", yurush: "ゆうラッシュ", yuchance: "ゆうチャンス", yutreasure: "ゆうトレジャー", yurainbow: "ゆうレインボー", yujackpot: "ゆうジャックポット" };
 const KAKU_NPC_NAMES = ["ほしぞら", "みかん", "ひなた", "そらまめ", "もちもち", "さくら", "こはる", "はるか", "ゆうき", "りんご", "ぽんた", "だいふく", "ねこまる", "ことり", "つばさ", "あおぞら", "ひまわり", "にじいろ", "まっちゃ", "きなこ", "わかば", "ふうた", "らいむ", "みずほ", "もも", "ぱんだ", "くるみ", "かずは", "しろくま", "ゆずぽん", "たいよう", "なないろ", "ちくわ", "おにぎり", "どんぐり", "ふわふわ", "きらきら", "しおり", "あんず", "れもん", "すいか", "ぷりん", "こむぎ", "ゆきうさぎ", "ひよこ", "ののか", "あかり", "みどり", "そうた", "かなた", "いちご", "めろん", "こうめ", "とまと", "ぽぷら", "りく", "はなび", "ほたる", "かぜのこ", "つきみ"];
 export const KAKU_NOTIFY_DEFAULTS = { pub: false, same: false, result1: true, result2: true };
@@ -3033,9 +3037,12 @@ export function kakuPoorness(rows, names) {
 }
 
 /* 抽選：実在の申込者に、足りない人数ぶんの NPC を混ぜた集団から count 回引く。すでに当たった人は ×0.2 の重みを重ね、最大3回まで。
-   poor（名前→0〜1）があれば、総資産が少ない人ほど重みを大きくする（最大 KAKU_POOR_BOOST 倍。NPC は実在の申込者の平均の重み＝全体の当選割合は変わらない） */
-export function kakuPickWinners({ applicants, poolTarget, count, wins = new Map(), random, dayId, poor = null }) {
-  const all = applicants.map((a) => ({ uid: a.uid, name: a.name, npc: false, base: poor ? 1 + (KAKU_POOR_BOOST - 1) * (poor.get(a.name) ?? 0.5) : 1 }));
+   poor（名前→0〜1）があれば、総資産が少ない人ほど重みを大きくする（最大 KAKU_POOR_BOOST 倍）。rankOf（uid→ランク）があれば、ランクが高い人ほどさらに大きくする（掛け合わせ、合計は KAKU_WEIGHT_CAP 倍まで）。
+   NPC は実在の申込者の平均の重み＝全体の当選割合は変わらない */
+export function kakuPickWinners({ applicants, poolTarget, count, wins = new Map(), random, dayId, poor = null, rankOf = null }) {
+  // 重み＝総資産の重み（1〜4倍）× 会員ランクの重み（1〜3倍）。合計は KAKU_WEIGHT_CAP 倍まで
+  const weightOf = (a) => Math.min(KAKU_WEIGHT_CAP, (poor ? 1 + (KAKU_POOR_BOOST - 1) * (poor.get(a.name) ?? 0.5) : 1) * (rankOf ? (RANK_LEVELS[rankOf.get(a.uid) || 0]?.mult || 1) : 1));
+  const all = applicants.map((a) => ({ uid: a.uid, name: a.name, npc: false, base: weightOf(a) }));
   const npcN = Math.max(0, poolTarget - all.length);
   const npcBase = all.length ? all.reduce((s, p) => s + p.base, 0) / all.length : 1;
   for (let i = 0; i < npcN; i++) all.push({ uid: "npc:" + i, name: kakuNpcName(dayId, i), npc: true, base: npcBase });
@@ -3086,6 +3093,7 @@ async function kakuWriteSlots(deps, dayId, cur, extra) {
 export async function kakuRunDraw(deps, dayId, type) {
   const doneKey = type === 1 ? "draw1Done" : "draw2Done";
   let ranking; // 総資産ランキング（申込者がいるときだけ1回読む）
+  let rankDoc; // 会員ランク（yuslotRank/current。申込者がいるときだけ1回読む）
   // 抽選の読み取りと書き込みの間に、申込や先着が入って更新時刻が変わったら、読み直してやり直す（最大4回）。
   // 申込は受付の締切までに入ったものが必ず抽選に入るようにするため（やり直さないと、抽選が行われないままになってしまう）
   for (let attempt = 0; attempt < 4; attempt++) {
@@ -3099,8 +3107,12 @@ export async function kakuRunDraw(deps, dayId, type) {
       try { const raw = await deps.firestore.getRaw("rankings/assets"); ranking = raw ? decodeFields(raw.fields).users || [] : []; }
       catch { ranking = []; } // 読めなくても抽選は止めない（全員同じ重み）
     }
+    if (apps.length && rankDoc === undefined) {
+      try { rankDoc = (await rankEnsureCurrent(deps)).data.ranks || {}; } catch { rankDoc = {}; } // 読めなくても抽選は止めない（ランクなし）
+    }
     const poor = ranking && ranking.length ? kakuPoorness(ranking, apps.map((a) => a.name)) : null;
-    const winners = kakuPickWinners({ applicants: apps, poolTarget: kakuPoolFor(dayId, type), count: targets.length, wins: kakuWinsOf(slots), random: deps.random, dayId, poor });
+    const rankOf = rankDoc ? new Map(Object.entries(rankDoc)) : null;
+    const winners = kakuPickWinners({ applicants: apps, poolTarget: kakuPoolFor(dayId, type), count: targets.length, wins: kakuWinsOf(slots), random: deps.random, dayId, poor, rankOf });
     kakuShuffle(targets, deps.random).forEach((slotIdx, k) => {
       const w = winners[k]; if (!w) return;
       slots[slotIdx] = { ...slots[slotIdx], uid: w.npc ? "" : w.uid, name: w.name, npc: w.npc };
@@ -3321,6 +3333,118 @@ export async function kakuAnnounceResult(deps, day) {
   await deps.firestore.createIfAbsent(`announcements/kaku-${day}`, { title: truncate(`🌈 今日の確変台は「${machine}」！`, 50), body: truncate(lines.join("\n"), 480), createdAt: now, updatedAt: now, createdByUid: "yuuchat-kaku", createdByName: "ゆうスロ確変台" });
   if (d.mode === "sameDay") return { announced: true };
   return kakuPush(deps, "result1", day, "🌈 確変台の抽選結果", "", (uid) => kakuResultDataFor(d, uid, 1, machine, day));
+}
+
+/* =========================================================
+   🏅 ゆうスロの会員ランク
+   ・ランクは、ゆうスロで「1週間に使ったコイン」（有料の回転数 × 台の料金。確変中の分も数える。無料スピンは数えない）で決まる。
+   ・毎週月曜 7:00（日本時間）に更新：先週の使ったコインで、今週のランクが決まる（下がることもある）。
+   ・ランクが高いほど、確変台の抽選に当たりやすい（総資産の重みに掛け合わせる。倍率は画面には出さない）。
+   ・ランクの条件（使ったコイン）は画面に見せる。回転数・使ったコインは users の slotSpins / slotWagered（精算のたびに Worker が足す）。
+   ・Firestore：yuslotRank/current（サーバー専用）の1件だけ。週の始まりの累計（base）・今週のランク（ranks）・先週の分（lastWeek）を入れる。
+     週1回の集計は users を1回読んで、このドキュメントを1件書くだけ。抽選のときは1件読む。表示は5分ためて読む。
+========================================================= */
+export const RANK_LEVELS = [
+  { name: "ゆうビギナー", min: 0, mult: 1 },
+  { name: "ゆうブロンズ", min: 500, mult: 1.2 },
+  { name: "ゆうシルバー", min: 2000, mult: 1.5 },
+  { name: "ゆうゴールド", min: 6000, mult: 1.9 },
+  { name: "ゆうプラチナ", min: 15000, mult: 2.4 },
+  { name: "ゆうダイヤモンド", min: 35000, mult: 3 }
+];
+export function rankLevelFor(wagered) {
+  let level = 0;
+  RANK_LEVELS.forEach((r, i) => { if (Number(wagered) >= r.min) level = i; });
+  return level;
+}
+const RANK_WEEK_MS = 7 * 86400000;
+const RANK_EPOCH_MS = Date.UTC(2026, 9, 18, 22, 0, 0); // 最初の週の始まり：2026-10-19（月）7:00 JST（記録は 10/20 から始まった）
+/* いまを含む週の始まり（月曜 7:00 JST）のミリ秒 */
+export function rankWeekStart(nowMs) {
+  const DAY = 86400000, shift = 2 * 3600000; // JST の月曜 7:00 を、月曜 0:00 に見立てるためのずらし（+9時間 −7時間）
+  const j = nowMs + shift, day = Math.floor(j / DAY);
+  const sinceMonday = (new Date(day * DAY).getUTCDay() + 6) % 7;
+  return (day - sinceMonday) * DAY - shift;
+}
+const rankCache = { at: 0, value: null };
+export function resetRankCacheForTest() { rankCache.at = 0; rankCache.value = null; rankTickDone.clear(); }
+async function rankGet(deps, ttlMs) {
+  const now = deps.now();
+  if (ttlMs > 0 && rankCache.value && now - rankCache.at < ttlMs) return rankCache.value;
+  const raw = await deps.firestore.getRaw("yuslotRank/current");
+  const value = raw ? { data: decodeFields(raw.fields), updateTime: raw.updateTime } : null;
+  rankCache.at = now; rankCache.value = value;
+  return value;
+}
+/* 今週のランクのドキュメントを返す。無ければ作り、週が替わっていれば先週の分を集計して更新する（更新時刻の条件つきの1回の commit） */
+export async function rankEnsureCurrent(deps, { ttlMs = 0 } = {}) {
+  const fs = deps.firestore;
+  const ws = rankWeekStart(deps.now());
+  let cur = await rankGet(deps, ttlMs);
+  if (cur && Number(cur.data.weekStart) >= ws) return cur;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0 || (cur && ttlMs > 0)) cur = await rankGet(deps, 0);
+    if (cur && Number(cur.data.weekStart) >= ws) return cur;
+    if (!cur) {
+      await fs.createIfAbsent("yuslotRank/current", { weekStart: RANK_EPOCH_MS, base: {}, ranks: {}, lastWeek: {}, updatedAtMs: deps.now() });
+      cur = await rankGet(deps, 0);
+      if (!cur || Number(cur.data.weekStart) >= ws) return cur;
+    }
+    // 週が替わった：先週に使ったコイン＝いまの累計 − 週の始まりの累計。それでランクを決め、いまの累計を次の週の始まりにする
+    const users = await fs.query("users", [], { select: ["uid", "slotWagered"] });
+    const prevBase = cur.data.base || {};
+    const base = {}, ranks = {}, lastWeek = {};
+    for (const u of users) {
+      const uid = typeof u.data.uid === "string" ? u.data.uid : "";
+      if (!uid) continue;
+      const total = Math.max(0, Math.trunc(Number(u.data.slotWagered) || 0));
+      const week = Math.max(0, total - Math.trunc(Number(prevBase[uid]) || 0));
+      if (total > 0) base[uid] = total;
+      if (week > 0) lastWeek[uid] = week;
+      const level = rankLevelFor(week);
+      if (level > 0) ranks[uid] = level;
+    }
+    const fields = { weekStart: ws, base, ranks, lastWeek, updatedAtMs: deps.now() };
+    try {
+      await fs.commit([{ update: { name: fs.docName("yuslotRank/current"), fields: encodeFields(fields) }, updateMask: { fieldPaths: Object.keys(fields) }, currentDocument: { updateTime: cur.updateTime } }]);
+    } catch (error) { if (isRetryableCommitError(error)) continue; throw error; }
+    rankCache.at = 0; rankCache.value = null;
+    return rankGet(deps, 0);
+  }
+  return cur;
+}
+const rankTickDone = new Set();
+/* 毎分の cron から。月曜 7:00〜7:09（日本時間）の間だけ動く（取りこぼしても、次の抽選・表示のときに追いつく） */
+export async function runRankTick(env = {}, scheduledTime = Date.now(), deps = null) {
+  const j = new Date(scheduledTime + 9 * 3600000);
+  if (j.getUTCDay() !== 1 || j.getUTCHours() !== 7 || j.getUTCMinutes() > 9) return { skipped: "outside" };
+  const key = String(rankWeekStart(scheduledTime));
+  if (rankTickDone.has(key)) return { skipped: "done" };
+  const d = deps || createDefaultDeps(env);
+  const cur = await rankEnsureCurrent({ ...d, now: () => scheduledTime });
+  rankTickDone.add(key);
+  return { weekStart: cur?.data?.weekStart, ranked: Object.keys(cur?.data?.ranks || {}).length };
+}
+/* 画面用：自分のランク・今週の進み・条件（倍率などの抽選の中身は返さない） */
+async function rankStatus(deps, uid, body) {
+  if (!(await kakuGate(deps, uid))) return { status: 403, error: "not_published" };
+  const me = await loadMyUser(deps.firestore, uid, body?.username);
+  if (me.error) return me.error;
+  const cur = await rankEnsureCurrent(deps, { ttlMs: 300000 });
+  const d = cur?.data || {};
+  const level = Math.min(RANK_LEVELS.length - 1, Math.max(0, Math.trunc(Number((d.ranks || {})[uid]) || 0)));
+  const total = Math.max(0, Math.trunc(readIntegerField(me.raw.fields?.slotWagered) || 0));
+  const thisWeek = Math.max(0, total - Math.trunc(Number((d.base || {})[uid]) || 0));
+  const projected = rankLevelFor(thisWeek);
+  const next = level + 1 < RANK_LEVELS.length ? RANK_LEVELS[level + 1] : null;
+  return {
+    ok: true, serverNowMs: deps.now(),
+    level, name: RANK_LEVELS[level].name, thisWeek, lastWeek: Math.trunc(Number((d.lastWeek || {})[uid]) || 0),
+    projected, projectedName: RANK_LEVELS[projected].name,
+    next: next ? { name: next.name, min: next.min } : null,
+    levels: RANK_LEVELS.map((r) => ({ name: r.name, min: r.min })),
+    weekStartMs: Number(d.weekStart) || rankWeekStart(deps.now()), nextRollMs: (Number(d.weekStart) || rankWeekStart(deps.now())) + RANK_WEEK_MS
+  };
 }
 
 /* =========================================================

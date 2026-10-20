@@ -105,7 +105,8 @@ async function main() {
     lotteryRoundEvil: `lotteryroundverify-${stamp}`,
     kakuEvil: `kakuverify-${stamp}`,
     prefsEvil: `prefsverify-${stamp}`,
-    transferEvil: `transferverify-${stamp}`
+    transferEvil: `transferverify-${stamp}`,
+    rankEvil: `rankverify-${stamp}`
   };
   const cleanupRefs = [
     db.doc(`derbyManualRaces/${ids.closedRace}`),
@@ -126,7 +127,8 @@ async function main() {
     db.doc(`lotteryRounds/${ids.lotteryRoundEvil}`),
     db.doc(`yuslotKaku/${ids.kakuEvil}`),
     db.doc(`yuslotPrefs/${ids.prefsEvil}`),
-    db.doc(`coinTransfers/${ids.transferEvil}`)
+    db.doc(`coinTransfers/${ids.transferEvil}`),
+    db.doc(`yuslotRank/${ids.rankEvil}`)
   ];
 
   const results = [];
@@ -222,6 +224,11 @@ async function main() {
     const transferRef = db.doc(`coinTransfers/${ids.transferEvil}`);
     await checkDeniedAfterPropagation("送金の申請をブラウザから作る（承認済みにする）", () => create("coinTransfers", ids.transferEvil, { senderUid: TEST_UID, receiverUid: "x", amount: 100, status: "approved" }), () => transferRef.delete());
     await checkDeniedAfterPropagation("送金の申請をブラウザから直接読む", () => get(`coinTransfers/${ids.transferEvil}`));
+
+    /* 🏅 ゆうスロの会員ランク：全員のランク・累計（yuslotRank）もサーバー（通知 Worker）だけ */
+    const rankRef = db.doc(`yuslotRank/${ids.rankEvil}`);
+    await checkDeniedAfterPropagation("自分のランクをブラウザから書く", () => create("yuslotRank", ids.rankEvil, { weekStart: 1, ranks: { [TEST_UID]: 5 } }), () => rankRef.delete());
+    await checkDeniedAfterPropagation("全員のランクをブラウザから直接読む", () => get(`yuslotRank/${ids.rankEvil}`));
 
     /* ④ 読み取りと、管理用以外のデータ（今まで通りのルール） */
     await check("手動レースの読み取り", "ALLOW", get(`derbyManualRaces/${ids.closedRace}`));

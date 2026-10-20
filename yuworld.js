@@ -16,6 +16,8 @@
 import { renderLottery, stopLottery } from "./yulottery.js?v=20261019-lottery6";
 /* 🌈 確変台のパネル（台の一覧の上）。抽選・先着・通知設定。Worker の kaku* アクションを呼んで表示するだけ */
 import { kakuInit, kakuPanelHtml, kakuBind, kakuMachineInfo, startKaku, stopKaku, refreshKaku } from "./yukaku.js?v=20261020-kaku8";
+/* 🏅 会員ランクのカード（台の一覧の上）。ランクの判定・進みは Worker の rankStatus が返す */
+import { rankInit, rankPanelHtml, rankRefresh } from "./yurank.js?v=20261020-rank1";
 
 /* 6台（料金・特別役は worker.js の SLOT_MACHINES と同じ。表示用の名前・説明・絵文字・豪華さ(tier)を足す） */
 const MACHINES = [
@@ -72,6 +74,7 @@ const $ = (sel) => rootEl && rootEl.querySelector(sel);
 export function initYuWorld(options) {
   deps = options; rootEl = document.getElementById("yuworldRoot"); injectStyles();
   kakuInit({ api, esc, machines: MACHINE_BY_ID, onChange: () => { if (state.screen === "lobby") renderLobby(); } });
+  rankInit({ api, esc, onChange: () => { if (state.screen === "lobby") renderLobby(); } });
 }
 export async function openYuWorldView() { if (!rootEl) return; if (state.screen !== "game") await loadConfigAndRender(); }
 export async function stopYuWorldView() {
@@ -169,7 +172,7 @@ async function onTogglePublish() {
 }
 
 /* ---------- ロビー ---------- */
-async function openLobby() { state.screen = "lobby"; render(); await refreshLobby(); startLobbyTimer(); startKaku(); }
+async function openLobby() { state.screen = "lobby"; render(); rankRefresh({ force: true }); await refreshLobby(); startLobbyTimer(); startKaku(); }
 async function refreshLobby() {
   let lobby;
   try { lobby = await api("lobby"); }
@@ -201,7 +204,7 @@ function renderLobby() {
   }).join("");
   rootEl.innerHTML = `<div class="yw-head"><button type="button" class="yw-back" id="ywBackShop">← お店の一覧</button><h2>🎰 ゆうスロ</h2>
       <p>台をえらんで着席してください。1台に1人まで、同時に6人まで遊べます。料金が高い台ほど演出が豪華です。</p></div>
-    ${closedNote}${kakuPanelHtml()}<div class="yw-lobby-grid">${cards}</div>`;
+    ${closedNote}${rankPanelHtml()}${kakuPanelHtml()}<div class="yw-lobby-grid">${cards}</div>`;
   kakuBind(rootEl);
   $("#ywBackShop")?.addEventListener("click", () => { stopLobbyTimer(); state.screen = "shop"; render(); });
   rootEl.querySelectorAll("[data-sit]").forEach((b) => b.addEventListener("click", () => { unlockAudio(); seat(b.getAttribute("data-sit")); }));

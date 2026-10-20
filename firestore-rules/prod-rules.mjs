@@ -179,6 +179,10 @@ const TEST_CASES = [
   testCase("DENY", "coinTransfers：自分で承認する", userA, "update", "coinTransfers/t1", { data: { status: "approved" }, existing: { senderUid: userA.uid, receiverUid: "uidB", amount: 100, status: "pending" } }),
   testCase("DENY", "coinTransfers：最上位管理者でもブラウザから承認できない", admin, "update", "coinTransfers/t1", { data: { status: "approved" }, existing: { senderUid: "uidA", receiverUid: "uidB", amount: 100, status: "pending" } }),
   testCase("DENY", "coinTransfers：勝手に申請を作る", userA, "create", "coinTransfers/t2", { data: { senderUid: userA.uid, receiverUid: "uidB", amount: 5, status: "pending" } }),
+  // 🏅 ゆうスロの会員ランク：全員のランク・累計（yuslotRank）はサーバー（通知 Worker）だけ
+  testCase("DENY", "yuslotRank：ランクを直接読めない", userA, "get", "yuslotRank/current", { existing: { weekStart: 1, ranks: {} } }),
+  testCase("DENY", "yuslotRank：自分のランクを書き換える", userA, "update", "yuslotRank/current", { data: { ranks: { [userA.uid]: 5 } }, existing: { weekStart: 1, ranks: {} } }),
+  testCase("DENY", "yuslotRank：最上位管理者でもブラウザから書けない", admin, "update", "yuslotRank/current", { data: { ranks: { x: 5 } }, existing: { weekStart: 1, ranks: {} } }),
   testCase("DENY", "lotteryRounds：最上位管理者でもブラウザから書けない", admin, "update", "lotteryRounds/2030-01-04", { data: { status: "done" }, existing: { round: "2030-01-04", status: "open" } }),
   // お知らせ（announcements）：読み取りはログイン済みなら誰でも・作成/編集/削除は管理者だけ
   testCase("ALLOW", "一般：お知らせの読み取り", userA, "get", "announcements/a1", { existing: announcementDoc }),
