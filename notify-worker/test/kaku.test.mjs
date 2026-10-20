@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import {
   KAKU_EPOCH, KAKU_MACHINE_NAMES, kakuDayId, kakuDayStart, kakuNextDay, kakuTimes, kakuMachineFor, kakuSameKinds, kakuInitialSlots, kakuNpcName,
   kakuCurrentHolder, kakuIsWeekend, kakuPoolFor, kakuPickWinners, kakuPoorness, kakuRunDraw, kakuRunEvent, kakuSeatRight, kakuSpinGate, kakuResultDataFor, runKakuTick, resetKakuCacheForTest,
-  handleYuslotAction, resetYuslotCacheForTest, slotApplySpin, SLOT_MACHINES, SLOT_KAKU_RATE
+  handleYuslotAction, resetYuslotCacheForTest, slotApplySpin, slotRates, SLOT_MACHINES, SLOT_KAKU_RATE, SLOT_KAKU_SPECIAL_BOOST
 } from "../worker.js";
 
 console.warn = () => {};
@@ -278,14 +278,17 @@ test("着席の制限：確変台は、その時間の枠をとった人だけ�
   assert.equal(kakuSpinGate(dayless, at(8, 1)), "over"); assert.equal(kakuSpinGate(dayless, at(7, 59)), null); assert.equal(kakuSpinGate({ machine: other }, at(8, 1)), null);
 });
 
-test("確変の還元率：30分（約900スピン）の平均収支は、どの台も 400〜800 コインの間。高い台ほど倍率は小さい。通常のセッションは変わらない", () => {
+test("確変の還元率：30分（約900スピン）の平均収支は、どの台も +700〜+1,500 コイン（大当たりを1.5倍にしたあと）。高い台ほど倍率は小さい。通常のセッションは変わらない", () => {
   const rng = rngOf(77);
   for (const m of Object.keys(SLOT_MACHINES)) {
     const r = simulate(m, SLOT_KAKU_RATE[m], rng, 1500);
-    assert.ok(r.mean >= 400 && r.mean <= 800, `${m}: 平均 ${r.mean.toFixed(0)}（400〜800）`);
+    assert.ok(r.mean >= 700 && r.mean <= 1500, `${m}: 平均 ${r.mean.toFixed(0)}（700〜1500）`);
     const normal = simulate(m, 0, rng, 400);
     assert.ok(normal.mean < 0, `${m}: 通常の台は平均でマイナス（${normal.mean.toFixed(0)}）`);
   }
+  const ra = slotRates("yubasic", SLOT_KAKU_RATE.yubasic), rb = slotRates("yubasic", 1);
+  assert.ok(Math.abs(ra.special / rb.special - SLOT_KAKU_RATE.yubasic * SLOT_KAKU_SPECIAL_BOOST) < 1e-9, "確変中の大当たりは、倍率×1.5");
+  assert.equal(slotRates("yubasic", 1).special, slotRates("yubasic").special, "通常のときは変わらない");
   const k = SLOT_KAKU_RATE;
   assert.ok(k.yubasic > k.yurush && k.yurush > k.yuchance && k.yuchance > k.yutreasure, "料金の高い台ほど倍率は小さい");
   assert.ok(Math.max(k.yurainbow, k.yujackpot) <= k.yutreasure + 0.02, "高級台は料金の低い台より小さい（シミュレーションの誤差は0.02まで）");

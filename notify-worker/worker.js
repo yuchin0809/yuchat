@@ -2165,10 +2165,11 @@ export function slotRates(machineId, kaku = 1) {
     replay: (o.replay != null ? o.replay : R.replay) * k,
     star: (o.star != null ? o.star : R.star) * k,
     treasure: (o.treasure != null ? o.treasure : R.treasure) * k,
-    special: (o.special != null ? o.special : m.specialRate) * k
+    special: (o.special != null ? o.special : m.specialRate) * k * (k > 1 ? SLOT_KAKU_SPECIAL_BOOST : 1)
   };
 }
-/* 確変台の倍率（台ごと）。料金が高い台ほど小さい。シミュレーション（notify-worker/yuslot-kaku-sim.mjs）で、30分（自動スピン約900回）の平均収支が約 +600 コイン（400〜800の間）になるように決めた */
+/* 確変台の倍率（台ごと）。料金が高い台ほど小さい。シミュレーション（notify-worker/yuslot-kaku-sim.mjs）で、小当たりの倍率を30分（自動スピン約900回）の平均 約+600 コインになるように決めたあと、大当たりだけ SLOT_KAKU_SPECIAL_BOOST 倍にした（平均は +800〜+1,400 ほど） */
+export const SLOT_KAKU_SPECIAL_BOOST = 1.5; // 確変中は大当たり（777／オリジナル＝FEVER）だけ、さらにこの倍率
 export const SLOT_KAKU_RATE = { yubasic: 1.8, yurush: 1.43, yuchance: 1.32, yutreasure: 1.24, yurainbow: 1.23, yujackpot: 1.25 };
 const SLOT_FRUITS = ["cherry", "bell", "watermelon"];
 const SLOT_FLUSH_INTERVAL_MS = 15000;   // クライアントがこの間隔で flush する
