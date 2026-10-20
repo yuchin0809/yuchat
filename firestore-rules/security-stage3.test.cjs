@@ -48,6 +48,7 @@ async function ng(n, p) { try { await assertFails(p); pass++; logs.push("PASS �
     await setDoc(doc(d, "yuslotKaku/2026-10-21"), { day: "2026-10-21", machine: "yubasic", slots: [], app1: [], app2: [] });
     await setDoc(doc(d, "yuslotPrefs/uidA"), { uid: "uidA", kakuNotify: { result1: true } });
     // 💸 コインの送金：申請と状態（coinTransfers）は Worker（サービスアカウント）だけが書く
+    await setDoc(doc(d, "yuslotRank/current"), { weekStart: 1, base: { uidA: 100 }, ranks: { uidA: 1 }, lastWeek: { uidA: 600 } });
     await setDoc(doc(d, "coinTransfers/t1"), { senderUid: "uidA", senderName: "alice", receiverUid: "uidB", receiverName: "bob", amount: 100, status: "pending", createdAtMs: 1 });
   });
 
@@ -150,6 +151,14 @@ async function ng(n, p) { try { await assertFails(p); pass++; logs.push("PASS �
   await ng("金額を書き換える", updateDoc(doc(alice, "coinTransfers/t1"), { amount: 999999 }));
   await ng("勝手に申請を作る", setDoc(doc(bob, "coinTransfers/t2"), { senderUid: "uidA", receiverUid: "uidB", amount: 5, status: "pending" }));
   await ng("申請を消す", deleteDoc(doc(alice, "coinTransfers/t1")));
+
+  logs.push("--- ⑪ ゆうスロの会員ランク：全員のランク・累計はサーバー（Worker）だけ。ブラウザからは読み書きできない");
+  await ng("ランク（yuslotRank）を直接読めない", getDoc(doc(alice, "yuslotRank/current")));
+  await ng("最上位管理者でも直接読めない", getDoc(doc(admin, "yuslotRank/current")));
+  await ng("自分のランクを最高にする", updateDoc(doc(alice, "yuslotRank/current"), { ranks: { uidA: 5 } }));
+  await ng("最上位管理者でもブラウザからランクを書けない", updateDoc(doc(admin, "yuslotRank/current"), { ranks: { uidA: 5 } }));
+  await ng("勝手にランクのドキュメントを作る", setDoc(doc(bob, "yuslotRank/evil"), { weekStart: 1, ranks: { uidB: 5 } }));
+  await ng("ランクのドキュメントを消す", deleteDoc(doc(alice, "yuslotRank/current")));
 
   await env.cleanup();
   console.log(logs.join("\n"));
