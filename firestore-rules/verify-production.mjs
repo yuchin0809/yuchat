@@ -104,7 +104,8 @@ async function main() {
     lotteryEntryEvil: `lotteryverify-${stamp}`,
     lotteryRoundEvil: `lotteryroundverify-${stamp}`,
     kakuEvil: `kakuverify-${stamp}`,
-    prefsEvil: `prefsverify-${stamp}`
+    prefsEvil: `prefsverify-${stamp}`,
+    transferEvil: `transferverify-${stamp}`
   };
   const cleanupRefs = [
     db.doc(`derbyManualRaces/${ids.closedRace}`),
@@ -124,7 +125,8 @@ async function main() {
     db.doc(`lotteryEntries/${ids.lotteryEntryEvil}`),
     db.doc(`lotteryRounds/${ids.lotteryRoundEvil}`),
     db.doc(`yuslotKaku/${ids.kakuEvil}`),
-    db.doc(`yuslotPrefs/${ids.prefsEvil}`)
+    db.doc(`yuslotPrefs/${ids.prefsEvil}`),
+    db.doc(`coinTransfers/${ids.transferEvil}`)
   ];
 
   const results = [];
@@ -215,6 +217,11 @@ async function main() {
     await checkDeniedAfterPropagation("確変台の枠・申込をブラウザから直接読む", () => get(`yuslotKaku/${ids.kakuEvil}`));
     await checkDeniedAfterPropagation("通知の好みをブラウザから書き換える", () => create("yuslotPrefs", ids.prefsEvil, { uid: TEST_UID, kakuNotify: { result1: false } }), () => prefsRef.delete());
     await checkDeniedAfterPropagation("通知の好みをブラウザから直接読む", () => get(`yuslotPrefs/${ids.prefsEvil}`));
+
+    /* 💸 コインの送金：申請と状態（coinTransfers）もサーバー（通知 Worker）だけ */
+    const transferRef = db.doc(`coinTransfers/${ids.transferEvil}`);
+    await checkDeniedAfterPropagation("送金の申請をブラウザから作る（承認済みにする）", () => create("coinTransfers", ids.transferEvil, { senderUid: TEST_UID, receiverUid: "x", amount: 100, status: "approved" }), () => transferRef.delete());
+    await checkDeniedAfterPropagation("送金の申請をブラウザから直接読む", () => get(`coinTransfers/${ids.transferEvil}`));
 
     /* ④ 読み取りと、管理用以外のデータ（今まで通りのルール） */
     await check("手動レースの読み取り", "ALLOW", get(`derbyManualRaces/${ids.closedRace}`));

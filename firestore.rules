@@ -61,7 +61,7 @@ service cloud.firestore {
     //   gameInvites：送った人・送られた人だけ／fcmTokens：アプリからは読まない（通知サーバーだけが読む）
     //   gameRooms・gameRoomOwners：専用のルールで判定（gameRooms はロビー表示のため読み取りは今まで通り許可）
     function hasDedicatedReadRules(collection) {
-      return collection in ['messages', 'groups', 'fcmTokens', 'gameInvites', 'gameRooms', 'gameRoomOwners', 'yuslotSeats', 'lotteryEntries', 'lotteryRounds', 'yuslotKaku', 'yuslotPrefs'];
+      return collection in ['messages', 'groups', 'fcmTokens', 'gameInvites', 'gameRooms', 'gameRoomOwners', 'yuslotSeats', 'lotteryEntries', 'lotteryRounds', 'yuslotKaku', 'yuslotPrefs', 'coinTransfers'];
     }
 
     // 下のコレクションは管理者だけが読める
@@ -85,7 +85,9 @@ service cloud.firestore {
         // 🎟 ゆう宝くじ売り場：購入枚数（lotteryEntries）と抽選結果（lotteryRounds）は通知 Worker（サービスアカウント）だけが書く
         'lotteryEntries', 'lotteryRounds',
         // 🌈 ゆうスロ確変台：その日の枠・申込（yuslotKaku）と通知の好み（yuslotPrefs）は通知 Worker（サービスアカウント）だけが書く
-        'yuslotKaku', 'yuslotPrefs'];
+        'yuslotKaku', 'yuslotPrefs',
+        // 💸 コインの送金（管理者の承認制）：申請と状態は通知 Worker（サービスアカウント）だけが書く
+        'coinTransfers'];
     }
 
     // ===== もとのルール（管理者用・自動処理用・廃止したコレクション・専用ルールのあるコレクション以外は今まで通り） =====
@@ -417,6 +419,13 @@ service cloud.firestore {
       allow read: if false;
     }
     match /yuslotPrefs/{uid} {
+      allow read: if false;
+    }
+
+    // ===== 💸 コインの送金（coinTransfers） =====
+    // 申請（誰から誰へ・いくら）と状態は通知 Worker（サービスアカウント）だけ。ブラウザからは読み書きできない
+    // （自分で承認する・金額を書き換える・他人の送金を覗くことができないように。アプリは Worker 経由で表示する）
+    match /coinTransfers/{transferId} {
       allow read: if false;
     }
 

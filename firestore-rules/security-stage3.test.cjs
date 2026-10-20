@@ -47,6 +47,8 @@ async function ng(n, p) { try { await assertFails(p); pass++; logs.push("PASS �
     // 🌈 ゆうスロ確変台：枠・申込（yuslotKaku）と通知の好み（yuslotPrefs）は Worker（サービスアカウント）だけが書く
     await setDoc(doc(d, "yuslotKaku/2026-10-21"), { day: "2026-10-21", machine: "yubasic", slots: [], app1: [], app2: [] });
     await setDoc(doc(d, "yuslotPrefs/uidA"), { uid: "uidA", kakuNotify: { result1: true } });
+    // 💸 コインの送金：申請と状態（coinTransfers）は Worker（サービスアカウント）だけが書く
+    await setDoc(doc(d, "coinTransfers/t1"), { senderUid: "uidA", senderName: "alice", receiverUid: "uidB", receiverName: "bob", amount: 100, status: "pending", createdAtMs: 1 });
   });
 
   logs.push("--- ① ゲームルーム：読み取りはロビー公開、作成は作成者が自分");
@@ -138,6 +140,16 @@ async function ng(n, p) { try { await assertFails(p); pass++; logs.push("PASS �
   await ng("勝手に申込を作る", setDoc(doc(bob, "yuslotKaku/2026-10-22"), { day: "2026-10-22", machine: "yubasic", slots: [] }));
   await ng("通知の好み（yuslotPrefs）を直接読めない", getDoc(doc(alice, "yuslotPrefs/uidA")));
   await ng("他人の通知の好みを書き換える", setDoc(doc(bob, "yuslotPrefs/uidA"), { uid: "uidA", kakuNotify: { result1: false } }));
+
+  logs.push("--- ⑩ コインの送金：申請と状態はサーバー（Worker）だけ。ブラウザからは読み書きできない");
+  await ng("送金の申請（coinTransfers）を直接読めない", getDoc(doc(alice, "coinTransfers/t1")));
+  await ng("最上位管理者でも直接読めない", getDoc(doc(admin, "coinTransfers/t1")));
+  await ng("自分で承認する（状態の書き換え）", updateDoc(doc(alice, "coinTransfers/t1"), { status: "approved" }));
+  await ng("相手（受け取る人）が承認する", updateDoc(doc(bob, "coinTransfers/t1"), { status: "approved" }));
+  await ng("最上位管理者でもブラウザから承認できない（承認は Worker 経由だけ）", updateDoc(doc(admin, "coinTransfers/t1"), { status: "approved" }));
+  await ng("金額を書き換える", updateDoc(doc(alice, "coinTransfers/t1"), { amount: 999999 }));
+  await ng("勝手に申請を作る", setDoc(doc(bob, "coinTransfers/t2"), { senderUid: "uidA", receiverUid: "uidB", amount: 5, status: "pending" }));
+  await ng("申請を消す", deleteDoc(doc(alice, "coinTransfers/t1")));
 
   await env.cleanup();
   console.log(logs.join("\n"));
