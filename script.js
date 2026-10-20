@@ -5997,7 +5997,7 @@ function renderUserManageList() {
         <span class="um-item-main">
           <strong>${escapeHTML(u.name)}</strong>
           <span class="um-badges">${umBadges(u)}</span>
-          <small>作成 ${escapeHTML(formatUmDate(umCreated(u)))} ・ 最終ログイン ${escapeHTML(formatUmDate(umLastLogin(u)))}${u.coins === null ? "" : ` ・ 🪙 ${u.coins.toLocaleString()}`}</small>
+          <small>作成 ${escapeHTML(formatUmDate(umCreated(u)))} ・ 最終ログイン ${escapeHTML(formatUmDate(umLastLogin(u)))}${u.coins === null ? "" : ` ・ 🪙 ${u.coins.toLocaleString()}`}${u.slotSpins ? ` ・ 🎰 ${u.slotSpins.toLocaleString()}回転・${(u.slotWagered || 0).toLocaleString()}コイン使用` : ""}</small>
         </span>
         <span class="um-chevron" aria-hidden="true">›</span>
       </button>`).join("");

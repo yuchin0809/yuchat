@@ -163,7 +163,7 @@ service cloud.firestore {
               && !hasEconomyFields(request.resource.data))
             || isAdminRenameCreate());
       // 更新：自分のデータ（uid が自分）だけ。他人の users は書き換えられない（isOwnUserDoc で所有を確認）。
-      //   経済項目は1つも変えられない（コイン・銀行・株・累計賭け金・ボーナス・ログインボーナスは Worker だけが変える）。
+      //   経済項目は1つも変えられない（コイン・銀行・株・累計賭け金・ボーナス・ログインボーナス・ゆうスロの記録は Worker だけが変える）。
       allow update: if signedIn() && isOwnUserDoc() && request.resource.data.get('uid', '') == request.auth.uid
         && !economyFieldsChanged();
       // 削除：自分のデータだけ（名前変更の引き継ぎは Worker が消す。管理者の名前強制変更は別の条件）
@@ -175,7 +175,9 @@ service cloud.firestore {
 
       // 経済項目（お金に関わる項目）。ブラウザからは作成・変更できない
       function economyFields() {
-        return ['coins', 'bank', 'stocks', 'totalBetAmount', 'bonus500Granted', 'bonus500GrantedAt', 'lastLoginBonusDate'];
+        return ['coins', 'bank', 'stocks', 'totalBetAmount', 'bonus500Granted', 'bonus500GrantedAt', 'lastLoginBonusDate',
+          // 🎰 ゆうスロの記録（有料の回転数・使ったコイン。会員ランクに使う）。Worker だけが足す
+          'slotSpins', 'slotWagered', 'slotKakuSpins', 'slotKakuWagered'];
       }
       function hasEconomyFields(data) {
         return data.keys().hasAny(economyFields());

@@ -423,7 +423,7 @@ const UID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const ADMIN_PASSWORD_MIN_LENGTH = 8;
 const ADMIN_PASSWORD_MAX_LENGTH = 128;
 const COMMIT_LIMIT = 400;
-const USER_LIST_FIELDS = ["uid", "name", "coins", "createdAt", "updatedAt", "lastSeen", "lastLoginBonusDate", "totalBetAmount", "nameChangedFrom"];
+const USER_LIST_FIELDS = ["uid", "name", "coins", "createdAt", "updatedAt", "lastSeen", "lastLoginBonusDate", "totalBetAmount", "nameChangedFrom", "slotSpins", "slotWagered"];
 
 export function internalAuthEmail(uid) {
   return `u-${uid}@yuuchat.local`;
@@ -531,6 +531,8 @@ async function adminListUsers(deps) {
       updatedAt: d.data.updatedAt || null,
       lastSeen: d.data.lastSeen || null,
       totalBetAmount: typeof d.data.totalBetAmount === "number" ? d.data.totalBetAmount : null,
+      slotSpins: typeof d.data.slotSpins === "number" ? d.data.slotSpins : 0,
+      slotWagered: typeof d.data.slotWagered === "number" ? d.data.slotWagered : 0,
       nameChangedFrom: d.data.nameChangedFrom || "",
       sameUidCount: uid ? docCountByUid.get(uid) : 0,
       auth: summarizeAuthUser(authByUid.get(uid)),
@@ -1313,7 +1315,7 @@ const DERBY_SERVER_GENERATORS = ["github-actions", "worker"];
 const DERBY_SERVER_RESULTS_FROM = null;
 
 const ECONOMY_ACTIONS = ["bankDeposit", "bankWithdraw", "bankBorrow", "bankRepay", "stockTrade", "loginBonus", "bonus500", "placeBet", "ensureRaceResult", "settleMyBets", "startingCoins", "renameCarry", "syncNameClaim", "transferRequest", "transferCancel", "transferMine"];
-const ECON_CARRY_FIELDS = ["coins", "bonus500Granted", "bonus500GrantedAt", "totalBetAmount", "bank", "stocks", "lastLoginBonusDate", "lastAnnouncementReadAt"];
+const ECON_CARRY_FIELDS = ["coins", "bonus500Granted", "bonus500GrantedAt", "totalBetAmount", "bank", "stocks", "lastLoginBonusDate", "lastAnnouncementReadAt", "slotSpins", "slotWagered", "slotKakuSpins", "slotKakuWagered"];
 
 export function jstDateString(ms) {
   return new Date(ms + JST_OFFSET_MS).toISOString().slice(0, 10);
@@ -2274,6 +2276,8 @@ export function slotApplySpin(session, nowMs, random = Math.random, kakuRate = 0
   // ユーザーが余韻を楽しんでから feverStart アクションで開始する。
   if (draw.feverStart && !fever) next.feverPending = true;
   next.spins = (session.spins || 0) + 1;
+  // 会員ランク用の記録：有料の回転数（無料スピンは数えない）と、そのうち確変中の回転数。使ったコイン＝回転数×台の料金
+  if (!usingFree) { next.paid = (session.paid || 0) + 1; if (session.kaku) next.kakuPaid = (session.kakuPaid || 0) + 1; }
   const coinWin = draw.payout > 0;
   if (coinWin) { next.wins = (session.wins || 0) + 1; next.streak = (session.streak || 0) + 1; }
   else if (draw.result === "lose") { next.streak = 0; }
@@ -2489,12 +2493,21 @@ async function yuslotPersist(deps, uid, session, { release }) {
   // 自分の着席でなく、nonce も違う＝別の人に取られた/すでに解放済み。未反映分は（安全のため）反映しない
   if (!cur || cur.uid !== uid || cur.nonce !== session.nonce) return { ok: true, applied: 0, seatLost: !release };
   const toApply = Math.trunc(session.delta - Number(cur.flushedTotal || 0));
+  // 会員ランク用：前回の反映からの、有料の回転数と使ったコイン（users の項目に足すだけ。同じ users の書き込みに入れるので、書き込み回数は増えない）
+  const paid = Math.max(0, Math.trunc(session.paid || 0)), kakuPaid = Math.max(0, Math.trunc(session.kakuPaid || 0));
+  const dPaid = Math.max(0, paid - Number(cur.flushedPaid || 0)), dKaku = Math.max(0, kakuPaid - Number(cur.flushedKakuPaid || 0));
+  const price = Math.max(0, Math.trunc(session.price || 0));
+  const incr = (field, n) => ({ fieldPath: field, increment: { integerValue: String(n) } });
+  const transforms = [];
+  if (toApply !== 0) transforms.push(incr("coins", toApply));
+  if (dPaid > 0) { transforms.push(incr("slotSpins", dPaid), incr("slotWagered", dPaid * price)); }
+  if (dKaku > 0) { transforms.push(incr("slotKakuSpins", dKaku), incr("slotKakuWagered", dKaku * price)); }
   const writes = [];
-  if (toApply !== 0) {
+  if (transforms.length) {
     writes.push({
       update: { name: deps.firestore.docName(`users/${session.name}`), fields: {} },
       updateMask: { fieldPaths: [] },
-      updateTransforms: [{ fieldPath: "coins", increment: { integerValue: String(toApply) } }],
+      updateTransforms: transforms,
       currentDocument: { exists: true }
     });
   }
@@ -2502,8 +2515,8 @@ async function yuslotPersist(deps, uid, session, { release }) {
     writes.push({ delete: deps.firestore.docName(seatPath), currentDocument: { updateTime: raw.updateTime } });
   } else {
     writes.push({
-      update: { name: deps.firestore.docName(seatPath), fields: { flushedTotal: { integerValue: String(Math.trunc(session.delta)) }, graceUntilMs: { integerValue: String(now + SLOT_SEAT_GRACE_MS) }, lastFlushMs: { integerValue: String(now) } } },
-      updateMask: { fieldPaths: ["flushedTotal", "graceUntilMs", "lastFlushMs"] },
+      update: { name: deps.firestore.docName(seatPath), fields: { flushedTotal: { integerValue: String(Math.trunc(session.delta)) }, flushedPaid: { integerValue: String(paid) }, flushedKakuPaid: { integerValue: String(kakuPaid) }, graceUntilMs: { integerValue: String(now + SLOT_SEAT_GRACE_MS) }, lastFlushMs: { integerValue: String(now) } } },
+      updateMask: { fieldPaths: ["flushedTotal", "flushedPaid", "flushedKakuPaid", "graceUntilMs", "lastFlushMs"] },
       currentDocument: { updateTime: raw.updateTime }
     });
   }
