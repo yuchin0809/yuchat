@@ -223,6 +223,41 @@ test("flush：増分だけ反映し、同じ session を再送しても二重反
   assert.equal(st.applied, 4); assert.equal(coinsOf(fs, "たろう"), 1010);
 });
 
+const statOf = (fs, name, f) => Number(fs.docs.get(`users/${name}`).fields[f]?.integerValue || 0);
+
+test("会員ランク用の記録：有料の回転数と使ったコインを users に足す。無料スピンは数えない。flush を重ねても二重に足さない", async () => {
+  const { fs, deps: d } = deps({ "worldConfig/yuslot": { yuslotPublished: true } });
+  const s = await handleYuslotAction(d, "uT", { action: "seat", machine: "yubasic", username: "たろう" });
+  let session = s.session;
+  const play = async (v) => { const r = await handleYuslotAction({ ...d, random: seq(v) }, "uT", { action: "spin", session }); assert.equal(r.ok, true); session = r.session; return r; };
+  await play(0.99); await play(0.99);                                    // ハズレ×2（有料2回）
+  await play(bandValue("yubasic", "replay"));                             // REPLAY（有料1回・無料スピン+1）
+  const free = await play(0.99);                                          // 無料スピン（数えない）
+  assert.equal(free.spin.cost, 0);
+  const f1 = await handleYuslotAction(d, "uT", { action: "flush", session });
+  assert.equal(statOf(fs, "たろう", "slotSpins"), 3); assert.equal(statOf(fs, "たろう", "slotWagered"), 3, "料金1×3回");
+  assert.equal(statOf(fs, "たろう", "slotKakuSpins"), 0);
+  await handleYuslotAction(d, "uT", { action: "flush", session: f1.session });
+  assert.equal(statOf(fs, "たろう", "slotSpins"), 3, "同じ内容の再flushでは増えない");
+  session = f1.session;
+  await play(0.99);
+  const st = await handleYuslotAction(d, "uT", { action: "settle", session });
+  assert.equal(st.ok, true);
+  assert.equal(statOf(fs, "たろう", "slotSpins"), 4); assert.equal(statOf(fs, "たろう", "slotWagered"), 4);
+  await handleYuslotAction(d, "uT", { action: "settle", session });
+  assert.equal(statOf(fs, "たろう", "slotSpins"), 4, "二重に精算しても増えない");
+});
+
+test("会員ランク用の記録：コインの増減が0でも回転数は記録される。高い台は料金×回転数。確変中の回転は別にも数える", () => {
+  const base = { v: 1, uid: "uT", name: "たろう", machine: "yujackpot", price: 9, startCoins: 100, delta: 0, flushed: 0, freeSpins: 0, feverUntil: 0, spins: 0, wins: 0, streak: 0, day: "d", nonce: "n", seatMs: 0, lastMs: 0 };
+  let r = slotApplySpin(base, 1000, seq(0.99));
+  assert.equal(r.session.paid, 1); assert.equal(r.session.kakuPaid, undefined);
+  r = slotApplySpin({ ...base, kaku: true }, 1000, seq(0.99), 1.25);
+  assert.equal(r.session.paid, 1); assert.equal(r.session.kakuPaid, 1);
+  r = slotApplySpin({ ...base, kaku: true, paid: 5, kakuPaid: 2, freeSpins: 1 }, 1000, seq(0.99), 1.25);
+  assert.equal(r.session.paid, 5, "無料スピンは数えない"); assert.equal(r.session.kakuPaid, 2);
+});
+
 test("FEVERは特別役の当たりで自動開始せず、feverStart アクションで開始（連打しても二重開始しない・Firestore 0）", async () => {
   const { fs, deps: d } = deps({ "worldConfig/yuslot": { yuslotPublished: true } });
   const s = await handleYuslotAction(d, "uT", { action: "seat", machine: "yubasic", username: "たろう" });

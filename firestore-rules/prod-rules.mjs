@@ -196,6 +196,8 @@ const TEST_CASES = [
   testCase("ALLOW", "users：経済項目でない自分のデータ更新（オンライン・通知設定）", userA, "update", "users/alice", { data: { uid: userA.uid, coins: 1000, online: true }, existing: { uid: userA.uid, coins: 1000 } }),
   testCase("ALLOW", "users：ランキング（他人のデータの読み取り）", userA, "get", "users/bob", { existing: { uid: "bob", coins: 1000 } }),
   testCase("DENY", "users：他人の名前の書き換え", userA, "update", "users/bob", { data: { uid: "bob", name: "へんななまえ", coins: 1000 }, existing: { uid: "bob", name: "bob", coins: 1000 } }),
+  testCase("DENY", "users：ゆうスロの記録（回転数・使ったコイン）をブラウザから書き換える", userA, "update", "users/alice", { data: { uid: userA.uid, coins: 1000, slotSpins: 999999, slotWagered: 999999 }, existing: { uid: userA.uid, coins: 1000 } }),
+  testCase("DENY", "users：新規登録でゆうスロの記録を入れる", userA, "create", "users/alice4", { data: { uid: userA.uid, name: "alice4", slotSpins: 999999 } }),
   testCase("DENY", "users：他人のコインの書き換え", userA, "update", "users/bob", { data: { uid: "bob", coins: 999999 }, existing: { uid: "bob", coins: 1000 } }),
   testCase("DENY", "users：他人のデータの削除", userA, "delete", "users/bob", { existing: { uid: "bob", coins: 1000 } }),
   testCase("DENY", "users：管理者でも他人の users を直接は書き換えられない（名前の強制変更以外）", admin, "update", "users/bob", { data: { uid: "bob", coins: 1 }, existing: { uid: "bob", coins: 1000 } }),

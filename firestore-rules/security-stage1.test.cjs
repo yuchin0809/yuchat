@@ -34,6 +34,8 @@ async function ok(name, p) { try { await assertSucceeds(p); pass++; log.push(`PA
     await ng(`${who}：自分の借入を 0 にする`, updateDoc(doc(U, `users/${self}`), { bank: { deposit: 0, interestBase: 0, loan: 0 } }));
     await ng(`${who}：自分の stocks を増やす`, updateDoc(doc(U, `users/${self}`), { "stocks.YEN": { qty: 99999, cost: 0 } }));
     await ng(`${who}：ログインボーナス日・累計賭け金・ボーナスを書き換える`, updateDoc(doc(U, `users/${self}`), { lastLoginBonusDate: "2000-01-01", totalBetAmount: 0, bonus500Granted: false }));
+    await ng(`${who}：ゆうスロの記録（回転数・使ったコイン）を書き換える`, updateDoc(doc(U, `users/${self}`), { slotSpins: 999999, slotWagered: 999999, slotKakuSpins: 1, slotKakuWagered: 1 }));
+    await ng(`${who}：ゆうスロの記録を入れて新しい users を作る`, setDoc(doc(U, "users/newslot"), { uid: self, name: "newslot", slotSpins: 999999 }));
     await ng(`${who}：経済項目入りで新しい users を作る`, setDoc(doc(U, "users/newrich"), { uid: self, name: "newrich", coins: 1000000 }));
     // ゆうダービー
     await ng(`${who}：未来のレース結果を先に作る`, setDoc(doc(U, "races/2026-10-21"), { raceId: "2026-10-21", resultOrder: [3,1,2,4,5,6,7,8,9,10], status: "finished", generatedBy: "github-actions" }));
