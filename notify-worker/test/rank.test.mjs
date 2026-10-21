@@ -176,7 +176,7 @@ test("表示のための読み取りは5分ためる（毎回 Firestore を読�
   assert.ok(fs.counts.getRaw - gets <= 5 * 2, `getRaw ${fs.counts.getRaw - gets}`);
 });
 
-test("抽選：ランクが高い人ほど当たりやすい。総資産の重みと掛け合わせ、合計は上限（6倍）まで。全体の当選割合は変わらない", () => {
+test("抽選：ランクが高い人ほど当たりやすい（最高ランクで約3倍）。ランクがなければ全員平等。全体の当選割合は変わらない", () => {
   const rng = rngOf(99);
   const names = ["lv0", "lv1", "lv2", "lv3", "lv4", "lv5"];
   const apps = names.map((n) => ({ uid: n, name: n }));
@@ -190,11 +190,9 @@ test("抽選：ランクが高い人ほど当たりやすい。総資産の重�
   assert.ok(won.lv5 / won.lv0 > 2.4 && won.lv5 / won.lv0 < 3.6, `最高ランクは約3倍 ${(won.lv5 / won.lv0).toFixed(2)}`);
   let flat = 0; for (let t = 0; t < N; t++) flat += kakuPickWinners({ applicants: apps, poolTarget: 65, count: 13, random: rng, dayId: "2026-10-21" }).filter((x) => !x.npc).length;
   assert.ok(Math.abs(real - flat) / flat < 0.08, `実在の人が当たる総数は変わらない（${real} / ${flat}）`);
-  // 総資産が少ない（重み4倍）×最高ランク（3倍）＝12倍 → 上限6倍。総資産が多い・ランクなし（1倍）に対して最大でも6倍
-  const poor = new Map([["rich", 0], ["both", 1]]);
-  const two = [{ uid: "rich", name: "rich" }, { uid: "both", name: "both" }];
-  const c = { rich: 0, both: 0 };
-  for (let t = 0; t < 30000; t++) kakuPickWinners({ applicants: two, poolTarget: 2, count: 1, random: rng, dayId: "2026-10-21", poor, rankOf: new Map([["both", 5]]) }).forEach((x) => { c[x.uid]++; });
-  const ratio = c.both / c.rich;
-  assert.ok(ratio > 5 && ratio < 7.2, `合計の差は上限の約6倍まで（12倍にならない）: ${ratio.toFixed(2)}`);
+  // ランクがなければ全員同じ重み
+  const same = [{ uid: "a", name: "a" }, { uid: "b", name: "b" }];
+  const c = { a: 0, b: 0 };
+  for (let t = 0; t < 30000; t++) kakuPickWinners({ applicants: same, poolTarget: 2, count: 1, random: rng, dayId: "2026-10-21" }).forEach((x) => { c[x.uid]++; });
+  assert.ok(Math.abs(c.a / c.b - 1) < 0.08, `ランクがなければ平等 ${c.a} / ${c.b}`);
 });
