@@ -62,6 +62,8 @@ export default {
     ctx.waitUntil(runKakuTick(env, event.scheduledTime).catch((error) => console.error("kaku tick error", String(error?.message || error).slice(0, 300))));
     /* 🏅 ゆうスロの会員ランク：毎週月曜 7:00（日本時間）に、先週の使ったコインでランクを決める。それ以外の分は Firestore に触れずにすぐ戻る */
     ctx.waitUntil(runRankTick(env, event.scheduledTime).catch((error) => console.error("rank tick error", String(error?.message || error).slice(0, 300))));
+    /* 🤖 NPC 枠のキャンセル：1日1〜3回、10:00〜14:30 のランダムな時刻（日付から決まる）。予定の時刻から30分の間以外は Firestore に触れずにすぐ戻る */
+    ctx.waitUntil(runKakuCancelTick(env, event.scheduledTime).catch((error) => console.error("kaku cancel error", String(error?.message || error).slice(0, 300))));
     /* 🎫 先着ゲームの週間ランキング：毎週月曜 7:00（日本時間）に結果発表（1位500・2位250・3位100コイン）。それ以外の分は Firestore に触れずにすぐ戻る */
     ctx.waitUntil(runBattleWeekTick(env, event.scheduledTime).catch((error) => console.error("battle week error", String(error?.message || error).slice(0, 300))));
     /* 💸 コイン送金：3日たっても承認されない申請を、1日1回（日本時間 3:07）自動で却下して返金する。それ以外の分は Firestore に触れずにすぐ戻る */
@@ -2365,6 +2367,9 @@ export async function handleYuslotAction(deps, uid, body) {
       case "battleFinish": return await battleFinish(deps, uid, body);
       case "battleRanking": return await battleRanking(deps, uid, body);
       case "battlePractice": return await battlePractice(deps, uid, body);
+      case "battleBoard": return await battleBoard(deps, uid);
+      case "claimStart": return await claimStart(deps, uid, body);
+      case "claimFinish": return await claimFinish(deps, uid, body);
       case "rankStatus": return await rankStatus(deps, uid, body);
       case "kakuGetNotify": return { ok: true, prefs: await kakuGetNotify(deps, uid) };
       case "kakuSetNotify": return await kakuSetNotify(deps, uid, body);
@@ -3032,7 +3037,7 @@ const KAKU_MAX_PER_DAY = 3, KAKU_REPEAT_WEIGHT = 0.2;
 const KAKU_BIAS = 1.5; // 申込者ごとの重みの調整の幅（小さな差）
 export const KAKU_MACHINE_NAMES = { yubasic: "ゆうベーシック", yurush: "ゆうラッシュ", yuchance: "ゆうチャンス", yutreasure: "ゆうトレジャー", yurainbow: "ゆうレインボー", yujackpot: "ゆうジャックポット" };
 const KAKU_NPC_NAMES = ["ほしぞら", "みかん", "ひなた", "そらまめ", "もちもち", "さくら", "こはる", "はるか", "ゆうき", "りんご", "ぽんた", "だいふく", "ねこまる", "ことり", "つばさ", "あおぞら", "ひまわり", "にじいろ", "まっちゃ", "きなこ", "わかば", "ふうた", "らいむ", "みずほ", "もも", "ぱんだ", "くるみ", "かずは", "しろくま", "ゆずぽん", "たいよう", "なないろ", "ちくわ", "おにぎり", "どんぐり", "ふわふわ", "きらきら", "しおり", "あんず", "れもん", "すいか", "ぷりん", "こむぎ", "ゆきうさぎ", "ひよこ", "ののか", "あかり", "みどり", "そうた", "かなた", "いちご", "めろん", "こうめ", "とまと", "ぽぷら", "りく", "はなび", "ほたる", "かぜのこ", "つきみ"];
-export const KAKU_NOTIFY_DEFAULTS = { pub: false, same: false, result1: true, result2: true };
+export const KAKU_NOTIFY_DEFAULTS = { pub: false, same: false, result1: true, result2: true, cancel: false };
 
 export function kakuDayId(ms) {
   const d = new Date(ms + KAKU_JST);
@@ -3565,6 +3570,179 @@ async function battlePractice(deps, uid) {
   const [plan, card] = await Promise.all([battlePlan(deps, "practice", uid, nonce), battleCard(deps, "practice", uid + nonce)]);
   return { ok: true, plan, card, serverNowMs: deps.now() };
 }
+
+/* =========================================================
+   🤖 NPC 枠のキャンセル（確変台）
+   ・1日に1〜3枠、10:00 以降の完全にランダムな時刻に、NPC が持っている枠（まだ始まっていないもの）が1つキャンセルされる。
+     いつ・どの枠かは、日付から決まる（cron が少し遅れても、取りこぼさない）。
+   ・キャンセルされた枠は「空き」になり、取りたい人は先着と同じミニゲーム（全工程）で取る。
+   ・最初の1人がスタートしてから決まった時間内に誰も取れなかったら、別の NPC が取る（この時間・決まりは、画面にもお知らせにも出さない）。
+   ・通知：キャンセルが出たとき、「キャンセルの通知」をオンにした人にだけプッシュ。お知らせは流さない。
+   ・ユーザー向けの表（battleBoard）：その日の枠ごとに「予約が埋まっています」など。誰が持っているか（NPC かどうか）は出さない。
+     抽選の結果が出る前の枠は、行ごと出さない。
+   ・Firestore：yuslotKaku/{日付} の枠に cx（キャンセル中）・cxAt・cxStart を足すだけ（cxDone＝実行済みの回数）。1人あたりの記録は yuslotBattle/c_{uid}。
+========================================================= */
+const CANCEL_FROM_MIN = 600, CANCEL_UNTIL_MIN = 870;     // 10:00〜14:30 の間のランダムな時刻
+const CANCEL_WINDOW_MS = 16500;                           // ※内緒：最初の1人のスタートから、この時間で取れなければ NPC が取る
+export function kakuCancelPlan(dayId) {
+  const r = kakuSeeded("cancel:" + dayId), t0 = kakuDayStart(dayId);
+  const n = 1 + Math.floor(r() * 3);
+  const times = Array.from({ length: n }, () => t0 + CANCEL_FROM_MIN * KAKU_MIN + Math.floor(r() * (CANCEL_UNTIL_MIN - CANCEL_FROM_MIN) * KAKU_MIN)).sort((a, b) => a - b);
+  return { n, times };
+}
+const kakuCancelStrip = (x) => { const { cx, cxAt, cxStart, ...rest } = x; return rest; };
+/* 時間内に取れなかったキャンセル枠は、別の NPC が取る（slots を直接書き換える。変えたら true） */
+export function kakuCancelExpire(slots, dayId, now) {
+  let changed = false;
+  slots.forEach((x, i) => {
+    if (x.cx && !x.uid && !x.npc && x.cxStart && now > x.cxStart + CANCEL_WINDOW_MS) { slots[i] = { ...kakuCancelStrip(x), npc: true, name: kakuNpcName(dayId, 200 + x.i * 7 + 3), uid: "" }; changed = true; }
+  });
+  return changed;
+}
+/* キャンセルの予定の時刻になっていたら、その回数ぶん実行する（更新時刻の条件つき。何回呼んでも、同じ回は1度だけ） */
+export async function kakuCancelRun(deps, dayId) {
+  const plan = kakuCancelPlan(dayId);
+  let ran = 0;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const now = deps.now();
+    const cur = await kakuGetDay(deps, dayId, 0);
+    if (!cur) return { skipped: "no_day", ran };
+    const done = Number(cur.data.cxDone) || 0;
+    if (done >= plan.n || plan.times[done] > now) return { skipped: "none_due", ran, done };
+    const slots = cur.data.slots.map((x) => ({ ...x }));
+    const eligible = slots.filter((x) => x.npc && !x.uid && !x.cx && x.s > now + 2 * KAKU_MIN);
+    const pick = eligible.length ? eligible[Math.floor(kakuSeeded(`cancelpick:${dayId}:${done}`)() * eligible.length) % eligible.length] : null;
+    if (pick) slots[pick.i] = { ...pick, npc: false, name: "", uid: "", cx: 1, cxAt: now };
+    try { await kakuWriteSlots(deps, dayId, { data: { slots }, updateTime: cur.updateTime }, { cxDone: done + 1 }); }
+    catch (error) { if (isRetryableCommitError(error)) continue; throw error; }
+    ran++;
+    if (pick) { try { await kakuCancelNotify(deps, dayId, pick); } catch (error) { console.warn("kaku cancel notify failed", String(error?.message || error).slice(0, 120)); } }
+  }
+  return { skipped: "raced", ran };
+}
+async function kakuCancelNotify(deps, dayId, slot) {
+  const id = `kaku-cancel-${dayId}-${slot.i}`;
+  const data = { kind: "kaku", title: "🌈 NPCの枠がキャンセルされました！", body: truncate(`${kakuHm(slot.s)}〜${kakuHm(slot.e)} の枠が空きました。「🎫 当日の先着はこちら」から取れます！`, 80), link: "./", tag: id };
+  return sendBroadcastNotification(deps, id, data, await kakuPushFilter(deps, "cancel"));
+}
+const kakuCancelTickDone = new Set();
+export function resetKakuCancelTickForTest() { kakuCancelTickDone.clear(); }
+/* 毎分の cron から。キャンセルの予定の時刻から30分の間だけ動く（それ以外は Firestore に触れない） */
+export async function runKakuCancelTick(env = {}, scheduledTime = Date.now(), deps = null) {
+  const day = kakuDayId(scheduledTime);
+  if (day < KAKU_EPOCH) return { skipped: "outside" };
+  const plan = kakuCancelPlan(day);
+  const dueKeys = plan.times.map((t, k) => ({ t, key: `${day}:${k}` })).filter((x) => scheduledTime >= x.t && scheduledTime < x.t + 30 * KAKU_MIN && !kakuCancelTickDone.has(x.key));
+  if (!dueKeys.length) return { skipped: "outside" };
+  const d = { ...(deps || createDefaultDeps(env)), now: () => scheduledTime };
+  const r = await kakuCancelRun(d, day);
+  if (r.skipped !== "raced") dueKeys.forEach((x) => kakuCancelTickDone.add(x.key));
+  return r;
+}
+
+/* ----- ユーザー向けの表（その日の枠ごと） ----- */
+export async function battleBoard(deps, uid) {
+  if (!(await kakuGate(deps, uid))) return { status: 403, error: "not_published" };
+  const now = deps.now(), day = kakuDayId(now);
+  if (day < KAKU_EPOCH) return { ok: true, active: false, serverNowMs: now, rows: [], notify: false };
+  const t = kakuTimes(day);
+  let cur = now >= t.sameOpen - 2 * 3600000 ? await kakuEnsureDay(deps, day) : await kakuGetDay(deps, day);
+  if (cur && (Number(cur.data.cxDone) || 0) < kakuCancelPlan(day).times.filter((x) => x <= now).length) {   // cron が遅れていたら、ここで追いつく
+    try { await kakuCancelRun(deps, day); cur = await kakuGetDay(deps, day, 0); } catch (error) { console.warn("kaku cancel catch-up failed", String(error?.message || error).slice(0, 120)); }
+  }
+  const slots = cur ? cur.data.slots.map((x) => ({ ...x })) : [];
+  if (cur && kakuCancelExpire(slots, day, now)) {   // 時間内に取れなかった枠は、別の NPC が取ったことにして保存する（失敗しても、表は正しく返す）
+    try { await kakuWriteSlots(deps, day, { data: { slots }, updateTime: cur.updateTime }, {}); } catch (error) { if (!isRetryableCommitError(error)) console.warn("kaku cancel expire save failed", String(error?.message || error).slice(0, 120)); }
+  }
+  const rows = [];
+  for (const x of slots) {
+    const decided = !!(x.uid || x.npc || x.cx);
+    if (!decided && x.kind !== "quick") continue;               // 抽選の結果が出る前の枠は、行ごと出さない
+    let state;
+    if (uid && x.uid === uid) state = "mine";
+    else if (x.cx && !x.uid && !x.npc) state = now < x.s ? "open" : "ended";
+    else if (x.kind === "quick" && !x.uid && !x.name) state = now < x.s ? "quick" : "ended";
+    else state = "filled";
+    rows.push({ i: x.i, s: x.s, e: x.e, kind: x.kind, state });
+  }
+  const prefs = await kakuGetNotify(deps, uid);
+  return { ok: true, active: true, serverNowMs: now, day, rows, notify: prefs.cancel === true };
+}
+
+/* ----- キャンセル枠を取るミニゲーム（先着と同じ全工程。ランキングには載せない） ----- */
+const battleClaimOk = (slots, uid, slot) => {
+  const mine = (slots || []).filter((x) => x.uid === uid);
+  return mine.length < KAKU_MAX_PER_DAY && !mine.some((m) => m.s < slot.e && slot.s < m.e);
+};
+const battleClaimKey = (slotIdx, att) => `c${slotIdx}-${att}`;
+const battleGone = { status: 409, error: "gone" };
+export async function claimStart(deps, uid, body) {
+  const g = await battleGate(deps, uid);
+  if (g.error) return g;
+  const { now, day } = g;
+  const slotIdx = Number(body?.slot);
+  if (!Number.isInteger(slotIdx)) return { status: 400, error: "bad_request" };
+  const me = await loadMyUser(deps.firestore, uid, body?.username);
+  if (me.error) return me.error;
+  let slot, started = false;
+  for (let attempt = 0; attempt < 4 && !started; attempt++) {
+    const cur = await kakuGetDay(deps, day, 0);
+    if (!cur) return { status: 409, error: "not_open" };
+    const slots = cur.data.slots.map((x) => ({ ...x }));
+    let changed = kakuCancelExpire(slots, day, now);
+    slot = slots[slotIdx];
+    const open = !!slot && !!slot.cx && !slot.uid && !slot.npc && now < slot.s;
+    if (open && !battleClaimOk(slots, uid, slot)) return { status: 409, error: "rule" };
+    if (open && !slot.cxStart) { slot.cxStart = now; changed = true; }   // 最初の1人がスタートした時から、時計が動く
+    if (changed) {
+      try { await kakuWriteSlots(deps, day, { data: { slots }, updateTime: cur.updateTime }, {}); }
+      catch (error) { if (isRetryableCommitError(error)) continue; throw error; }
+    }
+    if (!open) return battleGone;
+    started = true;
+  }
+  if (!started) return { status: 409, error: "busy" };
+  const prev = await deps.firestore.get(`yuslotBattle/c_${uid}`);
+  const att = prev && prev.day === day ? (Number(prev.a) || 0) + 1 : 1;
+  await deps.firestore.set(`yuslotBattle/c_${uid}`, { day, slot: slotIdx, as: now, a: att, n: me.name });
+  const [plan, card] = await Promise.all([battlePlan(deps, day, uid, battleClaimKey(slotIdx, att)), battleCard(deps, day, uid)]);
+  return { ok: true, att, st: now, serverNowMs: now, card, plan, slot: { i: slot.i, s: slot.s, e: slot.e } };
+}
+export async function claimFinish(deps, uid, body) {
+  const g = await battleGate(deps, uid);
+  if (g.error) return g;
+  const { now, day } = g;
+  const slotIdx = Number(body?.slot), att = Number(body?.att);
+  if (!Number.isInteger(slotIdx) || !Number.isInteger(att)) return { status: 400, error: "bad_request" };
+  const rec = await deps.firestore.get(`yuslotBattle/c_${uid}`);
+  if (!rec || rec.day !== day || rec.slot !== slotIdx) return { status: 409, error: "no_game" };
+  if (rec.a !== att) return { status: 409, error: "stale" };
+  const [plan, card] = await Promise.all([battlePlan(deps, day, uid, battleClaimKey(slotIdx, att)), battleCard(deps, day, uid)]);
+  if (Number(body?.ans) !== plan.puzzle.answer || String(body?.card) !== String(card)) return { status: 400, error: "bad_proof" };
+  if (JSON.stringify(body?.ord) !== JSON.stringify([...plan.order].sort((x, y) => x - y))) return { status: 400, error: "bad_proof" };
+  const proof = battleProofOk(plan, body?.t, now - rec.as);
+  if (proof) return { status: 400, error: proof };
+  const lost = { ok: true, got: false, lost: true };
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const cur = await kakuGetDay(deps, day, 0);
+    if (!cur) return lost;
+    const slots = cur.data.slots.map((x) => ({ ...x }));
+    const changed = kakuCancelExpire(slots, day, now);
+    const slot = slots[slotIdx];
+    const open = !!slot && !!slot.cx && !slot.uid && !slot.npc && now < slot.s;
+    if (!open) {
+      if (changed) { try { await kakuWriteSlots(deps, day, { data: { slots }, updateTime: cur.updateTime }, {}); } catch (error) { if (!isRetryableCommitError(error)) throw error; } }
+      return lost;
+    }
+    if (!battleClaimOk(slots, uid, slot)) return { status: 409, error: "rule" };
+    slots[slotIdx] = { ...kakuCancelStrip(slot), uid, name: rec.n, npc: false };
+    try { await kakuWriteSlots(deps, day, { data: { slots }, updateTime: cur.updateTime }, {}); }
+    catch (error) { if (isRetryableCommitError(error)) continue; throw error; }
+    return { ok: true, got: true, slot: { i: slot.i, s: slot.s, e: slot.e } };
+  }
+  return lost;
+}
+
 /* 画面に返すのは「自分の枠」と「先着の空き状況（名前なし）」だけ。ほかの人（NPC を含む）の予定・結果は返さない */
 /* いまの枠を使っている（使う）のが「NPC」「ほかのプレイヤー」「自分」「いない」のどれかだけを返す（名前は返さない）。台のカードに表示する */
 export function kakuCurrentHolder(slots, uid, t, now) {

@@ -5,7 +5,8 @@ import assert from "node:assert/strict";
 import {
   kakuTimes, kakuDayId, kakuDayStart, resetKakuCacheForTest, resetYuslotCacheForTest, resetBattleCacheForTest, handleYuslotAction,
   battleCard, battlePlan, battleProofOk, battleBoardMerge, battleOpenSlots, battleClosedList,
-  resetBattleWeekCacheForTest, resetBattleWeekTickForTest, runBattleWeekTick, battleWeekEnsure, battleWeekAnnounce, rankWeekStart
+  resetBattleWeekCacheForTest, resetBattleWeekTickForTest, runBattleWeekTick, battleWeekEnsure, battleWeekAnnounce, rankWeekStart,
+  kakuCancelPlan, kakuCancelRun, kakuCancelExpire, runKakuCancelTick, resetKakuCancelTickForTest
 } from "../worker.js";
 
 console.warn = () => {};
@@ -70,14 +71,15 @@ const D = "2026-10-21";
 const TT = kakuTimes(D);
 const H = 3600000, M = 60000;
 function setup({ now = TT.quickOpen, published = true, n = 6 } = {}) {
-  resetKakuCacheForTest(); resetYuslotCacheForTest(); resetBattleCacheForTest(); resetBattleWeekCacheForTest(); resetBattleWeekTickForTest();
+  resetKakuCacheForTest(); resetYuslotCacheForTest(); resetBattleCacheForTest(); resetBattleWeekCacheForTest(); resetBattleWeekTickForTest(); resetKakuCancelTickForTest();
   const base = { "worldConfig/yuslot": { yuslotPublished: published } };
   for (let i = 0; i < n; i++) base[`users/u${i}`] = { uid: `id${i}`, name: `u${i}`, coins: 5000 };
   const fs = fakeFs(base);
   const state = { now };
-  const deps = { firestore: fs, adminUid: ADMIN, random: Math.random, now: () => state.now, slotSecret: "s", sendFcm: async () => ({ ok: true }) };
+  const sent = [];
+  const deps = { firestore: fs, adminUid: ADMIN, random: Math.random, now: () => state.now, slotSecret: "s", sendFcm: async (token, data) => { sent.push({ token, data }); return { ok: true }; } };
   const act = (uid, name, body) => handleYuslotAction(deps, uid, { ...body, username: name });
-  return { fs, deps, state, act };
+  return { fs, deps, state, act, sent };
 }
 const ordOf = (plan) => [...plan.order].sort((a, b) => a - b);
 const who = (i) => [`id${i}`, `u${i}`];
@@ -497,4 +499,238 @@ test("結果発表の cron：月曜 7:00〜7:09 だけ動く（それ以外は�
   const ok = await runBattleWeekTick({}, MON + 60000, ctx.deps);
   assert.ok(!ok.skipped || ok.skipped === true);
   assert.equal((await runBattleWeekTick({}, MON + 120000, ctx.deps)).skipped, "done");
+});
+
+/* ===== NPC 枠のキャンセル ===== */
+const PLAN = kakuCancelPlan(D);
+/* その日の枠を、前日抽選の結果が出たあとの状態にする（前日抽選の枠はすべて NPC、当日の枠は空き） */
+async function dayWithNpc(ctx, { npcKinds = ["pre"] } = {}) {
+  await ctx.act("id0", "u0", { action: "battleStatus" });
+  const day = ctx.fs.plain(`yuslotKaku/${D}`);
+  day.slots.forEach((x) => { if (npcKinds.includes(x.kind)) { x.npc = true; x.name = `npc${x.i}`; x.uid = ""; } });
+  ctx.fs.put(`yuslotKaku/${D}`, encF(day)); resetKakuCacheForTest();
+  return day;
+}
+const slotsOf = (ctx) => ctx.fs.plain(`yuslotKaku/${D}`).slots;
+const cxOf = (ctx) => slotsOf(ctx).filter((x) => x.cx);
+
+test("キャンセルの予定：1日1〜3回、10:00〜14:30 の完全ランダムな時刻（日付から決まる）", () => {
+  const counts = new Set();
+  for (let d = 0; d < 300; d++) {
+    const day = kakuDayId(Date.UTC(2026, 9, 20) + d * 86400000);
+    const p = kakuCancelPlan(day), p2 = kakuCancelPlan(day);
+    assert.deepEqual(p, p2); counts.add(p.n);
+    assert.ok(p.n >= 1 && p.n <= 3 && p.times.length === p.n);
+    const t0 = kakuDayStart(day);
+    p.times.forEach((t, i) => { assert.ok(t >= t0 + 10 * H && t < t0 + 14.5 * H, "10:00〜14:30"); if (i) assert.ok(t >= p.times[i - 1]); });
+  }
+  assert.deepEqual([...counts].sort(), [1, 2, 3]);
+});
+
+test("キャンセル：予定の時刻になるまで何も起きず、時刻になると NPC の枠が1つ空きになる（プレイヤーの枠・抽選前の枠は選ばれない）", async () => {
+  const ctx = setup({ now: PLAN.times[0] - 60000 });
+  const day = await dayWithNpc(ctx);
+  // 1枠はプレイヤーが持っている
+  const mineIdx = day.slots.find((x) => x.kind === "pre" && x.s > PLAN.times[0] + 3 * H).i;
+  const d2 = ctx.fs.plain(`yuslotKaku/${D}`); d2.slots[mineIdx].npc = false; d2.slots[mineIdx].name = "u1"; d2.slots[mineIdx].uid = "id1";
+  ctx.fs.put(`yuslotKaku/${D}`, encF(d2)); resetKakuCacheForTest();
+  assert.equal((await kakuCancelRun(ctx.deps, D)).skipped, "none_due");
+  assert.equal(cxOf(ctx).length, 0);
+  ctx.state.now = PLAN.times[0] + 1000;
+  const r = await kakuCancelRun(ctx.deps, D);
+  assert.equal(r.ran, 1);
+  const cx = cxOf(ctx);
+  assert.equal(cx.length, 1);
+  assert.equal(cx[0].npc, false); assert.equal(cx[0].uid, ""); assert.equal(cx[0].name, "");
+  assert.ok(cx[0].s > ctx.state.now + 2 * M, "まだ始まっていない枠");
+  assert.notEqual(cx[0].i, mineIdx);
+  assert.equal(ctx.fs.plain(`yuslotKaku/${D}`).cxDone, 1);
+  assert.equal((await kakuCancelRun(ctx.deps, D)).ran, 0, "同じ回は1度だけ");
+  // 残りの回も、時刻になれば実行され、回数（1〜3）を超えない
+  ctx.state.now = PLAN.times[PLAN.n - 1] + 1000;
+  await kakuCancelRun(ctx.deps, D); await kakuCancelRun(ctx.deps, D);
+  assert.equal(ctx.fs.plain(`yuslotKaku/${D}`).cxDone, PLAN.n);
+  assert.ok(cxOf(ctx).length <= PLAN.n);
+  // 抽選前の枠（空き）しかない日は、何も起きない（回数だけ進む）
+  const none = setup({ now: PLAN.times[0] + 1000 });
+  await none.act("id0", "u0", { action: "battleStatus" });
+  assert.equal((await kakuCancelRun(none.deps, D)).ran >= 1, true);
+  assert.equal(cxOf(none).length, 0);
+});
+
+test("キャンセルの通知：オンにした人にだけ。お知らせ（announcements）は流さない。cron は予定の時刻から30分だけ動く", async () => {
+  const ctx = setup({ now: PLAN.times[0] - 5 * 60000 });
+  await dayWithNpc(ctx);
+  ctx.fs.put("fcmTokens/tok1", encF({ uid: "id1" })); ctx.fs.put("fcmTokens/tok2", encF({ uid: "id2" })); ctx.fs.put("fcmTokens/tok3", encF({ uid: "id3" }));
+  assert.equal((await ctx.act("id1", "u1", { action: "kakuSetNotify", prefs: { cancel: true } })).prefs.cancel, true);
+  assert.equal((await ctx.act("id2", "u2", { action: "kakuGetNotify" })).prefs.cancel, false, "初期設定はオフ");
+  assert.equal((await ctx.act("id3", "u3", { action: "kakuSetNotify", prefs: { cancel: true } })).ok, true);
+  const annBefore = [...ctx.fs.docs.keys()].filter((k) => k.startsWith("announcements/")).length;
+  assert.equal((await runKakuCancelTick({}, PLAN.times[0] - 60000, ctx.deps)).skipped, "outside");
+  const r = await runKakuCancelTick({}, PLAN.times[0] + 60000, ctx.deps);
+  assert.equal(r.ran, 1);
+  assert.deepEqual(ctx.sent.map((x) => x.token).sort(), ["tok1", "tok3"], "オンにした人だけ");
+  assert.ok(ctx.sent[0].data.title.includes("キャンセル"));
+  assert.equal([...ctx.fs.docs.keys()].filter((k) => k.startsWith("announcements/")).length, annBefore, "お知らせは作らない");
+  const again = await runKakuCancelTick({}, PLAN.times[0] + 2 * 60000, ctx.deps);
+  assert.equal(again.skipped, "outside", "実行済みの回は、もう動かない");
+  assert.equal((await runKakuCancelTick({}, PLAN.times[0] + 31 * 60000, { ...ctx.deps })).skipped, "outside", "30分より後は動かない");
+});
+
+test("表：その日の枠ごとに「埋まっています」。NPC かプレイヤーかは区別しない。抽選前の枠は行ごと出さない。キャンセル枠だけ「空き」", async () => {
+  const ctx = setup({ now: TT.sameOpen + H });
+  await dayWithNpc(ctx);   // 前日抽選の枠はすべて NPC。当日の抽選（lot）は未抽選、先着（quick）は未取得
+  // 1枠は他のプレイヤー、1枠は自分
+  const d = ctx.fs.plain(`yuslotKaku/${D}`);
+  const pres = d.slots.filter((x) => x.kind === "pre");
+  d.slots[pres[0].i].npc = false; d.slots[pres[0].i].uid = "id2"; d.slots[pres[0].i].name = "u2";
+  d.slots[pres[1].i].npc = false; d.slots[pres[1].i].uid = "id1"; d.slots[pres[1].i].name = "u1";
+  const cxI = pres[pres.length - 1].i;
+  Object.assign(d.slots[cxI], { npc: false, name: "", uid: "", cx: 1, cxAt: ctx.state.now });
+  ctx.fs.put(`yuslotKaku/${D}`, encF(d)); resetKakuCacheForTest();
+  const b = await ctx.act("id1", "u1", { action: "battleBoard" });
+  assert.equal(b.ok, true); assert.equal(b.notify, false);
+  const by = new Map(b.rows.map((r) => [r.i, r.state]));
+  assert.equal(by.get(pres[0].i), "filled", "他のプレイヤーも「埋まっています」");
+  assert.equal(by.get(pres[1].i), "mine"); assert.equal(by.get(pres[2].i), "filled", "NPC も「埋まっています」");
+  assert.equal(by.get(cxI), "open");
+  assert.ok(!b.rows.some((r) => d.slots[r.i].kind === "lot"), "当日の抽選（結果が出る前）の枠は出さない");
+  assert.equal(b.rows.filter((r) => r.kind === "quick").length, 2); assert.ok(b.rows.filter((r) => r.kind === "quick").every((r) => r.state === "quick"));
+  const text = JSON.stringify(b);
+  assert.ok(!/npc|id2|u2|cxStart|cxAt|16500/.test(text), "名前・uid・NPC・時計の中身は返さない");
+  // 当日抽選の結果が出たあとは、その枠も出る
+  const d2 = ctx.fs.plain(`yuslotKaku/${D}`); d2.slots.filter((x) => x.kind === "lot").forEach((x) => { x.npc = true; x.name = "npcL"; });
+  ctx.fs.put(`yuslotKaku/${D}`, encF(d2)); resetKakuCacheForTest();
+  const b2 = await ctx.act("id1", "u1", { action: "battleBoard" });
+  assert.equal(b2.rows.filter((r) => d2.slots[r.i].kind === "lot").length, 3);
+  // 取られなかった空き枠は、始まったら「終了」
+  ctx.state.now = d.slots[cxI].s + 1000;
+  const b3 = await ctx.act("id1", "u1", { action: "battleBoard" });
+  assert.equal(b3.rows.find((r) => r.i === cxI).state, "ended");
+  // 通知の設定は、この画面から変えられる（既存の設定の保存と同じ入口）
+  await ctx.act("id1", "u1", { action: "kakuSetNotify", prefs: { cancel: true } });
+  assert.equal((await ctx.act("id1", "u1", { action: "battleBoard" })).notify, true);
+  assert.equal((await ctx.act("id2", "u2", { action: "battleBoard" })).notify, false);
+});
+
+test("表：予定の時刻を過ぎていたら、cron が遅れていても表を開いた人が追いつかせる", async () => {
+  const ctx = setup({ now: PLAN.times[0] + 5 * 60000 });
+  await dayWithNpc(ctx);
+  assert.equal(cxOf(ctx).length, 0);
+  const b = await ctx.act("id1", "u1", { action: "battleBoard" });
+  assert.equal(cxOf(ctx).length, 1);
+  assert.equal(b.rows.filter((r) => r.state === "open").length, 1);
+});
+
+async function openOne(ctx) {
+  ctx.state.now = PLAN.times[0] + 1000;
+  await dayWithNpc(ctx);
+  await kakuCancelRun(ctx.deps, D);
+  return cxOf(ctx)[0];
+}
+async function claimGame(ctx, i, slotIdx, { wait = 0, tweak = (b) => b } = {}) {
+  const [uid, name] = who(i);
+  const s = await ctx.act(uid, name, { action: "claimStart", slot: slotIdx });
+  if (!s.ok) return { s };
+  const t = proofFor(s.plan);
+  ctx.state.now += t[6] + wait;
+  const f = await ctx.act(uid, name, { action: "claimFinish", ...tweak({ att: s.att, slot: slotIdx, ans: s.plan.puzzle.answer, ord: ordOf(s.plan), card: String(s.card), t }) });
+  return { s, f };
+}
+
+test("キャンセル枠を取る：ミニゲームの記録が正しく、時間内なら取れる。ランキングには載らない。時計の中身は返さない", async () => {
+  const ctx = setup({ n: 4 });
+  const cx = await openOne(ctx);
+  const { s, f } = await claimGame(ctx, 1, cx.i);
+  assert.equal(s.ok, true); assert.equal(s.slot.i, cx.i); assert.ok(s.plan.order.length === 4 && s.card >= 100);
+  assert.equal(f.got, true);
+  const now = slotsOf(ctx)[cx.i];
+  assert.equal(now.uid, "id1"); assert.equal(now.name, "u1"); assert.equal(now.npc, false); assert.ok(!now.cx && !now.cxStart, "キャンセルの印は消える");
+  assert.ok(!/cxStart|16500|cxAt/.test(JSON.stringify(s) + JSON.stringify(f)), "時計の中身は返さない");
+  assert.equal(ctx.fs.plain("yuslotBattle/_board"), null, "ランキングには載らない");
+  assert.equal(ctx.fs.plain("yuslotBattle/_week"), null);
+  assert.equal(ctx.fs.plain("yuslotBattle/id1"), null, "先着ゲームの記録（1日1件）にも影響しない");
+  // もう取られた枠には、スタートもできない
+  assert.equal((await ctx.act("id2", "u2", { action: "claimStart", slot: cx.i })).error, "gone");
+  // その枠は、台で遊べる（枠の持ち主）
+  ctx.state.now = cx.s + 1000;
+  assert.equal(slotsOf(ctx)[cx.i].uid, "id1");
+});
+
+test("キャンセル枠：最初の1人のスタートから時間内に誰も取れなければ、別の NPC が取る（後から始めた人も、その時計の中で競う）", async () => {
+  const ctx = setup({ n: 4 });
+  const cx = await openOne(ctx);
+  // u1 がスタート（時計が動く）→ 途中でやめる。u2 が5秒後にスタートして時間内に終える → u2 が取る
+  const s1 = await ctx.act("id1", "u1", { action: "claimStart", slot: cx.i });
+  assert.equal(s1.ok, true);
+  assert.ok(slotsOf(ctx)[cx.i].cxStart, "最初の1人のスタートで時計が動く");
+  const start1 = slotsOf(ctx)[cx.i].cxStart;
+  ctx.state.now += 5000;
+  const s2 = await ctx.act("id2", "u2", { action: "claimStart", slot: cx.i });
+  assert.equal(slotsOf(ctx)[cx.i].cxStart, start1, "時計は最初の1人のまま（2人目で延びない）");
+  const t = proofFor(s2.plan); ctx.state.now += t[6];
+  assert.ok(ctx.state.now - start1 < 16500, "時間内");
+  const f2 = await ctx.act("id2", "u2", { action: "claimFinish", att: s2.att, slot: cx.i, ans: s2.plan.puzzle.answer, ord: ordOf(s2.plan), card: String(s2.card), t });
+  assert.equal(f2.got, true);
+  // 別の日の別の枠で：時間切れ
+  const ctx2 = setup({ n: 4 });
+  const cy = await openOne(ctx2);
+  const a = await ctx2.act("id1", "u1", { action: "claimStart", slot: cy.i });
+  const ta = proofFor(a.plan); ctx2.state.now += 16600;                  // 16.5秒を過ぎてから終える
+  const fa = await ctx2.act("id1", "u1", { action: "claimFinish", att: a.att, slot: cy.i, ans: a.plan.puzzle.answer, ord: ordOf(a.plan), card: String(a.card), t: ta });
+  assert.equal(fa.lost, true); assert.equal(fa.got, false);
+  const taken = slotsOf(ctx2)[cy.i];
+  assert.equal(taken.npc, true, "別の NPC が取った"); assert.ok(taken.name && taken.name !== "" && !taken.cx);
+  assert.equal(taken.uid, "");
+  // そのあとは、誰もスタートできない。表も「埋まっています」
+  assert.equal((await ctx2.act("id2", "u2", { action: "claimStart", slot: cy.i })).error, "gone");
+  assert.equal((await ctx2.act("id2", "u2", { action: "battleBoard" })).rows.find((r) => r.i === cy.i).state, "filled");
+});
+
+test("キャンセル枠：誰もスタートしなければ枠が始まるまで空きのまま。決まり（時間が重なる・1日3枠）は守る。ふつうの枠・不正な記録は取れない", async () => {
+  const ctx = setup({ n: 4 });
+  const cx = await openOne(ctx);
+  assert.equal(slotsOf(ctx)[cx.i].cx, 1); assert.ok(!slotsOf(ctx)[cx.i].cxStart);
+  const b = await ctx.act("id3", "u3", { action: "battleBoard" });
+  assert.equal(b.rows.find((r) => r.i === cx.i).state, "open", "誰もスタートしていない間は空きのまま");
+  // NPC のふつうの枠・存在しない枠は取れない
+  const npcSlot = slotsOf(ctx).find((x) => x.npc);
+  assert.equal((await ctx.act("id3", "u3", { action: "claimStart", slot: npcSlot.i })).error, "gone");
+  assert.equal((await ctx.act("id3", "u3", { action: "claimStart", slot: 999 })).error, "gone");
+  assert.equal((await ctx.act("id3", "u3", { action: "claimStart", slot: "x" })).error, "bad_request");
+  // 時間が重なる枠を持っている人は、スタートできない
+  const d = ctx.fs.plain(`yuslotKaku/${D}`);
+  const other = d.slots.find((x) => x.i !== cx.i && x.npc && (x.s < cx.e && cx.s < x.e));
+  if (other) { d.slots[other.i].npc = false; d.slots[other.i].uid = "id3"; d.slots[other.i].name = "u3"; ctx.fs.put(`yuslotKaku/${D}`, encF(d)); resetKakuCacheForTest(); assert.equal((await ctx.act("id3", "u3", { action: "claimStart", slot: cx.i })).error, "rule"); }
+  // 不正な記録（答え・数字の順番・速すぎ）は取れない
+  const s = await ctx.act("id1", "u1", { action: "claimStart", slot: cx.i });
+  const t = proofFor(s.plan); ctx.state.now += t[6];
+  const send = (over) => ctx.act("id1", "u1", { action: "claimFinish", att: s.att, slot: cx.i, ans: s.plan.puzzle.answer, ord: ordOf(s.plan), card: String(s.card), t, ...over });
+  assert.equal((await send({ ans: (s.plan.puzzle.answer + 1) % 4 })).error, "bad_proof");
+  assert.equal((await send({ ord: [...ordOf(s.plan)].reverse() })).error, "bad_proof");
+  assert.equal((await send({ card: "000" })).error, "bad_proof");
+  assert.equal((await send({ t: t.map((x) => Math.floor(x / 4)) })).error, "too_fast");
+  assert.equal((await send({ att: 9 })).error, "stale");
+  assert.equal(slotsOf(ctx)[cx.i].uid, "", "取れていない");
+  assert.equal((await send({})).got, true);
+});
+
+test("キャンセル枠：同時に押しても、取れるのは1人だけ", async () => {
+  const ctx = setup({ n: 5 });
+  const cx = await openOne(ctx);
+  const starts = await Promise.all([1, 2, 3, 4].map((i) => ctx.act(`id${i}`, `u${i}`, { action: "claimStart", slot: cx.i })));
+  assert.ok(starts.every((x) => x.ok));
+  ctx.state.now += 9000;
+  const fins = await Promise.all(starts.map((x, k) => ctx.act(`id${k + 1}`, `u${k + 1}`, { action: "claimFinish", att: x.att, slot: cx.i, ans: x.plan.puzzle.answer, ord: ordOf(x.plan), card: String(x.card), t: proofFor(x.plan) })));
+  assert.equal(fins.filter((f) => f.got).length, 1);
+  assert.equal(fins.filter((f) => f.lost).length, 3);
+  assert.ok(slotsOf(ctx)[cx.i].uid);
+});
+
+test("確変の抽選・通常の先着は、キャンセルの仕組みの影響を受けない（キャンセル枠でない先着の枠は claimStart できない）", async () => {
+  const ctx = setup({ now: TT.quickOpen, n: 3 });
+  const [q0] = await quickOfDay(ctx);
+  assert.equal((await ctx.act("id1", "u1", { action: "claimStart", slot: q0 })).error, "gone");
+  const r = await playOn(ctx, 1);
+  assert.equal(r.got, true);
 });

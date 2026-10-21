@@ -29,6 +29,7 @@ const CONSENTS = [
 const CONN_MSG = ["アクセスが集中しています", "ただいま大変混み合っています", "接続がタイムアウトしました", "混雑のため、つながりにくくなっています"];
 const ERR = {
   not_open: "まだ始まっていません。", not_published: "ただいま準備中です。", no_event: "まだ確変台の開催前です。", busy: "混み合っています。もう一度お試しください。",
+  gone: "この枠は、もう埋まりました。", rule: "この枠は取れません（時間が重なっているか、1日に取れる枠の上限です）。",
   stale: "画面が古くなりました。もう一度はじめます。", bad_proof: "操作が正しく確認できませんでした。もう一度お試しください。", too_fast: "操作が正しく確認できませんでした。もう一度お試しください。", no_game: "ゲームが始まっていません。"
 };
 
@@ -59,10 +60,11 @@ export async function ticketOpen() {
 async function loadPage() {
   const mine = S;
   try {
-    const [status, ranking] = await Promise.all([deps.api("battleStatus"), deps.api("battleRanking").catch(() => null)]);
+    const [status, ranking, board] = await Promise.all([deps.api("battleStatus"), deps.api("battleRanking").catch(() => null), deps.api("battleBoard").catch(() => null)]);
     if (S !== mine) return;
     if (typeof status.serverNowMs === "number") offset = status.serverNowMs - Date.now();
     S.status = status; S.ranking = ranking; S.err = "";
+    if (board && board.ok) { S.board = board; S.boardAt = Date.now(); }
   } catch (e) { if (S !== mine) return; S.err = ERR[e.code] || `読み込めませんでした（${e.code || "エラー"}）`; }
   render();
 }
@@ -107,10 +109,44 @@ function pageHtml(esc) {
     if (st.slots.length) body += `<button type="button" class="yt-btn sub" data-yt="practice" ${S.busy ? "disabled" : ""}>🎮 練習する（タイム・チケットは本番に関係なし）</button>`;
     body += `</div>`;
   }
+  body += boardHtml(esc);
   body += rankingHtml(esc);
   return `<div class="yt-head">${closeBtn}<div class="yt-title">🎫 当日の先着</div></div>${body}`;
 }
 
+const KIND = { pre: "前日抽選", lot: "当日抽選", quick: "先着" };
+/* 今日の予約状況（枠ごと）。誰が持っているか（NPC かどうか）は出さない。キャンセルが出た枠だけ「取る」ボタン */
+function boardHtml(esc) {
+  const b = S.board;
+  if (!b || !b.active) return "";
+  const now = nowMs();
+  const rows = b.rows.map((r) => {
+    let st;
+    if (r.state === "mine") st = `<span class="yt-bs mine">⭐ あなたの枠</span>`;
+    else if (r.state === "open") st = `<span class="yt-bs open">🟢 キャンセルが出ました！</span><button type="button" class="yt-claim" data-yt="claim" data-i="${r.i}" ${S.busy ? "disabled" : ""}>🎫 取る</button>`;
+    else if (r.state === "quick") st = `<span class="yt-bs quick">${S.status && S.status.times && now < S.status.times.goAt ? `${hm(S.status.times.goAt)} から先着ゲームで` : "先着ゲームで取れます"}</span>`;
+    else if (r.state === "ended") st = `<span class="yt-bs ended">終了</span>`;
+    else st = `<span class="yt-bs filled">予約が埋まっています</span>`;
+    return `<div class="yt-brow ${r.state} ${now >= r.e ? "past" : ""}"><span class="yt-btime">${hm(r.s)}〜${hm(r.e)}</span><span class="yt-bkind">${KIND[r.kind] || ""}</span>${st}</div>`;
+  }).join("");
+  return `<div class="yt-card"><div class="yt-h2">📋 今日の予約状況 <button type="button" class="yt-mini" data-yt="board-reload">更新</button></div>
+    ${S.boardMsg ? `<div class="yt-err">${esc(S.boardMsg)}</div>` : ""}
+    <div class="yt-board">${rows || `<div class="yt-sub">まだ、表に出せる枠がありません。</div>`}</div>
+    <label class="yt-chk"><input type="checkbox" data-yt="cxnotify" ${b.notify ? "checked" : ""}> 🔔 キャンセルが出たら通知する</label></div>`;
+}
+async function refreshBoard() {
+  if (!S || S.boardBusy) return;
+  const mine = S; S.boardBusy = true;
+  try {
+    const b = await deps.api("battleBoard");
+    if (S !== mine) return;
+    if (typeof b.serverNowMs === "number") offset = b.serverNowMs - Date.now();
+    const changed = JSON.stringify(b.rows) !== JSON.stringify(S.board && S.board.rows);
+    if (!S.board || changed) { S.board = { ...b, notify: S.board && S.boardNotifyTouched ? S.board.notify : b.notify }; if (S.screen === "page") render(); }
+    S.boardAt = Date.now();
+  } catch (_) { /* 表示だけ。次の読み直しを待つ */ }
+  if (S === mine) S.boardBusy = false;
+}
 const MEDAL = ["🥇", "🥈", "🥉"];
 function rankTable(esc, rows, withPrize) {
   return `<table class="yt-rank"><thead><tr><th>順位</th><th>名前</th><th>タイム</th><th>${withPrize ? "賞金" : "記録日"}</th></tr></thead><tbody>${rows.map((x) =>
@@ -236,6 +272,15 @@ function gameHtml(esc) {
 function resultHtml(esc) {
   const r = S.result, g = S.game;
   const back = `<button type="button" class="yt-btn big" data-yt="to-page">🏆 ランキングを見る</button>`;
+  if (r.kind === "cgot") {
+    return `<div class="yt-head">${closeBtn}<div class="yt-title">結果</div></div><div class="yt-card center win"><div class="yt-big">🎉</div><div class="yt-h1">キャンセル枠を獲得しました！</div>
+      <div class="yt-sub">${hm(r.slot.s)}〜${hm(r.slot.e)} の${esc(deps.machineName())} の枠です。<br>時間になったら、ゆうスロの台で遊べます🌈</div>
+      <button type="button" class="yt-btn big" data-yt="to-page">戻る</button></div>`;
+  }
+  if (r.kind === "csold") {
+    return `<div class="yt-head">${closeBtn}<div class="yt-title">結果</div></div><div class="yt-card center lose"><div class="yt-big">😢</div><div class="yt-h1">ご希望のチケットは売り切れました。</div>
+      <button type="button" class="yt-btn big" data-yt="to-page">戻る</button></div>`;
+  }
   if (r.kind === "got") {
     const s = (g ? g.slots : S.status.slots).find((x) => x.i === r.slot);
     return `<div class="yt-head">${closeBtn}<div class="yt-title">結果</div></div><div class="yt-card center win"><div class="yt-big">🎉</div><div class="yt-h1">チケットを獲得しました！</div>
@@ -260,7 +305,7 @@ function resultHtml(esc) {
       <button type="button" class="yt-btn big pulse" data-yt="retry">🎫 もう一度挑戦する</button></div>`;
   }
   return `<div class="yt-head">${closeBtn}<div class="yt-title">結果</div></div><div class="yt-card center"><div class="yt-big">⚠️</div><div class="yt-h1">${esc(ERR[r.code] || `うまくいきませんでした（${r.code || "エラー"}）`)}</div>
-    <button type="button" class="yt-btn big" data-yt="restart">もう一度はじめる</button></div>`;
+    ${r.claim ? `<button type="button" class="yt-btn big" data-yt="to-page">戻る</button>` : `<button type="button" class="yt-btn big" data-yt="restart">もう一度はじめる</button>`}</div>`;
 }
 const rankNote = () => (nowMs() >= (S.ranking && S.ranking.revealAtMs || 0) && S.ranking ? "ランキングに反映されました。" : "ランキングには 12:00 に反映されます。");
 
@@ -271,6 +316,7 @@ function onTick() {
     const can = nowMs() >= S.status.times.waitOpen;
     if (can !== S.canJoin) { S.canJoin = can; render(); }
   }
+  if (S.screen === "page" && S.board && !S.busy && Date.now() - (S.boardAt || 0) > 15000) refreshBoard();     // 表は15秒おきに読み直す（キャンセルが出たら、すぐ取れるように）
   if (S.screen === "wait") {
     const remain = waitInfo().goAt - nowMs();
     if (remain <= 0 && !S.goShown) { S.goShown = true; const el = ov.querySelector("#yt-go"); if (el) el.innerHTML = goBtn(); }
@@ -345,11 +391,43 @@ function beginPractice() {
   S.game = g; S.screen = "game"; S.busy = false;
   goStage("conn0");
 }
+/* キャンセルの出た枠を取る：先着と同じミニゲーム（全工程）。ランキングには載らない */
+async function startClaim(i) {
+  if (S.busy) return;
+  S.busy = true; S.boardMsg = ""; render();
+  const mine = S;
+  try {
+    const r = await deps.api("claimStart", { slot: i });
+    if (S !== mine) return;
+    if (typeof r.serverNowMs === "number") offset = r.serverNowMs - Date.now();
+    const g = newGame({ att: r.att, st: r.st, plan: r.plan, slots: [r.slot], closed: [], card: r.card }, {});
+    g.claim = r.slot.i; g.slot = r.slot.i;
+    S.game = g; S.result = null; S.practice = null; S.screen = "game"; S.busy = false;
+    goStage("conn0");
+  } catch (e) {
+    if (S !== mine) return;
+    S.busy = false; S.boardMsg = ERR[e.code] || `うまくいきませんでした（${e.code || "エラー"}）`; render();
+    refreshBoard();
+  }
+}
 async function refreshRanking() { try { S.ranking = await deps.api("battleRanking"); } catch (_) { /* 表示だけ */ } }
 
 async function buy() {
   const g = S.game; if (!g || S.busy) return;
   mark(g);
+  if (g.claim != null) {   // キャンセル枠：ランキングには載らない。取れなければ「売り切れ」
+    S.busy = true; render();
+    const mine = S;
+    try {
+      const r = await deps.api("claimFinish", { att: g.att, slot: g.claim, ans: g.plan.puzzle.answer, ord: g.ordTaps, card: String(g.card), t: g.marks });
+      if (S !== mine) return;
+      S.busy = false; S.result = r.got ? { kind: "cgot", slot: r.slot } : { kind: "csold" }; S.screen = "result"; render();
+    } catch (e) {
+      if (S !== mine) return;
+      S.busy = false; S.result = { kind: "error", code: e.code, claim: true }; S.screen = "result"; render();
+    }
+    return;
+  }
   if (g.practice) { S.result = { kind: "practice", ms: Math.round(nowMs() - g.st) }; S.screen = "result"; render(); return; }
   S.busy = true; render();
   const mine = S;
@@ -408,6 +486,14 @@ async function onClick(ev) {
   if (act === "go" && S.practice) return beginPractice();
   if (act === "go" || act === "restart") return startGame();
   if (act === "practice") return startPractice();
+  if (act === "claim") return startClaim(Number(b.getAttribute("data-i")));
+  if (act === "board-reload") { S.boardMsg = ""; await refreshBoard(); render(); return; }
+  if (act === "cxnotify") {
+    const on = b.checked; S.boardNotifyTouched = true; if (S.board) S.board.notify = on;
+    try { const r = await deps.api("kakuSetNotify", { prefs: { cancel: on } }); if (S.board) S.board.notify = r.prefs.cancel === true; }
+    catch (_) { if (S.board) S.board.notify = !on; S.boardMsg = "通知の設定を保存できませんでした。"; render(); }
+    return;
+  }
   if (act === "tab") { S.tab = b.getAttribute("data-v") === "all" ? "all" : "week"; render(); return; }
   if (act === "to-page") { S.screen = "page"; S.practice = null; S.game = null; S.result = null; S.busy = false; await loadPage(); return; }
   if (act === "retry") { beginGame({ ...S.result.next, st: g.st }); return; }
@@ -509,6 +595,13 @@ function injectStyles() {
   .yt-slide-goal { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); font-size: 36px; }
   .yt-slide-handle { position: absolute; left: 0; top: 2px; width: 64px; height: 64px; border-radius: 50%; background: #fff; display: flex; align-items: center; justify-content: center; font-size: 38px; cursor: grab; touch-action: none; user-select: none; box-shadow: 0 3px 10px rgba(0,0,0,.4); transition: left .15s ease; } .yt-slide-handle.drag { transition: none; cursor: grabbing; }
   .yt-nums { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 14px 0; } .yt-num { padding: 22px 0; border-radius: 18px; border: 4px solid transparent; background: #fff; color: #1e1b4b; font-size: 44px; font-weight: 900; cursor: pointer; display: flex; flex-direction: column; align-items: center; font-family: inherit; } .yt-num small { font-size: 12px; color: #be123c; } .yt-num.on { background: #dcfce7; border-color: #17e36a; opacity: .85; }
+  .yt-mini { margin-left: 8px; padding: 3px 10px; border-radius: 999px; border: 1px solid rgba(255,255,255,.4); background: rgba(255,255,255,.12); color: #fff; font-size: 11px; font-weight: 800; cursor: pointer; font-family: inherit; }
+  .yt-board { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; } .yt-brow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 10px; background: rgba(255,255,255,.08); font-size: 13px; }
+  .yt-brow.past { opacity: .5; } .yt-brow.mine { background: rgba(255,225,74,.22); } .yt-brow.open { background: rgba(23,227,106,.24); border: 1px solid #17e36a; }
+  .yt-btime { font-weight: 900; min-width: 88px; font-variant-numeric: tabular-nums; } .yt-bkind { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: rgba(255,255,255,.16); font-weight: 800; }
+  .yt-bs { font-weight: 800; flex: 1 1 auto; text-align: right; } .yt-bs.filled, .yt-bs.ended { opacity: .8; font-weight: 700; } .yt-bs.open { color: #b8ffd0; text-align: left; }
+  .yt-claim { margin-left: auto; padding: 8px 16px; border: none; border-radius: 12px; font-weight: 900; font-size: 13px; color: #3a2a00; background: linear-gradient(135deg,#ffd700,#ff9a00); cursor: pointer; font-family: inherit; } .yt-claim:disabled { opacity: .5; }
+  .yt-chk { display: block; margin-top: 8px; font-size: 13px; font-weight: 800; }
   .yt-big { font-size: 64px; } .yt-card.win { background: linear-gradient(135deg, rgba(255,215,0,.28), rgba(255,45,120,.22)); border-color: #ffd700; } .yt-card.lose { border-color: rgba(255,255,255,.3); }
   .yt-result-time { margin: 10px 0; font-size: 16px; font-weight: 900; } .yt-result-time b { font-size: 34px; color: #ffe14a; font-variant-numeric: tabular-nums; }
   @media (prefers-reduced-motion: reduce) { .yt-btn.pulse:not(:disabled) { animation: none; } }
