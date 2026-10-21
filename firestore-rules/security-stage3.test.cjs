@@ -49,6 +49,8 @@ async function ng(n, p) { try { await assertFails(p); pass++; logs.push("PASS �
     await setDoc(doc(d, "yuslotPrefs/uidA"), { uid: "uidA", kakuNotify: { result1: true } });
     // 💸 コインの送金：申請と状態（coinTransfers）は Worker（サービスアカウント）だけが書く
     await setDoc(doc(d, "yuslotRank/current"), { weekStart: 1, base: { uidA: 100 }, ranks: { uidA: 1 }, lastWeek: { uidA: 600 } });
+    await setDoc(doc(d, "yuslotBattle/uidA"), { day: "2026-10-21", st: 1, as: 1, a: 1, d: true, ms: 9000, g: 0, n: "alice" });
+    await setDoc(doc(d, "yuslotBattle/_board"), { rows: [{ uid: "uidA", name: "alice", ms: 9000, day: "2026-10-21", pms: 0, pday: "" }] });
     await setDoc(doc(d, "coinTransfers/t1"), { senderUid: "uidA", senderName: "alice", receiverUid: "uidB", receiverName: "bob", amount: 100, status: "pending", createdAtMs: 1 });
   });
 
@@ -159,6 +161,16 @@ async function ng(n, p) { try { await assertFails(p); pass++; logs.push("PASS �
   await ng("最上位管理者でもブラウザからランクを書けない", updateDoc(doc(admin, "yuslotRank/current"), { ranks: { uidA: 5 } }));
   await ng("勝手にランクのドキュメントを作る", setDoc(doc(bob, "yuslotRank/evil"), { weekStart: 1, ranks: { uidB: 5 } }));
   await ng("ランクのドキュメントを消す", deleteDoc(doc(alice, "yuslotRank/current")));
+
+  logs.push("--- ⑫ 先着ゲーム：一人ひとりの記録とランキングの元データはサーバー（Worker）だけ。ブラウザからは読み書きできない");
+  await ng("自分の記録（yuslotBattle）を直接読めない", getDoc(doc(alice, "yuslotBattle/uidA")));
+  await ng("ランキングの元データを直接読めない", getDoc(doc(alice, "yuslotBattle/_board")));
+  await ng("最上位管理者でも直接読めない", getDoc(doc(admin, "yuslotBattle/_board")));
+  await ng("自分のタイムを書き換える", updateDoc(doc(alice, "yuslotBattle/uidA"), { ms: 1 }));
+  await ng("ランキングに自分を1位で書き込む", updateDoc(doc(alice, "yuslotBattle/_board"), { rows: [{ uid: "uidA", name: "alice", ms: 1, day: "2026-10-21", pms: 0, pday: "" }] }));
+  await ng("最上位管理者でもブラウザから書けない", updateDoc(doc(admin, "yuslotBattle/_board"), { rows: [] }));
+  await ng("勝手に記録を作る", setDoc(doc(bob, "yuslotBattle/uidB"), { day: "2026-10-21", d: true, ms: 1, g: 0 }));
+  await ng("記録を消す", deleteDoc(doc(alice, "yuslotBattle/uidA")));
 
   await env.cleanup();
   console.log(logs.join("\n"));

@@ -182,6 +182,10 @@ const TEST_CASES = [
   // 🏅 ゆうスロの会員ランク：全員のランク・累計（yuslotRank）はサーバー（通知 Worker）だけ
   testCase("DENY", "yuslotRank：ランクを直接読めない", userA, "get", "yuslotRank/current", { existing: { weekStart: 1, ranks: {} } }),
   testCase("DENY", "yuslotRank：自分のランクを書き換える", userA, "update", "yuslotRank/current", { data: { ranks: { [userA.uid]: 5 } }, existing: { weekStart: 1, ranks: {} } }),
+  // 🎫 先着ゲーム：一人ひとりの記録とランキングの元データ（yuslotBattle）はサーバー（通知 Worker）だけ
+  testCase("DENY", "yuslotBattle：ランキングの元データを直接読めない", userA, "get", "yuslotBattle/_board", { existing: { rows: [] } }),
+  testCase("DENY", "yuslotBattle：自分のタイムを書き換える", userA, "update", "yuslotBattle/" + userA.uid, { data: { ms: 1 }, existing: { day: "2030-01-04", d: true, ms: 9000 } }),
+  testCase("DENY", "yuslotBattle：最上位管理者でもブラウザから書けない", admin, "update", "yuslotBattle/_board", { data: { rows: [] }, existing: { rows: [] } }),
   testCase("DENY", "yuslotRank：最上位管理者でもブラウザから書けない", admin, "update", "yuslotRank/current", { data: { ranks: { x: 5 } }, existing: { weekStart: 1, ranks: {} } }),
   testCase("DENY", "lotteryRounds：最上位管理者でもブラウザから書けない", admin, "update", "lotteryRounds/2030-01-04", { data: { status: "done" }, existing: { round: "2030-01-04", status: "open" } }),
   // お知らせ（announcements）：読み取りはログイン済みなら誰でも・作成/編集/削除は管理者だけ
