@@ -6,7 +6,7 @@
    ・Firebase には触れない。Worker に聞くのは、ロビーを開いたときと30秒おき、ボタンを押したときだけ。
 ========================================================= */
 
-import { ticketInit, ticketOpen } from "./yuticket.js?v=20261022-ticket3";
+import { ticketInit, ticketOpen } from "./yuticket.js?v=20261022-ticket4";
 
 let deps = null;          // { api, esc, machines(id→{name,emoji}), onChange }
 let data = null;          // 直近の kakuStatus
