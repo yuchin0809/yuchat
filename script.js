@@ -44,7 +44,7 @@ import { inviteInit } from "./yuinvite.js?v=20261021-invite1";
 import { kakuWinnersInit, kakuWinnersOpen, kakuWinnersReset } from "./yukakuwinners.js?v=20261021-winners1";
 
 import {
-  getFirestore, collection, addDoc, getDocs, getDoc, doc, setDoc,
+  getFirestore, initializeFirestore, collection, addDoc, getDocs, getDoc, doc, setDoc,
   updateDoc, deleteDoc, query, where, onSnapshot, orderBy, limit, arrayUnion, arrayRemove, deleteField,
   serverTimestamp, writeBatch, runTransaction, or, and, startAfter,
   getAggregateFromServer, count as aggregateCount, sum as aggregateSum
@@ -83,7 +83,9 @@ const VAPID_PUBLIC_KEY =
 const NOTIFY_ENDPOINT = "https://yuuchat-notify.yuchin08092010.workers.dev/notify";
 
 const firebaseApp = initializeApp(firebaseConfig);
-const db = getFirestore(firebaseApp);
+/* 端末や回線によって Firestore の通常の接続（WebChannel）が通らず、読み書きが返事待ちのまま止まることがある。
+   通らないときだけ、自動で別の方式（ロングポーリング）に切り替える */
+const db = initializeFirestore(firebaseApp, { experimentalAutoDetectLongPolling: true });
 const auth = getAuth(firebaseApp);
 
 /* =========================================================
@@ -339,9 +341,19 @@ function logFirebaseError(label, error) {
 }
 
 /* Firebase のエラーを、原因が分かるメッセージにする */
+/* 返事が来ないまま止まらないように、時間を決めて待つ（時間が来たら code 付きのエラーにする） */
+function withTimeout(promise, ms, code) {
+  let timer;
+  return Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(Object.assign(new Error(code), { code })), ms); })])
+    .finally(() => clearTimeout(timer));
+}
+
 function describeFirebaseError(error, fallback) {
   const code = String(error?.code || "").replace(/^(auth|firestore)\//, "");
   const message = String(error?.message || "");
+
+  if (code === "app-timeout-check") return "名前の確認に時間がかかっています。通信の状態を確かめて、もう一度「ゆうChatを始める」を押してください。";
+  if (code === "app-timeout-save") return "名前の保存に時間がかかっています。通信の状態を確かめて、もう一度「ゆうChatを始める」を押してください（保存できていれば、そのまま入れます）。";
 
   if (code === "unavailable" || code === "network-request-failed" || /offline/i.test(message)) {
     return "通信できませんでした。インターネット接続を確認して、もう一度お試しください。";
@@ -768,7 +780,7 @@ startChatButton?.addEventListener("click", async () => {
     /* 1. 名前が使えるか確認 */
     let existing;
     try {
-      existing = await getDoc(doc(db, "users", name));
+      existing = await withTimeout(getDoc(doc(db, "users", name)), 12000, "app-timeout-check");
     } catch (error) {
       logFirebaseError("名前確認エラー", error);
       showError(nameError, describeFirebaseError(error, "名前を確認できませんでした。"));
@@ -825,7 +837,7 @@ async function enterAppAs(name, existingData, seq) {
   myProfileImageData = await normalizeProfileImage(existingData?.profileImage || "");
 
   try {
-    await saveUserProfile();
+    await withTimeout(saveUserProfile(), 15000, "app-timeout-save");
   } catch (error) {
     if (!existingData) {
       username = null;
