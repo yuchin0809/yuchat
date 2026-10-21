@@ -3827,9 +3827,9 @@ async function loadMyPageStats() {
 }
 
 /* 「🏆 総資産ランキング」（マイページ／ゆうダービー画面の両方から呼べる共通版）
-   ・毎日 13:00 に自動処理（derby-runner）が作るまとめ rankings/assets を1件読むだけ（users は読まない）
+   ・自動処理（derby-runner）が作るまとめ rankings/assets を1件読むだけ（users は読まない）。13:00 に作り、9:00〜16:59 は1時間おきに更新する
    ・総資産 = 手持ちコイン + 銀行預金 + 保有株の評価額 − 借入残高。全ユーザーが対象・同額は同じ順位
-   ・まとめは1日1回しか変わらないので、読み込んだものを次の更新まで使い回す（画面を開くたびに読み直さない） */
+   ・読み込んだものは、9:00〜16:59 は20分、それ以外は次の13:00 の更新まで使い回す（画面を開くたびに読み直さない） */
 async function renderAssetRankingInto(targetEl) {
   const session = appSessionSeq;
   if (!targetEl) return;
@@ -3839,10 +3839,10 @@ async function renderAssetRankingInto(targetEl) {
     const ranking = await loadAssetRanking();
     if (session !== appSessionSeq) return;
     const users = Array.isArray(ranking?.users) ? ranking.users : [];
-    const updatedNote = ranking?.date ? `<div class="ranking-updated">${escapeHTML(formatEconomyDate(ranking.date))} 13:00 更新（毎日13:00に更新）</div>` : "";
+    const updatedNote = ranking?.date ? `<div class="ranking-updated">${escapeHTML(rankingUpdatedText(ranking))}（9:00〜16:00は1時間おきに更新）</div>` : "";
 
     if (users.length === 0) {
-      targetEl.innerHTML = `<div class="empty-state">総資産ランキングは毎日13:00に集計されます（まだ集計前です）</div>`;
+      targetEl.innerHTML = `<div class="empty-state">総資産ランキングはまだ集計されていません（毎日13:00に最初の集計があり、9:00〜16:00は1時間おきに更新されます）</div>`;
       return;
     }
 
@@ -9327,8 +9327,19 @@ function economyCacheIsFresh(cache) {
   return Date.now() - cache.fetchedAt < ECONOMY_RECHECK_MS;
 }
 
+/* 総資産ランキングは 9:00〜16:59 に1時間おきに更新される。その時間帯は20分たったら読み直す（読み取りは1回ぶん）。それ以外は次の13:00 の更新まで使い回す */
 function rankingCacheIsFresh() {
+  if (!rankingCache) return false;
+  const hour = toJstFields(derbyNow()).getUTCHours();
+  if (hour >= 9 && hour < 17) return Date.now() - rankingCache.fetchedAt < 20 * 60 * 1000;
   return economyCacheIsFresh(rankingCache);
+}
+
+/* ランキングの「最終更新」の表示（1時間おきの更新の時刻。無ければ、13:00 の更新の日付） */
+function rankingUpdatedText(ranking) {
+  const live = toDateValue(ranking?.liveUpdatedAt);
+  if (live) return `${formatJstDateTime(live)} 更新`;
+  return ranking?.date ? `${formatEconomyDate(ranking.date)} 13:00 更新` : "";
 }
 
 function createInitialMarketData() {
@@ -9544,7 +9555,7 @@ function renderEconomyView() {
       <div class="econ-summary-main">
         <span class="econ-label">総資産</span>
         <strong class="econ-total ${assets.total < 0 ? "negative" : ""}">💰 ${formatCoins(assets.total)}</strong>
-        <span class="econ-sub">${myRank ? `総資産ランキング ${myRank.rank}位 / ${ranking.users.length}人（${escapeHTML(formatEconomyDate(ranking.date))} 13:00 時点）` : "総資産ランキングは毎日13:00に更新されます"}</span>
+        <span class="econ-sub">${myRank ? `総資産ランキング ${myRank.rank}位 / ${ranking.users.length}人（${escapeHTML(rankingUpdatedText(ranking).replace(/ 更新$/, ""))} 時点）` : "総資産ランキングは9:00〜16:00に1時間おきに更新されます"}</span>
       </div>
       <dl class="econ-breakdown">
         <div><dt>手持ち</dt><dd>🪙 ${formatCoins(assets.coins)}</dd></div>

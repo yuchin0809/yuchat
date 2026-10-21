@@ -268,6 +268,32 @@ export function buildAssetRanking(entries) {
   });
 }
 
+/* ----- 総資産ランキングだけの更新（日本時間 9:00〜16:59 に1時間おき。ranking-hourly.mjs から） -----
+   ・1日1回の処理（runDailyJobs）とは別。株価・利息・ボーナスには触れない（その日の処理が済んだかを見る date・complete は変えない。update で必要な項目だけ書く）。
+   ・株価は毎日 13:00 にしか変わらないので、途中の更新で動くのは、コイン・預金・株の保有数・借入が変わった人の順位だけ。
+   ・読み取り：users 全件 1回 ＋ market/current 1。書き込み：rankings/assets 1（無ければ何もしない＝最初の13:00の処理が作る）。 */
+export const RANKING_LIVE_FROM_HOUR = 9;
+export const RANKING_LIVE_TO_HOUR = 17; /* 17時より前（16:59 まで） */
+export async function refreshAssetRanking({ db, now = new Date(), log = console.log }) {
+  const hour = new Date(now.getTime() + 9 * 3600000).getUTCHours();
+  if (hour < RANKING_LIVE_FROM_HOUR || hour >= RANKING_LIVE_TO_HOUR) return { status: "skipped", reason: "outside" };
+  const marketSnap = await db.collection("market").doc("current").get();
+  if (!marketSnap.exists) return { status: "skipped", reason: "no_market" };
+  const companies = marketSnap.data().companies || {};
+  const prices = Object.fromEntries(Object.entries(companies).map(([code, c]) => [code, c.price]));
+  const usersSnap = await db.collection("users").select("uid", "coins", "bank", "stocks").get();
+  const entries = usersSnap.docs.map((d) => ({ name: d.id, data: d.data() })).filter((e) => typeof e.data.coins === "number").map((e) => ({ name: e.name, ...totalAssetsOf(e.data, prices) }));
+  const ranking = buildAssetRanking(entries);
+  try {
+    await db.collection("rankings").doc("assets").update({ users: ranking, userCount: ranking.length, liveUpdatedAt: FieldValue.serverTimestamp() });
+  } catch (error) {
+    if (error && (error.code === 5 || /NOT_FOUND/.test(String(error.message)))) return { status: "skipped", reason: "no_ranking" };
+    throw error;
+  }
+  log(JSON.stringify({ rankingRefresh: { users: ranking.length } }));
+  return { status: "ok", users: ranking.length };
+}
+
 /* ----- 1日1回の処理（13:00 以降。同じ日は1回だけ） ----- */
 export async function runDailyJobs({ db, now = new Date(), log = console.log, stockSecret = getStockSeedSecret() }) {
   const today = jstDateString(now);
@@ -337,6 +363,7 @@ export async function runDailyJobs({ db, now = new Date(), log = console.log, st
     users: ranking,
     userCount: ranking.length,
     updatedAt: FieldValue.serverTimestamp(),
+    liveUpdatedAt: FieldValue.serverTimestamp(), /* 画面に出す「最終更新」。9:00〜16:00 の1時間おきの更新（refreshAssetRanking）でも更新する */
     updatedBy: "github-actions"
   });
   result.rankingUsers = ranking.length;
