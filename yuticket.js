@@ -19,6 +19,7 @@ const pad = (n) => String(n).padStart(2, "0");
 const nowMs = () => Date.now() + offset;
 function hm(ms) { const d = new Date(ms + 9 * 3600000); return `${d.getUTCHours()}:${pad(d.getUTCMinutes())}`; }
 function md(day) { const m = /^\d{4}-(\d{2})-(\d{2})$/.exec(day || ""); return m ? `${Number(m[1])}/${Number(m[2])}` : ""; }
+function mdms(ms) { const d = new Date(ms + 9 * 3600000); return `${d.getUTCMonth() + 1}/${d.getUTCDate()}`; }
 const sec = (ms) => (Math.max(0, ms) / 1000).toFixed(2);
 const ORDER = ["conn0", "select", "conn1", "puzzle", "conn2", "card", "conn3", "consent"];
 const CONSENTS = [
@@ -100,24 +101,47 @@ function pageHtml(esc) {
       body += `<button type="button" class="yt-btn big" data-yt="join" ${can && !S.busy ? "" : "disabled"}>${can ? (S.busy ? "準備中…" : "🎫 先着に参加する") : `${hm(T.waitOpen)} から参加できます`}</button>`;
       if (st.rec && !st.rec.done) body += `<div class="yt-sub">※ゲームの途中でやめた人も、続きから参加できます（タイムは進み続けています）。</div>`;
     }
+    if (st.slots.length) body += `<button type="button" class="yt-btn sub" data-yt="practice" ${S.busy ? "disabled" : ""}>🎮 練習する（タイム・チケットは本番に関係なし）</button>`;
     body += `</div>`;
   }
   body += rankingHtml(esc);
   return `<div class="yt-head">${closeBtn}<div class="yt-title">🎫 当日の先着</div></div>${body}`;
 }
 
+const MEDAL = ["🥇", "🥈", "🥉"];
+function rankTable(esc, rows, withPrize) {
+  return `<table class="yt-rank"><thead><tr><th>順位</th><th>名前</th><th>タイム</th><th>${withPrize ? "賞金" : "記録日"}</th></tr></thead><tbody>${rows.map((x) =>
+    `<tr class="${x.me ? "me" : ""}"><td>${x.rank <= 3 ? MEDAL[x.rank - 1] : x.rank}</td><td>${esc(x.name)}</td><td>${sec(x.ms)}秒</td><td>${withPrize ? (x.prize ? `${x.prize}コイン` : md(x.day)) : md(x.day)}</td></tr>`).join("")}</tbody></table>`;
+}
 function rankingHtml(esc) {
-  const r = S.ranking;
-  let h = `<div class="yt-card"><div class="yt-h2">🏆 ランキング（自己ベスト・速い順）</div>`;
+  const r = S.ranking, tab = S.tab || "week";
+  let h = `<div class="yt-card"><div class="yt-tabs"><button type="button" class="yt-tab ${tab === "week" ? "on" : ""}" data-yt="tab" data-v="week">🏆 今週のランキング</button><button type="button" class="yt-tab ${tab === "all" ? "on" : ""}" data-yt="tab" data-v="all">📈 通算ベスト</button></div>`;
   if (!r) return h + `<div class="yt-sub">読み込み中…</div></div>`;
+  if (tab === "week") {
+    const w = r.week;
+    if (!w) return h + `<div class="yt-sub">今週のランキングを読み込めませんでした。</div></div>`;
+    if (r.last) {
+      h += `<div class="yt-last"><div class="yt-h2">🎉 先週の結果発表（${mdms(r.last.startMs)}〜${mdms(r.last.endMs - 1)}・参加 ${r.last.total}人）</div>${r.last.top.map((t) =>
+        `<div class="yt-last-row ${t.me ? "me" : ""}"><span>${MEDAL[t.rank - 1]} ${esc(t.name)}</span><span>${sec(t.ms)}秒</span><b>${t.prize}コイン</b></div>`).join("")}
+        ${r.last.me && r.last.me.prize ? `<div class="yt-me">🎁 おめでとう！ 先週は${r.last.me.rank}位で、${r.last.me.prize}コインをお渡ししました</div>` : ""}</div>`;
+    }
+    h += `<div class="yt-prize">毎週月曜 7:00 に結果発表！ ${MEDAL.map((m, i) => `${m} ${w.prizes[i]}コイン`).join("　")}</div>
+      <div class="yt-sub">今週（次の結果発表：${mdms(w.endMs)}（月）7:00）の自己ベストです。</div>`;
+    if (!w.rows.length) h += `<div class="yt-sub">まだ記録がありません。</div>`;
+    else {
+      h += rankTable(esc, w.rows, true);
+      if (w.me && w.me.rank > w.rows.length) h += `<div class="yt-me">あなた：${w.me.rank}位（${sec(w.me.ms)}秒）</div>`;
+    }
+    h += w.pendingMs ? `<div class="yt-sub">今日の記録（${sec(w.pendingMs)}秒）は 12:00 にランキングへ反映されます。</div>` : `<div class="yt-sub">当日の記録は 12:00 にランキングへ反映されます。</div>`;
+    return h + `</div>`;
+  }
+  h += `<div class="yt-sub">過去の記録も含めた、一人ひとりの自己ベストです（名前つき）。</div>`;
   if (!r.rows.length) h += `<div class="yt-sub">まだ記録がありません。</div>`;
   else {
-    h += `<table class="yt-rank"><thead><tr><th>順位</th><th>名前</th><th>タイム</th><th>記録日</th></tr></thead><tbody>${r.rows.map((x) =>
-      `<tr class="${x.me ? "me" : ""}"><td>${x.rank <= 3 ? ["🥇", "🥈", "🥉"][x.rank - 1] : x.rank}</td><td>${esc(x.name)}</td><td>${sec(x.ms)}秒</td><td>${md(x.day)}</td></tr>`).join("")}</tbody></table>`;
+    h += rankTable(esc, r.rows, false);
     if (r.me && r.me.rank > r.rows.length) h += `<div class="yt-me">あなた：${r.me.rank}位（${sec(r.me.ms)}秒・${md(r.me.day)}）</div>`;
   }
-  if (r.pendingMs) h += `<div class="yt-sub">今日の記録（${sec(r.pendingMs)}秒）は 12:00 にランキングへ反映されます。</div>`;
-  else h += `<div class="yt-sub">当日の記録は 12:00 にランキングへ反映されます。ランキングは名前つきで、過去の記録も含みます。</div>`;
+  h += r.pendingMs ? `<div class="yt-sub">今日の記録（${sec(r.pendingMs)}秒）は 12:00 にランキングへ反映されます。</div>` : `<div class="yt-sub">当日の記録は 12:00 にランキングへ反映されます。</div>`;
   return h + `</div>`;
 }
 
@@ -188,7 +212,7 @@ function gameHtml(esc) {
       <div class="yt-consents">${g.plan.consent.map((idx) => `<button type="button" class="yt-consent ${g.pressed.includes(idx) ? "on" : ""}" data-yt="consent" data-i="${idx}"><span>${g.pressed.includes(idx) ? "✅" : "⬜"}</span>${esc(CONSENTS[idx])}</button>`).join("")}</div>
       <button type="button" class="yt-btn big pulse" data-yt="buy" ${all && !S.busy ? "" : "disabled"}>${S.busy ? "確認中…" : "🎫 チケットを取る"}</button></div>`;
   }
-  return `${gameBar(g)}<div class="yt-stage">${body}</div>`;
+  return `${gameBar(g)}${g.practice ? `<div class="yt-practice">🎮 練習中：タイムはランキングに載りません（チケットも取れません）</div>` : ""}<div class="yt-stage">${body}</div>`;
 }
 
 function resultHtml(esc) {
@@ -204,6 +228,12 @@ function resultHtml(esc) {
     return `<div class="yt-head">${closeBtn}<div class="yt-title">結果</div></div><div class="yt-card center lose"><div class="yt-big">😢</div><div class="yt-h1">ご希望のチケットは売り切れました。</div>
       <div class="yt-sub">今日の先着チケットは、すべてなくなりました。</div>
       <div class="yt-result-time">タイム <b>${sec(r.ms)}</b> 秒</div><div class="yt-sub">${rankNote()}</div>${back}</div>`;
+  }
+  if (r.kind === "practice") {
+    return `<div class="yt-head">${closeBtn}<div class="yt-title">練習の結果</div></div><div class="yt-card center"><div class="yt-big">🎮</div><div class="yt-h1">練習おつかれさま！</div>
+      <div class="yt-result-time">タイム <b>${sec(r.ms)}</b> 秒</div>
+      <div class="yt-sub">※練習のタイムは、ランキングには載りません。チケットも取れません。<br>本番は ${hm(S.status.times.goAt)} スタート！ 何回でも練習できます。</div>
+      <button type="button" class="yt-btn big pulse" data-yt="practice">🎮 もう一度練習する</button><button type="button" class="yt-btn sub" data-yt="to-page">戻る</button></div>`;
   }
   if (r.kind === "retry") {
     return `<div class="yt-head">${closeBtn}<div class="yt-title">結果</div></div><div class="yt-card center lose"><div class="yt-big">😢</div><div class="yt-h1">ご希望のチケットは売り切れました。</div>
@@ -274,11 +304,30 @@ async function startGame() {
     S.busy = false; S.err = ERR[e.code] || `うまくいきませんでした（${e.code || "エラー"}）`; render();
   }
 }
+/* 練習：サーバーが問題だけ作って返す（何も保存しない）。タイムは端末で測るだけで、どこにも送らない */
+async function startPractice() {
+  if (S.busy) return;
+  S.busy = true; S.err = ""; render();
+  const mine = S;
+  try {
+    const r = await deps.api("battlePractice");
+    if (S !== mine) return;
+    if (typeof r.serverNowMs === "number") offset = r.serverNowMs - Date.now();
+    const g = newGame({ att: 0, st: nowMs(), plan: r.plan, slots: (S.status && S.status.slots) || [], closed: [], card: r.card }, {});
+    g.practice = true;
+    S.game = g; S.screen = "game"; S.busy = false; S.result = null;
+    goStage("conn0");
+  } catch (e) {
+    if (S !== mine) return;
+    S.busy = false; S.err = ERR[e.code] || `うまくいきませんでした（${e.code || "エラー"}）`; render();
+  }
+}
 async function refreshRanking() { try { S.ranking = await deps.api("battleRanking"); } catch (_) { /* 表示だけ */ } }
 
 async function buy() {
   const g = S.game; if (!g || S.busy) return;
   mark(g);
+  if (g.practice) { S.result = { kind: "practice", ms: Math.round(nowMs() - g.st) }; S.screen = "result"; render(); return; }
   S.busy = true; render();
   const mine = S;
   try {
@@ -316,6 +365,8 @@ async function onClick(ev) {
     return;
   }
   if (act === "go" || act === "restart") return startGame();
+  if (act === "practice") return startPractice();
+  if (act === "tab") { S.tab = b.getAttribute("data-v") === "all" ? "all" : "week"; render(); return; }
   if (act === "to-page") { S.screen = "page"; S.game = null; S.result = null; S.busy = false; await loadPage(); return; }
   if (act === "retry") { beginGame({ ...S.result.next, st: g.st }); return; }
   if (!g) return;
@@ -394,6 +445,12 @@ function injectStyles() {
   .yt-keys { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; max-width: 320px; margin: 0 auto; } .yt-key { padding: 16px 0; border-radius: 12px; border: none; font-size: 24px; font-weight: 900; background: #fff; color: #1e1b4b; cursor: pointer; font-family: inherit; } .yt-key.sub { background: #e5e7eb; } .yt-key.ok { background: linear-gradient(135deg,#ffd700,#ff9a00); font-size: 18px; } .yt-key:disabled { opacity: .4; }
   .yt-consents { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; } .yt-consent { display: flex; align-items: center; gap: 8px; text-align: left; padding: 10px 12px; border-radius: 12px; border: 2px solid rgba(255,255,255,.25); background: rgba(255,255,255,.1); color: #fff; font-size: 13px; font-weight: 800; cursor: pointer; font-family: inherit; }
   .yt-consent.on { background: rgba(23,227,106,.28); border-color: #17e36a; }
+  .yt-btn.sub { margin-top: 10px; padding: 11px 10px; font-size: 13px; color: #fff; background: rgba(255,255,255,.16); box-shadow: none; border: 1px solid rgba(255,255,255,.35); }
+  .yt-practice { margin: 0 -14px; padding: 6px 14px; text-align: center; font-size: 12px; font-weight: 900; color: #3a2a00; background: #ffe14a; }
+  .yt-tabs { display: flex; gap: 6px; margin-bottom: 10px; } .yt-tab { flex: 1; padding: 9px 4px; border-radius: 10px; border: 1px solid rgba(255,255,255,.3); background: rgba(255,255,255,.08); color: #fff; font-weight: 800; font-size: 12.5px; cursor: pointer; font-family: inherit; } .yt-tab.on { background: linear-gradient(135deg,#ffd700,#ff9a00); color: #3a2a00; border-color: transparent; }
+  .yt-prize { margin: 6px 0; padding: 9px 10px; border-radius: 12px; background: rgba(255,225,74,.2); font-size: 12.5px; font-weight: 900; line-height: 1.8; text-align: center; }
+  .yt-last { margin: 6px 0 10px; padding: 10px; border-radius: 12px; background: rgba(255,45,120,.16); border: 1px solid rgba(255,255,255,.2); }
+  .yt-last-row { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; padding: 5px 0; font-size: 13px; border-top: 1px solid rgba(255,255,255,.14); } .yt-last-row b { color: #ffe14a; } .yt-last-row.me { font-weight: 900; }
   .yt-big { font-size: 64px; } .yt-card.win { background: linear-gradient(135deg, rgba(255,215,0,.28), rgba(255,45,120,.22)); border-color: #ffd700; } .yt-card.lose { border-color: rgba(255,255,255,.3); }
   .yt-result-time { margin: 10px 0; font-size: 16px; font-weight: 900; } .yt-result-time b { font-size: 34px; color: #ffe14a; font-variant-numeric: tabular-nums; }
   @media (prefers-reduced-motion: reduce) { .yt-btn.pulse:not(:disabled) { animation: none; } }
