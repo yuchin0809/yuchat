@@ -49,6 +49,8 @@ export async function ticketOpen() {
   document.body.appendChild(ov); document.body.classList.add("yt-lock");
   ov.addEventListener("click", onClick);
   ov.addEventListener("pointerdown", onPointerDown);
+  ov.addEventListener("gesturestart", (e) => e.preventDefault());                         // iOS Safari：2本指の拡大も止める
+  ov.addEventListener("dblclick", (e) => e.preventDefault());
   tick = setInterval(onTick, 100);
   render();
   await loadPage();
@@ -462,6 +464,10 @@ function injectStyles() {
   if (stylesDone) return; stylesDone = true;
   const css = `
   body.yt-lock { overflow: hidden; }
+  /* 連打しても、画面が拡大されない（ダブルタップのズームを止める）。文字や絵文字が選択されてしまうのも防ぐ */
+  .yt-ov, .yt-ov * { touch-action: manipulation; -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none; }
+  .yt-ov { -webkit-user-select: none; user-select: none; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+  .yt-ov .yt-slide-handle { touch-action: none; }
   .yt-ov { position: fixed; inset: 0; z-index: 9000; overflow-y: auto; -webkit-overflow-scrolling: touch; color: #fff; background: radial-gradient(circle at 20% 0%, #5b1fa8 0, #25104d 45%, #120a2b 100%); font-family: inherit; }
   .yt-box { max-width: 520px; margin: 0 auto; padding: 12px 14px 40px; min-height: 100%; box-sizing: border-box; }
   .yt-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; } .yt-title { font-weight: 900; font-size: 18px; text-shadow: 0 0 12px #ff5fb0; }
