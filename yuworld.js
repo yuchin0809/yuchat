@@ -13,7 +13,7 @@
 ========================================================= */
 
 /* 🎟 ゆう宝くじ売り場の画面（別ファイル。Worker の lottery* アクションを呼んで表示するだけ） */
-import { renderLottery, stopLottery } from "./yulottery.js?v=20261019-lottery6";
+import { renderLottery, stopLottery } from "./yulottery.js?v=20261021-lottery7";
 /* 🌈 確変台のパネル（台の一覧の上）。抽選・先着・通知設定。Worker の kaku* アクションを呼んで表示するだけ */
 import { kakuInit, kakuPanelHtml, kakuBind, kakuMachineInfo, startKaku, stopKaku, refreshKaku } from "./yukaku.js?v=20261020-kaku8";
 /* 🏅 会員ランクのカード（台の一覧の上）。ランクの判定・進みは Worker の rankStatus が返す */
