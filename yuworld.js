@@ -65,7 +65,7 @@ const state = {
   soundOn: lsGet(LS_SOUND) !== "off",
   fxLevel: lsGet(LS_FX) === "low" ? "low" : "high",
   scale: (() => { const v = lsGet(LS_SCALE); if (v === null || v === "fit") return "fit"; const n = parseFloat(v); return isFinite(n) ? n : "fit"; })(),
-  effScale: 1,
+  effScale: 1, zoomRO: null,
   flushTimer: null, feverTimer: null, lobbyTimer: null, reelAnim: null
 };
 const $ = (sel) => rootEl && rootEl.querySelector(sel);
@@ -119,6 +119,7 @@ async function loadConfigAndRender() {
 /* ---------- 描画 ---------- */
 function render() {
   if (!rootEl) return;
+  if (state.screen !== "game" && state.zoomRO) { state.zoomRO.disconnect(); state.zoomRO = null; }
   if (state.screen === "loading") return renderMessage("読み込み中…", "");
   if (state.screen === "preparing") return renderMessage("🚧 現在準備中です", "このお店はまだ公開されていません。公開までもうしばらくお待ちください。");
   if (state.screen === "shop") return renderShop();
@@ -304,6 +305,9 @@ function renderGame() {
   for (let i = 0; i < 3; i++) $("#ywStop" + i)?.addEventListener("click", () => stopReel(i));
   updateStats(); updateFreeLabel(); updateFeverUI();
   applyScale(); requestAnimationFrame(applyScale);
+  // 中身の高さが後から変わっても（画像の読み込み・FEVERの帯・メッセージ・無料スピンの表示など）、枠の高さを合わせ直す
+  if (state.zoomRO) { state.zoomRO.disconnect(); state.zoomRO = null; }
+  if (typeof ResizeObserver === "function") { const z = $("#ywZoom"); if (z) { state.zoomRO = new ResizeObserver(() => applyScale()); state.zoomRO.observe(z); } }
 }
 
 /* ---------- 拡大・縮小 ---------- */
@@ -819,7 +823,7 @@ function injectStyles() {
   .yw-fx.low { background: #eef7ee; color: #3a7; border-color: #cfe8cf; }
   .yw-sound.on { background: #e8f8ee; color: #2a7; border-color: #bfe8cf; }
   .yw-sound.off { background: #f1f1f4; color: #999; }
-  .yw-zoomwrap { overflow-x: auto; overflow-y: hidden; display: flex; justify-content: center; }
+  .yw-zoomwrap { overflow-x: auto; overflow-y: hidden; display: flex; justify-content: center; align-items: flex-start; } /* flex-start：中身（yw-zoom）を枠の高さまで引き伸ばさない（引き伸ばすと、高さを測り直すたびに枠の高さが変わって、ゲーム画面が切れたり余白ができたりする） */
   .yw-zoom { width: ${BASE_W}px; transform-origin: top center; flex: 0 0 auto; }
 
   .yw-game { position: relative; overflow: hidden; border-radius: 18px; padding: 14px; color: #fff;
