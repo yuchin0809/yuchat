@@ -276,6 +276,41 @@ button {
     background: #f3f4f6;
 }
 
+/* 友達に紹介（赤いボタン） */
+.invite-btn {
+    height: 40px;
+    padding: 0 14px;
+
+    border: 1px solid #c62828;
+    border-radius: 12px;
+
+    background: #e53935;
+    color: #fff;
+
+    font-size: 14px;
+    font-weight: 800;
+    white-space: nowrap;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(229, 57, 53, 0.35);
+}
+
+.invite-btn:hover {
+    background: #d32f2f;
+}
+
+.invite-btn:active {
+    background: #b71c1c;
+}
+
+.invite-btn .invite-short {
+    display: none;
+}
+
 .coin {
     padding: 0 12px;
 
@@ -1997,6 +2032,21 @@ button {
 
     .header-buttons {
         gap: 3px;
+    }
+
+    /* 友達に紹介：幅が狭いときは短い文字に */
+    .invite-btn {
+        height: 34px;
+        padding: 0 8px;
+        font-size: 12px;
+    }
+
+    .invite-btn .invite-long {
+        display: none;
+    }
+
+    .invite-btn .invite-short {
+        display: inline;
     }
 
     .header-buttons .icon-btn {

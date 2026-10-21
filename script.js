@@ -38,6 +38,8 @@ import {
 
 /* 💸 コインの送金（申請は本人・OK/却下は管理者）。中身の確定は Worker */
 import { transferInit, transferOpenUser, transferOpenAdmin, transferReset } from "./yutransfer.js?v=20261020-transfer1";
+/* 📨 友達に紹介（ヘッダーの赤いボタン。端末の共有画面でリンクを送る） */
+import { inviteInit } from "./yuinvite.js?v=20261021-invite1";
 /* 🌈 確変台の当選者（管理者だけ） */
 import { kakuWinnersInit, kakuWinnersOpen, kakuWinnersReset } from "./yukakuwinners.js?v=20261021-winners1";
 
@@ -3660,6 +3662,9 @@ initYuWorld({
   isTopAdmin: () => isAdminUser(),
   onSettled: () => { /* 精算後は既存の coins リスナーが users の残高を拾って各画面を更新する */ }
 });
+
+/* 📨 友達に紹介 */
+inviteInit(document.getElementById("inviteButton"), (title, body) => showAppToast(title, body));
 
 /* 🌈 確変台の当選者（管理者だけ） */
 kakuWinnersInit({ callAdmin: (action, payload) => callAdminApi(action, payload), isAdmin: () => isAdminUser(), esc: (v) => escapeHTML(v) });
