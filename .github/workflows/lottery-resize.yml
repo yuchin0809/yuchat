@@ -1,0 +1,51 @@
+# 🎟 宝くじの番号の付け替え（3,000→1,500通り・手動実行）
+#
+# ・実行すると：いま販売中の回の番号を、1,500通りに直す（1,500 未満の番号はそのまま。1,500 以上の番号を持つ人だけ付け替える）。コインは変わらない。
+# ・安全：すでに済んでいれば何もしない。1,500 枚を超えて売れていたら、何も変えずに失敗として知らせる。ログには人の名前・番号を出さない（件数だけ）。
+# ・付け替えの本体は通知 Worker の lotteryResizeRound（購入・状態の表示・抽選のときにも自動で行われるので、この実行は「いますぐ確実に済ませたい」とき用）。
+# ・鍵：FIREBASE_SERVICE_ACCOUNT（ほかの手動ワークフローと同じ）。未登録なら何もしない。
+# ・テストは .github/notify-worker/** を変更する PR で通知サーバーの CI が実行する（ここでは回さない）。
+
+name: 🎟 宝くじの番号の付け替え
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lottery-resize
+  cancel-in-progress: false
+
+jobs:
+  resize:
+    name: 宝くじの番号の付け替え
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 鍵が登録されているか確認
+        id: secret
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          if [ -z "$FIREBASE_SERVICE_ACCOUNT" ]; then
+            echo "::warning::FIREBASE_SERVICE_ACCOUNT が使えないため、宝くじの番号の付け替えをスキップしました"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.secret.outputs.ready == 'true'
+        with:
+          node-version: 22
+
+      - name: 番号の付け替え
+        if: steps.secret.outputs.ready == 'true'
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: node .github/notify-worker/lottery-resize.mjs

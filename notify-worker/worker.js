@@ -2556,14 +2556,14 @@ async function yuslotSettle(deps, uid, body) {
    🎟 ゆう宝くじ売り場（毎週金曜 14:30（日本時間）に抽選。週ごとに名前・賞金が変わる）
    ・抽選・購入・賞金の支払いはすべてサーバーが確定する（クライアントは表示だけ）。
    ・券は1枚ずつ保存せず、ユーザーごとの「購入枚数」だけを lotteryEntries/{回}_{uid} に持つ。
-   ・券には番号が付く。番号は 30組 × 100番 ＝ 全3,000通り（1回の抽選につき3,000枚が上限＝売り切れあり）。
+   ・券には番号が付く。番号は 15組 × 100番 ＝ 全1,500通り（1回の抽選につき1,500枚が上限＝売り切れあり）。
      買い方は「連番」（同じ組の続き番号）と「バラ」（空いている番号からランダム）。番号は買った瞬間にサーバーが重ならないように決める。
    ・抽選では、等級ごとの当選番号を3,000通りの中から重ならないように決める（1等は全体で1本）。当選番号の券を持っている人に賞金。
-     売れ残った番号が当たったら、その賞金は払わない（コインの発行しすぎなし）。1枚あたりの1等の確率は 1/3,000、枚数に比例。
+     売れ残った番号が当たったら、その賞金は払わない。1枚あたりの1等の確率は 1/1,500、枚数に比例。
    ・前後賞：1等の番号の前と後ろ（組の端は次の組へつながる）の2本。連番で買うと1等と一緒に当てやすい。
    ・賞金の額は週ごとの倍率で変わる（ふつうの週は ×0.9 / ×0.95 / ×1、ビッグイベントは ×2 など）。7等だけは元返し固定。
    ・販売は「抽選の週の月曜 8:00（日本時間）」に始まり、抽選の5分前に締め切る。抽選のあと次の販売開始までは「準備中」（前回の結果のリプレイだけ見られる）。
-   ・1人あたりの購入上限はない（1回の抽選につき全3,000枚が売り切れるまで）。連番は1組（100枚）まで、バラは何枚でも。
+   ・1人あたりの購入上限はない（1回の抽選につき全1,500枚が売り切れるまで）。連番は1組（100枚）まで、バラは何枚でも。
    ・抽選は毎分の cron（scheduled）から。決まった時刻に1回だけ実行し、支払い・結果の記録は1回の commit で行う（二重払いなし）。
    ・Firestore の使用量を最小に：購入は「読み取り3回（残高・着席確認1回のクエリ・売れた番号の記録）＋書き込み3件の commit 1回」。
      状態の表示は準備中なら読み取りほぼ0（結果の記録はWorkerのメモリに数分間ためる）、販売中は2回（自分の番号・残高）。抽選は参加者ぶんの読み取りだけ。
@@ -2573,7 +2573,7 @@ async function yuslotSettle(deps, uid, body) {
 
 export const LOTTERY = {
   price: 10,                 // 1枚の値段（ゆうコイン）
-  poolSize: 3000,            // 1回の番号の数（30組 × 100番。売り切れたらその回は買えない）
+  poolSize: 1500,            // 1回の番号の数（15組 × 100番。売り切れたらその回は買えない）
   perGroup: 100,             // 1組あたりの番号の数
   seqMax: 100,               // 連番で買える最大枚数（1組ぶん）。バラには上限なし
   closeBeforeMs: 5 * 60000,  // 抽選の何ミリ秒前に販売を締め切るか
@@ -2641,9 +2641,9 @@ export function lotteryPrizeOf(tier, scale) {
   const v = tier.prize * scale;
   return v >= 100 ? Math.round(v / 10) * 10 : Math.round(v); // 100以上は10コイン単位に丸める
 }
-/* その回の等級の一覧（表示用）。枠の数は売れた枚数が1,000を超えたら券の数まで広がる */
+/* その回の等級の一覧（表示用） */
 export function lotteryTiersFor(scale) { return LOTTERY.tiers.map((t) => ({ name: t.name, count: t.count, prize: lotteryPrizeOf(t, scale), ...(t.adjacent ? { adjacent: true } : {}) })); }
-/* 番号（0〜2999）の表示：01組000番〜30組099番 */
+/* 番号（0〜1499）の表示：01組000番〜15組099番 */
 export function lotteryNumberLabel(n) {
   return `${String(Math.floor(n / LOTTERY.perGroup) + 1).padStart(2, "0")}組${String(n % LOTTERY.perGroup).padStart(3, "0")}番`;
 }
@@ -2680,7 +2680,7 @@ export function lotteryDrawWinners(entries, scale, prizes) {
   return winners;
 }
 
-/* 番号の割り当て（純粋関数）。soldBits は 3,000 文字の "0"/"1"（1＝売れた）。
+/* 番号の割り当て（純粋関数）。soldBits は 1,500 文字の "0"/"1"（1＝売れた）。
    mode "seq"＝同じ組の続き番号（連番）、"random"＝空いている番号からランダム */
 export function lotteryAllocate(soldBits, count, mode, random) {
   const N = LOTTERY.poolSize, G = LOTTERY.perGroup;
@@ -2707,6 +2707,47 @@ export function lotteryAllocate(soldBits, count, mode, random) {
   }
   return { numbers: free.slice(0, count).sort((a, b) => a - b) };
 }
+
+/* 番号の数を 3,000 → 1,500 に減らしたときの引っ越し：古い売れた番号の表（3,000文字）の回を、1,500通りに直す。
+   1,500 未満の番号はそのまま。1,500 以上の番号を持っている人だけ、空いている番号（1,500未満）に付け替える（連番は同じ組の続き番号のまま）。
+   ・合計の枚数・買った人・コインは変わらない。売れた番号の表と、付け替える人の番号を、1回の commit（更新時刻の条件つき）で書く。
+   ・すでに 1,500 文字なら何もしない（何度呼んでも安全）。1,500 枚を超えて売れていたら、何も変えずに知らせる（aborted）。 */
+export async function lotteryResizeRound(deps, roundId) {
+  const fs = deps.firestore, N = LOTTERY.poolSize;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const roundRaw = await fs.getRaw(`lotteryRounds/${roundId}`);
+    if (!roundRaw) return { skipped: "no_round" };
+    const round = decodeFields(roundRaw.fields);
+    if (typeof round.soldBits !== "string" || round.soldBits.length === N) return { skipped: "ok" };
+    if (round.status === "done") return { skipped: "done" };
+    const docs = await fs.query("lotteryEntries", [["round", "EQUAL", roundId]]);
+    const entries = docs.map((d) => ({ id: d.id, updateTime: d.updateTime, numbers: Array.isArray(d.data.numbers) ? d.data.numbers.filter((n) => Number.isInteger(n) && n >= 0) : [] })).filter((e) => e.numbers.length > 0);
+    const total = entries.reduce((sum, e) => sum + e.numbers.length, 0);
+    if (total > N) return { aborted: "too_many", tickets: total };
+    const bits = Array(N).fill("0");
+    entries.forEach((e) => e.numbers.forEach((n) => { if (n < N) bits[n] = "1"; }));
+    const plan = [];
+    for (const e of entries.filter((x) => x.numbers.some((n) => n >= N))) {
+      const keep = e.numbers.filter((n) => n < N);
+      const move = e.numbers.filter((n) => n >= N).sort((a, b) => a - b);
+      const consecutive = move.length > 1 && move.every((n, i) => i === 0 || n === move[i - 1] + 1);
+      let alloc = consecutive ? lotteryAllocate(bits.join(""), move.length, "seq", deps.random) : null;
+      if (!alloc || alloc.error) alloc = lotteryAllocate(bits.join(""), move.length, "random", deps.random);
+      if (alloc.error) return { aborted: "no_room", tickets: total };
+      alloc.numbers.forEach((n) => { bits[n] = "1"; });
+      plan.push({ id: e.id, updateTime: e.updateTime, numbers: [...keep, ...alloc.numbers].sort((a, b) => a - b) });
+    }
+    if (plan.length > 400) return { aborted: "too_many_entries", tickets: total };
+    const writes = [{ update: { name: fs.docName(`lotteryRounds/${roundId}`), fields: encodeFields({ soldBits: bits.join("") }) }, updateMask: { fieldPaths: ["soldBits"] }, currentDocument: { updateTime: roundRaw.updateTime } }];
+    plan.forEach((x) => writes.push({ update: { name: fs.docName(`lotteryEntries/${x.id}`), fields: encodeFields({ numbers: x.numbers }) }, updateMask: { fieldPaths: ["numbers"] }, currentDocument: { updateTime: x.updateTime } }));
+    try { await fs.commit(writes); }
+    catch (error) { if (isRetryableCommitError(error)) continue; throw error; } // 途中で誰かが買った等：読み直してやり直す
+    lotteryDocCache.delete(`lotteryRounds/${roundId}`);
+    return { ok: true, moved: plan.length, tickets: total };
+  }
+  return { skipped: "busy" };
+}
+const lotteryIsLegacyBits = (round) => typeof round?.soldBits === "string" && round.soldBits.length !== LOTTERY.poolSize;
 
 let lotteryConfigCache = { value: null, at: 0 };
 let lotteryDocCache = new Map();
@@ -2766,12 +2807,16 @@ async function lotteryAnnounce(deps, id, round) {
 export async function lotteryRunDraw(deps, drawMs) {
   const fs = deps.firestore, ev = lotteryEventFor(drawMs);
   const roundPath = `lotteryRounds/${ev.id}`;
-  const raw = await fs.getRaw(roundPath);
+  let raw = await fs.getRaw(roundPath);
   if (!raw) return { status: "no_sales", id: ev.id };
-  const round = decodeFields(raw.fields);
+  let round = decodeFields(raw.fields);
   if (round.status === "done") {
     if (round.announced !== true) await lotteryAnnounce(deps, ev.id, round);
     return { status: "done", id: ev.id };
+  }
+  if (lotteryIsLegacyBits(round)) { // 番号の数を減らす前の回なら、抽選の前に番号を付け替える（付け替えで更新時刻が変わるので読み直す）
+    await lotteryResizeRound(deps, ev.id);
+    raw = await fs.getRaw(roundPath); round = decodeFields(raw.fields);
   }
   const docs = await fs.query("lotteryEntries", [["round", "EQUAL", ev.id]]);
   const entries = docs.map((d) => ({ uid: d.data.uid, name: d.data.name, numbers: Array.isArray(d.data.numbers) ? d.data.numbers.filter((n) => Number.isInteger(n) && n >= 0 && n < LOTTERY.poolSize) : [] })).filter((e) => e.numbers.length > 0 && e.uid && e.name);
@@ -2872,11 +2917,15 @@ async function lotteryStatus(deps, uid, body) {
     // 次の回の販売が始まるまでは「準備中」。名前・賞金は出さず、自分の番号や残高も読まない（読み取りなし）
     return { ...base, open: false, event: { id: ev.id, drawMs: ev.drawMs, saleStartMs: ev.saleStartMs, closeMs: ev.closeMs, price: ev.price } };
   }
-  const [round, entry, me] = await Promise.all([
+  let [round, entry, me] = await Promise.all([
     lotteryCachedGet(deps, `lotteryRounds/${ev.id}`, 30000),
     deps.firestore.get(`lotteryEntries/${ev.id}_${uid}`),
     loadMyUser(deps.firestore, uid, body?.username)
   ]);
+  if (lotteryIsLegacyBits(round)) { // 番号の数を減らす前の回：番号を付け替えてから、読み直す
+    await lotteryResizeRound(deps, ev.id).catch(() => {});
+    [round, entry] = await Promise.all([lotteryCachedGet(deps, `lotteryRounds/${ev.id}`, 0), deps.firestore.get(`lotteryEntries/${ev.id}_${uid}`)]);
+  }
   const tickets = Number(round?.tickets) || 0;
   const myNumbers = Array.isArray(entry?.numbers) ? entry.numbers : [];
   return {
@@ -2917,6 +2966,10 @@ async function lotteryBuy(deps, uid, body) {
   const roundRaw = await deps.firestore.getRaw(roundPath);
   const round = roundRaw ? decodeFields(roundRaw.fields) : {};
   const N = LOTTERY.poolSize;
+  if (lotteryIsLegacyBits(round)) { // 番号の数を減らす前の回：先に番号を付け替える（付け替えが済むまでは買えない）
+    const m = await lotteryResizeRound(deps, ev.id).catch(() => ({}));
+    return { status: 409, error: m.ok ? "busy" : "preparing" };
+  }
   const bits = typeof round.soldBits === "string" && round.soldBits.length === N ? round.soldBits : "0".repeat(N);
   const alloc = lotteryAllocate(bits, count, mode, deps.random);
   if (alloc.error) return { status: 409, error: alloc.error, remaining: alloc.remaining };
