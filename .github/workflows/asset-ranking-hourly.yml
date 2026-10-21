@@ -1,0 +1,60 @@
+# 総資産ランキングの1時間おきの更新（日本時間 9:00〜16:59）
+#
+# ・cron は UTC（日本時間 = UTC + 9時間）。UTC 0〜7時の毎時7分 ＝ 日本時間 9:07〜16:07 の8回。混み合う毎時0分を避けている。
+#   GitHub の定期実行は少し遅れることがあるが、プログラムの中で日本時間 9:00〜16:59 の外なら何もしない（refreshAssetRanking）。
+# ・やること：users を1回読んで、rankings/assets の users・userCount・liveUpdatedAt だけを書く（株価・利息などの1日1回の処理には触れない）。
+#   読み取りは「ユーザー数 + 1」、書き込みは1回。
+# ・13:00 の1日1回の処理（derby-runner.yml）とは別。何回実行されても安全（その時点の最新の値で作り直すだけ）。
+# ・鍵：FIREBASE_SERVICE_ACCOUNT（ゆうダービーと同じ）。未登録なら何もしない。
+# ・テストは derby-runner/** を変更する PR で derby-runner.yml が実行する（ここでは回さない）。
+
+name: 総資産ランキングの1時間おきの更新
+
+on:
+  schedule:
+    - cron: "7 0-7 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: asset-ranking-hourly
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: derby-runner
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 鍵が登録されているか確認
+        id: secret
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          if [ -z "$FIREBASE_SERVICE_ACCOUNT" ]; then
+            echo "::warning::FIREBASE_SERVICE_ACCOUNT が未登録のため、ランキングの更新をスキップしました"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.secret.outputs.ready == 'true'
+        with:
+          node-version: 22
+
+      - name: 依存パッケージのインストール
+        if: steps.secret.outputs.ready == 'true'
+        run: npm ci --no-audit --no-fund
+
+      - name: 総資産ランキングの更新
+        if: steps.secret.outputs.ready == 'true'
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: node ranking-hourly.mjs
