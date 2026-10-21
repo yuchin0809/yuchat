@@ -5,7 +5,7 @@ import { simulate } from "../yuslot-kaku-sim.mjs";
 import assert from "node:assert/strict";
 import {
   KAKU_EPOCH, KAKU_MACHINE_NAMES, kakuDayId, kakuDayStart, kakuNextDay, kakuTimes, kakuMachineFor, kakuSameKinds, kakuInitialSlots, kakuNpcName,
-  kakuCurrentHolder, kakuIsWeekend, kakuPoolFor, kakuPickWinners, kakuRunDraw, kakuRunEvent, kakuSeatRight, kakuSpinGate, kakuResultDataFor, runKakuTick, resetKakuCacheForTest,
+  kakuCurrentHolder, kakuIsWeekend, kakuPoolFor, kakuPickWinners, kakuStanding, kakuRunDraw, kakuRunEvent, kakuSeatRight, kakuSpinGate, kakuResultDataFor, runKakuTick, resetKakuCacheForTest,
   handleAdminAction, handleYuslotAction, resetYuslotCacheForTest, slotApplySpin, slotRates, SLOT_MACHINES, SLOT_KAKU_RATE, SLOT_KAKU_SPECIAL_BOOST
 } from "../worker.js";
 
@@ -138,6 +138,23 @@ test("抽選の重み：実在の申込者が当たるのは約1/3。同じ人�
   const prior = new Map([["r0", 3]]);
   const capped = kakuPickWinners({ applicants: apps(3), poolTarget: 3, count: 6, wins: prior, random: rng, dayId: D });
   assert.ok(!capped.some((x) => x.uid === "r0"), "すでに3枠の人は当たらない");
+});
+
+test("抽選の重み：小さな差がつく（全体の当選割合は変わらない）。データが無ければ全員同じ", async () => {
+  const rows = Array.from({ length: 10 }, (_, i) => ({ name: `r${i}`, total: (10 - i) * 1000 }));
+  const st = kakuStanding(rows, ["r0", "r9", "新人"]);
+  assert.equal(st.get("r0"), 0); assert.equal(st.get("r9"), 1); assert.equal(st.get("新人"), 0.5);
+  assert.equal(kakuStanding(rows.map((r) => ({ ...r, total: 5 })), ["r3"]).get("r3"), 0.5);
+  const rng = rngOf(55);
+  const apps = rows.map((r) => ({ uid: r.name, name: r.name }));
+  const won = new Map(); let real = 0, flat = 0; const N = 8000;
+  for (let t = 0; t < N; t++) {
+    kakuPickWinners({ applicants: apps, poolTarget: 65, count: 13, random: rng, dayId: D, standing: st }).filter((x) => !x.npc).forEach((x) => { won.set(x.uid, (won.get(x.uid) || 0) + 1); real++; });
+    flat += kakuPickWinners({ applicants: apps, poolTarget: 65, count: 13, random: rng, dayId: D }).filter((x) => !x.npc).length;
+  }
+  const hi = won.get("r0") || 0, lo = won.get("r9") || 0;
+  assert.ok(lo > hi && lo / hi < 1.8, `差は小さい（${(lo / hi).toFixed(2)}倍）`);
+  assert.ok(Math.abs(real - flat) / flat < 0.06, `全体の当選数は変わらない（${real} / ${flat}）`);
 });
 
 test("申込の受付時間：前日12:00〜21:00（前日抽選）／当日7:00〜10:45（当日抽選）。二重申込は1回、時間外は断る", async () => {

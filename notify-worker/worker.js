@@ -3022,6 +3022,7 @@ export function kakuPoolFor(dayId, type) {
   return Math.round(count / (kakuIsWeekend(dayId) ? KAKU_WIN_RATE.weekend : KAKU_WIN_RATE.weekday));
 }
 const KAKU_MAX_PER_DAY = 3, KAKU_REPEAT_WEIGHT = 0.2;
+const KAKU_BIAS = 1.5; // 申込者ごとの重みの調整の幅（小さな差）
 export const KAKU_MACHINE_NAMES = { yubasic: "ゆうベーシック", yurush: "ゆうラッシュ", yuchance: "ゆうチャンス", yutreasure: "ゆうトレジャー", yurainbow: "ゆうレインボー", yujackpot: "ゆうジャックポット" };
 const KAKU_NPC_NAMES = ["ほしぞら", "みかん", "ひなた", "そらまめ", "もちもち", "さくら", "こはる", "はるか", "ゆうき", "りんご", "ぽんた", "だいふく", "ねこまる", "ことり", "つばさ", "あおぞら", "ひまわり", "にじいろ", "まっちゃ", "きなこ", "わかば", "ふうた", "らいむ", "みずほ", "もも", "ぱんだ", "くるみ", "かずは", "しろくま", "ゆずぽん", "たいよう", "なないろ", "ちくわ", "おにぎり", "どんぐり", "ふわふわ", "きらきら", "しおり", "あんず", "れもん", "すいか", "ぷりん", "こむぎ", "ゆきうさぎ", "ひよこ", "ののか", "あかり", "みどり", "そうた", "かなた", "いちご", "めろん", "こうめ", "とまと", "ぽぷら", "りく", "はなび", "ほたる", "かぜのこ", "つきみ"];
 export const KAKU_NOTIFY_DEFAULTS = { pub: false, same: false, result1: true, result2: true };
@@ -3073,11 +3074,27 @@ export function kakuInitialSlots(dayId) {
 }
 export function kakuNpcName(dayId, i) { return KAKU_NPC_NAMES[(kakuHash("npc:" + dayId) + i) % KAKU_NPC_NAMES.length]; }
 
+/* 申込者ごとの重みの調整に使う値（0〜1）。総資産ランキングの順位から（rankings/assets の users）。ランキングに無い人は 0.5 */
+export function kakuStanding(rows, names) {
+  const list = Array.isArray(rows) ? rows : [];
+  const totals = list.map((r) => Number(r?.total)).filter(Number.isFinite);
+  const byName = new Map(list.map((r) => [r?.name, Number(r?.total)]));
+  const out = new Map();
+  for (const name of names) {
+    const mine = byName.get(name);
+    if (!Number.isFinite(mine) || totals.length < 2) { out.set(name, 0.5); continue; }
+    let above = 0, same = 0;
+    for (const t of totals) { if (t > mine) above++; else if (t === mine) same++; }
+    out.set(name, (above + (same - 1) / 2) / (totals.length - 1));
+  }
+  return out;
+}
+
 /* 抽選：実在の申込者に、足りない人数ぶんの NPC を混ぜた集団から count 回引く。すでに当たった人は ×0.2 の重みを重ね、最大3回まで。
    rankOf（uid→会員ランク）があれば、ランクが高い人ほど重みを大きくする（最高ランクで約3倍）。ランクがなければ全員同じ重み。
    NPC は実在の申込者の平均の重み＝全体の当選割合は変わらない */
-export function kakuPickWinners({ applicants, poolTarget, count, wins = new Map(), random, dayId, rankOf = null }) {
-  const weightOf = (a) => (rankOf ? (RANK_LEVELS[rankOf.get(a.uid) || 0]?.mult || 1) : 1);
+export function kakuPickWinners({ applicants, poolTarget, count, wins = new Map(), random, dayId, rankOf = null, standing = null }) {
+  const weightOf = (a) => (standing ? 1 + (KAKU_BIAS - 1) * (standing.get(a.name) ?? 0.5) : 1) * (rankOf ? (RANK_LEVELS[rankOf.get(a.uid) || 0]?.mult || 1) : 1);
   const all = applicants.map((a) => ({ uid: a.uid, name: a.name, npc: false, base: weightOf(a) }));
   const npcN = Math.max(0, poolTarget - all.length);
   const npcBase = all.length ? all.reduce((s, p) => s + p.base, 0) / all.length : 1;
@@ -3129,6 +3146,7 @@ async function kakuWriteSlots(deps, dayId, cur, extra) {
 export async function kakuRunDraw(deps, dayId, type) {
   const doneKey = type === 1 ? "draw1Done" : "draw2Done";
   let rankDoc; // 会員ランク（yuslotRank/current。申込者がいるときだけ1回読む）
+  let standingRows; // 申込者ごとの重みの調整に使うデータ（申込者がいるときだけ1回読む）
   // 抽選の読み取りと書き込みの間に、申込や先着が入って更新時刻が変わったら、読み直してやり直す（最大4回）。
   // 申込は受付の締切までに入ったものが必ず抽選に入るようにするため（やり直さないと、抽選が行われないままになってしまう）
   for (let attempt = 0; attempt < 4; attempt++) {
@@ -3141,8 +3159,13 @@ export async function kakuRunDraw(deps, dayId, type) {
     if (apps.length && rankDoc === undefined) {
       try { rankDoc = (await rankEnsureCurrent(deps)).data.ranks || {}; } catch { rankDoc = {}; } // 読めなくても抽選は止めない（ランクなし）
     }
+    if (apps.length && standingRows === undefined) {
+      try { const raw = await deps.firestore.getRaw("rankings/assets"); standingRows = raw ? decodeFields(raw.fields).users || [] : []; }
+      catch { standingRows = []; } // 読めなくても抽選は止めない（調整なし）
+    }
+    const standing = standingRows && standingRows.length ? kakuStanding(standingRows, apps.map((a) => a.name)) : null;
     const rankOf = rankDoc ? new Map(Object.entries(rankDoc)) : null;
-    const winners = kakuPickWinners({ applicants: apps, poolTarget: kakuPoolFor(dayId, type), count: targets.length, wins: kakuWinsOf(slots), random: deps.random, dayId, rankOf });
+    const winners = kakuPickWinners({ applicants: apps, poolTarget: kakuPoolFor(dayId, type), count: targets.length, wins: kakuWinsOf(slots), random: deps.random, dayId, rankOf, standing });
     kakuShuffle(targets, deps.random).forEach((slotIdx, k) => {
       const w = winners[k]; if (!w) return;
       slots[slotIdx] = { ...slots[slotIdx], uid: w.npc ? "" : w.uid, name: w.name, npc: w.npc };
