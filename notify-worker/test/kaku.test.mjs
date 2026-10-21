@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import {
   KAKU_EPOCH, KAKU_MACHINE_NAMES, kakuDayId, kakuDayStart, kakuNextDay, kakuTimes, kakuMachineFor, kakuSameKinds, kakuInitialSlots, kakuNpcName,
   kakuCurrentHolder, kakuIsWeekend, kakuPoolFor, kakuPickWinners, kakuRunDraw, kakuRunEvent, kakuSeatRight, kakuSpinGate, kakuResultDataFor, runKakuTick, resetKakuCacheForTest,
-  handleYuslotAction, resetYuslotCacheForTest, slotApplySpin, slotRates, SLOT_MACHINES, SLOT_KAKU_RATE, SLOT_KAKU_SPECIAL_BOOST
+  handleAdminAction, handleYuslotAction, resetYuslotCacheForTest, slotApplySpin, slotRates, SLOT_MACHINES, SLOT_KAKU_RATE, SLOT_KAKU_SPECIAL_BOOST
 } from "../worker.js";
 
 console.warn = () => {};
@@ -263,6 +263,32 @@ test("確変の還元率：30分（約900スピン）の平均収支は、どの
   const k = SLOT_KAKU_RATE;
   assert.ok(k.yubasic > k.yurush && k.yurush > k.yuchance && k.yuchance > k.yutreasure, "料金の高い台ほど倍率は小さい");
   assert.ok(Math.max(k.yurainbow, k.yujackpot) <= k.yutreasure + 0.02, "高級台は料金の低い台より小さい（シミュレーションの誤差は0.02まで）");
+});
+
+test("管理者だけが、その日の確変台の当選者（名前・NPCかどうか）を見られる。プレイヤーには返さない。uid は返さない", async () => {
+  const { act, deps, state, fs } = setup({ now: TT.preOpen + M, random: rngOf(21) });
+  for (const i of [0, 1, 2]) await act(`id${i}`, `u${i}`, { action: "kakuApply", which: "pre" });
+  state.now = TT.preClose + 6000;
+  await kakuRunDraw(deps, D, 1);
+  const r = await handleAdminAction(deps, ADMIN, { action: "kakuWinners", day: D });
+  assert.equal(r.ok, true); assert.equal(r.exists, true); assert.equal(r.day, D); assert.equal(r.draw1Done, true); assert.equal(r.applied1, 3);
+  assert.equal(r.machineName, KAKU_MACHINE_NAMES[kakuMachineFor(D)]);
+  const pre = r.slots.filter((x) => x.kind === "pre");
+  assert.equal(pre.length, 13);
+  assert.ok(pre.every((x) => x.name && typeof x.npc === "boolean"), "13枠すべてに名前（NPCかプレイヤー）");
+  assert.ok(pre.some((x) => !x.npc), "土曜でなければ、申込3人のうち当たる人もいる（このシードでは）"); 
+  assert.ok(r.slots.filter((x) => x.kind !== "pre").every((x) => x.empty), "当日分はまだ決まっていない");
+  assert.ok(!JSON.stringify(r).includes("uid") && !JSON.stringify(r).includes("id0"), "uid は返さない");
+  assert.deepEqual(r.slots.map((x) => x.s), [...r.slots.map((x) => x.s)].sort((a, b) => a - b), "時刻順");
+  // 管理者以外（プレイヤー・本人でも）は見られない
+  for (const who of ["id0", "id1", "someone"]) assert.equal((await handleAdminAction(deps, who, { action: "kakuWinners", day: D })).error, "not_admin");
+  // その日のデータがまだ無い日は exists:false
+  const none = await handleAdminAction(deps, ADMIN, { action: "kakuWinners", day: "2027-01-01" });
+  assert.equal(none.ok, true); assert.equal(none.exists, false);
+  // 日付を省くと今日（サーバーの日付）
+  state.now = TT.dayStart + 9 * H;
+  assert.equal((await handleAdminAction(deps, ADMIN, { action: "kakuWinners" })).day, D);
+  assert.equal(fs.counts.getRaw >= 0, true);
 });
 
 test("通知の設定：初期は結果の2つだけON。個人ごとに変えられる。抽選結果は申し込んだ本人にだけ、その人の結果だけが届く", async () => {

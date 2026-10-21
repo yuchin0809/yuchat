@@ -38,6 +38,8 @@ import {
 
 /* 💸 コインの送金（申請は本人・OK/却下は管理者）。中身の確定は Worker */
 import { transferInit, transferOpenUser, transferOpenAdmin, transferReset } from "./yutransfer.js?v=20261020-transfer1";
+/* 🌈 確変台の当選者（管理者だけ） */
+import { kakuWinnersInit, kakuWinnersOpen, kakuWinnersReset } from "./yukakuwinners.js?v=20261021-winners1";
 
 import {
   getFirestore, collection, addDoc, getDocs, getDoc, doc, setDoc,
@@ -3659,6 +3661,9 @@ initYuWorld({
   onSettled: () => { /* 精算後は既存の coins リスナーが users の残高を拾って各画面を更新する */ }
 });
 
+/* 🌈 確変台の当選者（管理者だけ） */
+kakuWinnersInit({ callAdmin: (action, payload) => callAdminApi(action, payload), isAdmin: () => isAdminUser(), esc: (v) => escapeHTML(v) });
+
 /* 💸 コインの送金の画面 */
 transferInit({
   callEconomy: (action, payload) => callEconomyApi(action, payload),
@@ -3696,6 +3701,7 @@ logoutButton?.addEventListener("click", async () => {
     resetAnnouncementsState();
     resetUserManageState();
     transferReset();
+    kakuWinnersReset();
     pendingGameInvites = [];
     gameInvitesInitialized = false;
     if (unsubscribeMyCoins) { unsubscribeMyCoins(); unsubscribeMyCoins = null; }
@@ -5953,6 +5959,7 @@ function umBadges(entry) {
 async function openUserManageView() {
   if (!isAdminUser()) { switchView("chat"); return; }
   transferOpenAdmin();
+  kakuWinnersOpen();
   if (!userManageData && !userManageLoading) await loadUserManageList();
   else renderUserManageList();
 }
@@ -6533,7 +6540,7 @@ function renderUserManageDeleteAuthOnly(info) {
   });
 }
 
-document.getElementById("userManageRefreshButton")?.addEventListener("click", () => { loadUserManageList(); transferOpenAdmin(); });
+document.getElementById("userManageRefreshButton")?.addEventListener("click", () => { loadUserManageList(); transferOpenAdmin(); kakuWinnersOpen(); });
 userManageSearchInput?.addEventListener("input", renderUserManageList);
 userManageSortSelect?.addEventListener("change", renderUserManageList);
 userManageView?.addEventListener("click", (event) => {

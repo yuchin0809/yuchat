@@ -465,7 +465,7 @@ export async function handleAdminAction(deps, callerUid, body) {
 
   const action = typeof body?.action === "string" ? body.action : "";
   const uid = typeof body?.uid === "string" ? body.uid : "";
-  const noUidActions = ["listUsers", "notifyAnnouncement", "renameUserRefs", "transferList", "transferApprove", "transferReject"];
+  const noUidActions = ["listUsers", "notifyAnnouncement", "renameUserRefs", "transferList", "transferApprove", "transferReject", "kakuWinners"];
   if (!noUidActions.includes(action) && !UID_PATTERN.test(uid)) return { status: 400, error: "invalid_uid" };
 
   try {
@@ -482,6 +482,7 @@ export async function handleAdminAction(deps, callerUid, body) {
       case "adjustAssets": return await adminAdjustAssets(deps, callerUid, uid, body);
       case "notifyAnnouncement": return await adminNotifyAnnouncement(deps, body);
       case "renameUserRefs": return await adminRenameUserRefs(deps, body);
+      case "kakuWinners": return await adminKakuWinners(deps, body);
       case "transferList": return await adminTransferList(deps);
       case "transferApprove": return await adminTransferApprove(deps, callerUid, body);
       case "transferReject": return await adminTransferReject(deps, callerUid, body);
@@ -3308,6 +3309,21 @@ export async function kakuAnnounceResult(deps, day) {
   await deps.firestore.createIfAbsent(`announcements/kaku-${day}`, { title: truncate(`🌈 今日の確変台は「${machine}」！`, 50), body: truncate(lines.join("\n"), 480), createdAt: now, updatedAt: now, createdByUid: "yuuchat-kaku", createdByName: "ゆうスロ確変台" });
   if (d.mode === "sameDay") return { announced: true };
   return kakuPush(deps, "result1", day, "🌈 確変台の抽選結果", "", (uid) => kakuResultDataFor(d, uid, 1, machine, day));
+}
+
+/* 管理者だけ：確変台の当選者（その日の枠ごとの名前・NPCかどうか）。プレイヤーには見せない（ほかの人の名前は出さない決まり）。読み取りは1日ぶんのドキュメント1件 */
+async function adminKakuWinners(deps, body) {
+  const day = typeof body?.day === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.day) ? body.day : kakuDayId(deps.now());
+  const d = await deps.firestore.get(`yuslotKaku/${day}`);
+  if (!d) return { ok: true, day, exists: false, machineName: KAKU_MACHINE_NAMES[kakuMachineFor(day)] || "" };
+  const slots = (Array.isArray(d.slots) ? d.slots : []).slice().sort((a, b) => a.s - b.s)
+    .map((x) => ({ s: x.s, e: x.e, kind: x.kind, name: x.name || "", npc: x.npc === true, empty: !x.name && !x.uid }));
+  return {
+    ok: true, day, exists: true, machine: d.machine, machineName: KAKU_MACHINE_NAMES[d.machine] || d.machine || "", mode: d.mode,
+    draw1Done: d.draw1Done === true, draw2Done: d.draw2Done === true,
+    applied1: Number(d.applied1) || (Array.isArray(d.app1) ? d.app1.length : 0), applied2: Number(d.applied2) || (Array.isArray(d.app2) ? d.app2.length : 0),
+    slots
+  };
 }
 
 /* =========================================================
