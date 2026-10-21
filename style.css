@@ -99,6 +99,17 @@ button {
     font-size: 36px;
 }
 
+/* 起動時の読み込み画面：アプリのアイコン（icons/icon-192.png）を出す */
+.login-logo-img {
+    display: block;
+    width: 76px;
+    height: 76px;
+
+    margin: 0 auto 18px;
+
+    border-radius: 22px;
+}
+
 .login-card h1 {
     font-size: 30px;
     margin-bottom: 8px;
