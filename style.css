@@ -110,6 +110,32 @@ button {
     border-radius: 22px;
 }
 
+/* 起動時の読み込み画面：読み込み中だけ、アイコンがふわっと浮いて、文字がゆっくり点滅する（エラーの表示中は止める） */
+@keyframes yu-load-float {
+    0%, 100% { transform: translateY(0) scale(1); }
+    50% { transform: translateY(-7px) scale(1.06); }
+}
+
+@keyframes yu-load-fade {
+    0%, 100% { opacity: .45; }
+    50% { opacity: 1; }
+}
+
+#authLoadingScreen:has(#authLoadingActions.hidden) .login-logo-img {
+    animation: yu-load-float 1.5s ease-in-out infinite;
+}
+
+#authLoadingScreen:has(#authLoadingActions.hidden) #authLoadingText {
+    animation: yu-load-fade 1.5s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    #authLoadingScreen .login-logo-img,
+    #authLoadingScreen #authLoadingText {
+        animation: none !important;
+    }
+}
+
 .login-card h1 {
     font-size: 30px;
     margin-bottom: 8px;
