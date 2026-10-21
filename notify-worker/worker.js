@@ -62,6 +62,8 @@ export default {
     ctx.waitUntil(runKakuTick(env, event.scheduledTime).catch((error) => console.error("kaku tick error", String(error?.message || error).slice(0, 300))));
     /* 🏅 ゆうスロの会員ランク：毎週月曜 7:00（日本時間）に、先週の使ったコインでランクを決める。それ以外の分は Firestore に触れずにすぐ戻る */
     ctx.waitUntil(runRankTick(env, event.scheduledTime).catch((error) => console.error("rank tick error", String(error?.message || error).slice(0, 300))));
+    /* 🎫 先着ゲームの週間ランキング：毎週月曜 7:00（日本時間）に結果発表（1位500・2位250・3位100コイン）。それ以外の分は Firestore に触れずにすぐ戻る */
+    ctx.waitUntil(runBattleWeekTick(env, event.scheduledTime).catch((error) => console.error("battle week error", String(error?.message || error).slice(0, 300))));
     /* 💸 コイン送金：3日たっても承認されない申請を、1日1回（日本時間 3:07）自動で却下して返金する。それ以外の分は Firestore に触れずにすぐ戻る */
     ctx.waitUntil(runTransferExpiryTick(env, event.scheduledTime).catch((error) => console.error("transfer expiry error", String(error?.message || error).slice(0, 300))));
   }
@@ -2362,6 +2364,7 @@ export async function handleYuslotAction(deps, uid, body) {
       case "battleStart": return await battleStart(deps, uid, body);
       case "battleFinish": return await battleFinish(deps, uid, body);
       case "battleRanking": return await battleRanking(deps, uid, body);
+      case "battlePractice": return await battlePractice(deps, uid, body);
       case "rankStatus": return await rankStatus(deps, uid, body);
       case "kakuGetNotify": return { ok: true, prefs: await kakuGetNotify(deps, uid) };
       case "kakuSetNotify": return await kakuSetNotify(deps, uid, body);
@@ -3240,12 +3243,16 @@ export async function kakuQuick(deps, uid, body) {
    ・問題（カード番号・接続画面の出方・お題・同意ボタンの並び）は、サーバーが人ごと・回ごとに作る（鍵つきのハッシュから計算するので保存しない）。
    ・タイムは、スタートを押してから最後に「チケットを取る」を押すまで（サーバーが測る）。売り切れてやり直しても時計は止まらない。
    ・枠の割り当ては、サーバーに届いた順（kakuQuick の原子的な書き込み）。ランキングは通算の自己ベスト（当日分は12:00に反映）。
-   ・Firebase：1人あたり、スタートで1回・やり直しごとに1回・おしまいで2回の書き込み。ランキングは書類1つを30秒だけメモリに置く。
+   ・練習：サーバーが問題を作って返すだけ（Firestore には何も書かない）。練習のタイムは、サーバーには送らない＝ランキングには載らない。
+   ・週間ランキング：毎週月曜 7:00（会員ランクと同じ週）に結果発表。1位500・2位250・3位100コインを、結果発表と同時にお渡しする（コインの支払いと、書類の更新は1回の commit＝二重払いなし）。
+   ・Firebase：1人あたり、スタートで1回・やり直しごとに1回・おしまいで3回の書き込み。ランキング（通算・今週）は書類2つを30秒だけメモリに置く。
 ========================================================= */
 const BATTLE_WAIT_MS = 15 * KAKU_MIN;           // 待機画面に入れるのは 11:30 から
 const BATTLE_TOP = 20;                           // ランキングに出す人数
 const BATTLE_REVEAL_MS = 12 * 3600000;           // 当日の記録がランキングに載る時刻（0:00 からの経過）
 const BATTLE_BOARD = "yuslotBattle/_board";
+const BATTLE_WEEK = "yuslotBattle/_week";           // 今週のランキング：{ weekStart, rows, last }。last＝先週の結果発表
+const BATTLE_PRIZES = [500, 250, 100];                // 週間ランキングの賞金（1位・2位・3位のコイン）
 const BATTLE_CONN_MAX = 8;                       // 1回のゲームでの接続画面（リロード）の合計の上限
 /* お題の絵文字：同じなかまから、お題1つ＋まぎらわしい3つを出す */
 const BATTLE_PUZZLES = [
@@ -3351,6 +3358,8 @@ async function battleFinalize(deps, uid, rec, day, ms, slot) {
   await deps.firestore.set(`yuslotBattle/${uid}`, { day, st: rec.st, as: rec.as, a: rec.a, d: true, ms, g: slot, n: rec.n });
   try { await battleBoardAdd(deps, uid, rec.n, day, ms); }
   catch (error) { console.warn("battle board update failed", String(error?.message || error).slice(0, 120)); }
+  try { await battleWeekAdd(deps, uid, rec.n, day, ms); }
+  catch (error) { console.warn("battle week update failed", String(error?.message || error).slice(0, 120)); }
 }
 
 /* 「チケットを取る」：記録のチェック → 枠の確保（サーバーに届いた順） → 取れなければ、残りがあればやり直し */
@@ -3420,23 +3429,133 @@ async function battleBoardRows(deps, ttlMs = 30000) {
   battleBoardCache = { at: now, rows };
   return rows;
 }
-async function battleRanking(deps, uid) {
-  if (!(await kakuGate(deps, uid))) return { status: 403, error: "not_published" };
-  const now = deps.now(), day = kakuDayId(now), reveal = now >= kakuDayStart(day) + BATTLE_REVEAL_MS;
-  const rows = await battleBoardRows(deps);
+/* 12:00 より前は、当日の新記録を出さない（それまでは、今日より前の自己ベストを出す）。タイムの速い順 */
+const battleCmp = (a, b) => a.ms - b.ms || (a.day < b.day ? -1 : a.day > b.day ? 1 : 0) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+export function battleVisibleRows(rows, uid, day, reveal) {
   const vis = [];
   let pending = null;
   for (const r of rows) {
-    if (r.day === day && !reveal) {                       // 当日の記録は 12:00 に反映（それまでは、今日より前の自己ベストを出す）
+    if (r.day === day && !reveal) {
       if (r.uid === uid) pending = r.ms;
       if (r.pms > 0) vis.push({ uid: r.uid, name: r.name, ms: r.pms, day: r.pday });
     } else vis.push({ uid: r.uid, name: r.name, ms: r.ms, day: r.day });
   }
-  vis.sort((a, b) => a.ms - b.ms || (a.day < b.day ? -1 : a.day > b.day ? 1 : 0) || (a.name < b.name ? -1 : 1));
+  vis.sort(battleCmp);
+  return { vis, pending };
+}
+const battleBoardView = (vis, uid, pending, prizes = null) => {
   const mineIdx = vis.findIndex((r) => r.uid === uid);
-  return { ok: true, serverNowMs: now, total: vis.length, revealAtMs: kakuDayStart(day) + BATTLE_REVEAL_MS,
-    rows: vis.slice(0, BATTLE_TOP).map((r, i) => ({ rank: i + 1, name: r.name, ms: r.ms, day: r.day, me: r.uid === uid })),
-    me: mineIdx >= 0 ? { rank: mineIdx + 1, ms: vis[mineIdx].ms, day: vis[mineIdx].day } : null, pendingMs: pending };
+  return { total: vis.length, pendingMs: pending,
+    rows: vis.slice(0, BATTLE_TOP).map((r, i) => ({ rank: i + 1, name: r.name, ms: r.ms, day: r.day, me: r.uid === uid, ...(prizes ? { prize: prizes[i] || 0 } : {}) })),
+    me: mineIdx >= 0 ? { rank: mineIdx + 1, ms: vis[mineIdx].ms, day: vis[mineIdx].day, ...(prizes ? { prize: prizes[mineIdx] || 0 } : {}) } : null };
+};
+async function battleRanking(deps, uid) {
+  if (!(await kakuGate(deps, uid))) return { status: 403, error: "not_published" };
+  const now = deps.now(), day = kakuDayId(now), reveal = now >= kakuDayStart(day) + BATTLE_REVEAL_MS;
+  const rows = await battleBoardRows(deps);
+  const all = battleVisibleRows(rows, uid, day, reveal);
+  const out = { ok: true, serverNowMs: now, revealAtMs: kakuDayStart(day) + BATTLE_REVEAL_MS, ...battleBoardView(all.vis, uid, all.pending), week: null, last: null };
+  try {   // 今週のランキングと先週の結果発表（取れなくても、通算のランキングは返す）
+    const w = (await battleWeekEnsure(deps, { ttlMs: 30000 })).data;
+    const wv = battleVisibleRows(w.rows || [], uid, day, reveal);
+    out.week = { startMs: Number(w.weekStart), endMs: Number(w.weekStart) + RANK_WEEK_MS, prizes: BATTLE_PRIZES, ...battleBoardView(wv.vis, uid, wv.pending, BATTLE_PRIZES) };
+    const l = w.last;
+    if (l && Array.isArray(l.top) && l.top.length) {
+      const mine = l.top.find((t) => t.uid === uid);
+      out.last = { startMs: Number(l.weekStart), endMs: Number(l.endMs), total: Number(l.total) || l.top.length,
+        top: l.top.map((t) => ({ rank: t.rank, name: t.name, ms: t.ms, day: t.day, prize: t.prize, me: t.uid === uid })), me: mine ? { rank: mine.rank, prize: mine.paid ? mine.prize : 0 } : null };
+    }
+  } catch (error) { console.warn("battle week read failed", String(error?.message || error).slice(0, 120)); }
+  return out;
+}
+
+/* ----- 週間ランキング（yuslotBattle/_week）。毎週月曜 7:00 に先週の上位3人へコインを渡し、結果発表（お知らせ・通知）を出す ----- */
+let battleWeekCache = { at: 0, value: null };
+export function resetBattleWeekCacheForTest() { battleWeekCache = { at: 0, value: null }; }
+export async function battleWeekAdd(deps, uid, name, day, ms) {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const cur = await battleWeekEnsure(deps);
+    const next = battleBoardMerge(cur.data.rows || [], uid, name, day, ms);
+    try {
+      await deps.firestore.commit([{ update: { name: deps.firestore.docName(BATTLE_WEEK), fields: encodeFields({ rows: next }) }, updateMask: { fieldPaths: ["rows"] }, currentDocument: { updateTime: cur.updateTime } }]);
+      battleWeekCache = { at: 0, value: null };
+      return;
+    } catch (error) { if (isRetryableCommitError(error)) continue; throw error; }
+  }
+  throw new Error("battle week raced");
+}
+/* いまの週のドキュメントを返す。無ければ作り、週が替わっていれば先週の分を確定してコインを渡す（更新時刻の条件つきの1回の commit） */
+export async function battleWeekEnsure(deps, { ttlMs = 0 } = {}) {
+  const ws = rankWeekStart(deps.now());
+  if (ttlMs > 0 && battleWeekCache.value && deps.now() - battleWeekCache.at < ttlMs && Number(battleWeekCache.value.data.weekStart) >= ws) return battleWeekCache.value;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const raw = await deps.firestore.getRaw(BATTLE_WEEK);
+    if (!raw) { await deps.firestore.createIfAbsent(BATTLE_WEEK, { weekStart: ws, rows: [], last: null }); continue; }
+    const cur = { data: decodeFields(raw.fields), updateTime: raw.updateTime };
+    if (Number(cur.data.weekStart) >= ws) { battleWeekCache = { at: deps.now(), value: cur }; return cur; }
+    try { await battleWeekSettle(deps, cur, ws); }
+    catch (error) { if (isRetryableCommitError(error)) continue; throw error; }
+    try { await battleWeekAnnounce(deps); } catch (error) { console.warn("battle week announce failed", String(error?.message || error).slice(0, 120)); }
+  }
+  throw new Error("battle week raced");
+}
+/* 先週の上位3人にコインを渡す。支払いと、書類の更新（先週の結果・今週の空の記録）は1回の commit。いない人・実在しない人の分は渡さない（繰り下げもしない） */
+async function battleWeekSettle(deps, cur, ws) {
+  const fs = deps.firestore;
+  const rows = (cur.data.rows || []).map((r) => ({ uid: r.uid, name: r.name, ms: r.ms, day: r.day })).sort(battleCmp);
+  const top = rows.slice(0, BATTLE_PRIZES.length).map((r, i) => ({ rank: i + 1, uid: r.uid, name: r.name, ms: r.ms, day: r.day, prize: BATTLE_PRIZES[i] }));
+  const found = await Promise.all(top.map((t) => transferFindUser(fs, t.uid, t.name)));
+  const writes = [];
+  top.forEach((t, i) => {
+    t.paid = !!found[i];
+    if (found[i]) writes.push({ update: { name: fs.docName(`users/${found[i].name}`), fields: {} }, updateMask: { fieldPaths: [] }, updateTransforms: [{ fieldPath: "coins", increment: restInt(t.prize) }], currentDocument: { exists: true } });
+  });
+  const fields = { weekStart: ws, rows: [], last: { weekStart: Number(cur.data.weekStart), endMs: ws, top, total: rows.length, announced: top.length === 0 } };
+  writes.push({ update: { name: fs.docName(BATTLE_WEEK), fields: encodeFields(fields) }, updateMask: { fieldPaths: Object.keys(fields) }, currentDocument: { updateTime: cur.updateTime } });
+  await fs.commit(writes);
+  battleWeekCache = { at: 0, value: null };
+}
+const battleMd = (ms) => { const d = new Date(ms + KAKU_JST); return `${d.getUTCMonth() + 1}/${d.getUTCDate()}`; };
+/* 結果発表のお知らせ（📢・全員）と、入賞した人への通知。お知らせは固定IDで1件だけ、通知は notificationLogs で二重送信しない */
+export async function battleWeekAnnounce(deps) {
+  const fs = deps.firestore;
+  const raw = await fs.getRaw(BATTLE_WEEK);
+  const d = raw ? decodeFields(raw.fields) : null;
+  const l = d && d.last;
+  if (!l || l.announced === true || !Array.isArray(l.top) || !l.top.length) return { skipped: true };
+  const medal = ["🥇", "🥈", "🥉"];
+  const lines = [`${battleMd(l.weekStart)}〜${battleMd(l.endMs - 1)} の先着ゲーム、週間ランキングの結果発表です！（参加 ${l.total} 人）`];
+  l.top.forEach((t) => lines.push(`${medal[t.rank - 1]} ${t.rank}位 ${t.name}さん ${(t.ms / 1000).toFixed(2)}秒 → ${t.prize} コイン${t.paid ? "" : "（お渡しできませんでした）"}`));
+  lines.push("入賞したみなさんには、ゆうコインをお渡ししました🎁 今週も「🎫 当日の先着はこちら」で挑戦しよう！");
+  const now = new Date(deps.now()), id = `battle-${l.weekStart}`;
+  await fs.createIfAbsent(`announcements/${id}`, { title: truncate("🏆 先着ゲーム 週間ランキングの結果発表！", 50), body: truncate(lines.join("\n"), 480), createdAt: now, updatedAt: now, createdByUid: "yuuchat-battle", createdByName: "先着ゲーム" });
+  try { await notifyNewAnnouncement(deps, id); } catch (error) { console.warn("battle announce notify failed", String(error?.message || error).slice(0, 120)); }
+  await Promise.all(l.top.filter((t) => t.paid).map((t) => transferNotify(deps, t.uid, "🏆 先着ゲームの賞金！", `週間ランキング ${t.rank}位！ ${t.prize} コインをお渡ししました🎁`)));
+  await fs.update(BATTLE_WEEK, { last: { ...l, announced: true } });
+  battleWeekCache = { at: 0, value: null };
+  return { announced: true };
+}
+const battleWeekTickDone = new Set();
+export function resetBattleWeekTickForTest() { battleWeekTickDone.clear(); }
+/* 毎分の cron から。月曜 7:00〜7:09（日本時間）の間だけ動く（取りこぼしても、次に記録・ランキングを開いたときに追いつく） */
+export async function runBattleWeekTick(env = {}, scheduledTime = Date.now(), deps = null) {
+  const j = new Date(scheduledTime + 9 * 3600000);
+  if (j.getUTCDay() !== 1 || j.getUTCHours() !== 7 || j.getUTCMinutes() > 9) return { skipped: "outside" };
+  const key = String(rankWeekStart(scheduledTime));
+  if (battleWeekTickDone.has(key)) return { skipped: "done" };
+  const d = { ...(deps || createDefaultDeps(env)), now: () => scheduledTime };
+  const cur = await battleWeekEnsure(d);
+  const r = await battleWeekAnnounce(d);
+  battleWeekTickDone.add(key);
+  return { weekStart: cur.data.weekStart, ...r };
+}
+
+/* ----- 練習：サーバーが問題を作って返すだけ。何も保存しない（タイム・枠・ランキングには関係しない） ----- */
+async function battlePractice(deps, uid) {
+  if (!(await kakuGate(deps, uid))) return { status: 403, error: "not_published" };
+  const nonce = slotRandomHex(6);
+  const [plan, card] = await Promise.all([battlePlan(deps, "practice", uid, nonce), battleCard(deps, "practice", uid + nonce)]);
+  return { ok: true, plan, card, serverNowMs: deps.now() };
 }
 /* 画面に返すのは「自分の枠」と「先着の空き状況（名前なし）」だけ。ほかの人（NPC を含む）の予定・結果は返さない */
 /* いまの枠を使っている（使う）のが「NPC」「ほかのプレイヤー」「自分」「いない」のどれかだけを返す（名前は返さない）。台のカードに表示する */

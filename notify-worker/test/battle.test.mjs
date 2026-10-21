@@ -4,7 +4,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   kakuTimes, kakuDayId, kakuDayStart, resetKakuCacheForTest, resetYuslotCacheForTest, resetBattleCacheForTest, handleYuslotAction,
-  battleCard, battlePlan, battleProofOk, battleBoardMerge, battleOpenSlots, battleClosedList
+  battleCard, battlePlan, battleProofOk, battleBoardMerge, battleOpenSlots, battleClosedList,
+  resetBattleWeekCacheForTest, resetBattleWeekTickForTest, runBattleWeekTick, battleWeekEnsure, battleWeekAnnounce, rankWeekStart
 } from "../worker.js";
 
 console.warn = () => {};
@@ -69,7 +70,7 @@ const D = "2026-10-21";
 const TT = kakuTimes(D);
 const H = 3600000, M = 60000;
 function setup({ now = TT.quickOpen, published = true, n = 6 } = {}) {
-  resetKakuCacheForTest(); resetYuslotCacheForTest(); resetBattleCacheForTest();
+  resetKakuCacheForTest(); resetYuslotCacheForTest(); resetBattleCacheForTest(); resetBattleWeekCacheForTest(); resetBattleWeekTickForTest();
   const base = { "worldConfig/yuslot": { yuslotPublished: published } };
   for (let i = 0; i < n; i++) base[`users/u${i}`] = { uid: `id${i}`, name: `u${i}`, coins: 5000 };
   const fs = fakeFs(base);
@@ -343,4 +344,152 @@ test("読み取り・書き込みの回数：スタート＝書き込み1、お�
   const t = proofFor(s.plan); ctx.state.now += t[4];
   await ctx.act("id1", "u1", { action: "battleFinish", att: 1, slot: q0, ans: s.plan.puzzle.answer, card: String(s.card), t });
   assert.ok(ctx.fs.counts.commit - c0 <= 4, `commit ${ctx.fs.counts.commit - c0}`);
+});
+
+/* ===== 練習・週間ランキング ===== */
+const dayOf = (ctx) => kakuDayId(ctx.state.now);
+const quickOfDay = async (ctx) => { await ctx.act("id0", "u0", { action: "battleStatus" }); return ctx.fs.plain(`yuslotKaku/${dayOf(ctx)}`).slots.filter((x) => x.kind === "quick").map((x) => x.i); };
+/* i 番の人が、その日の先着の枠を取る（かかった時間を ms にそろえるため、スタートから待つ） */
+async function playOn(ctx, i, { slotNo = 0, wait = 0 } = {}) {
+  const idx = await quickOfDay(ctx);
+  const [uid, name] = who(i);
+  const s = await ctx.act(uid, name, { action: "battleStart" });
+  assert.equal(s.ok, true, JSON.stringify(s));
+  const t = proofFor(s.plan);
+  ctx.state.now += t[4] + wait;
+  return ctx.act(uid, name, { action: "battleFinish", att: s.att, slot: idx[slotNo], ans: s.plan.puzzle.answer, card: String(s.card), t });
+}
+const WEEK0 = rankWeekStart(TT.quickOpen);               // 2026-10-19（月）7:00 JST
+const MON = WEEK0 + 7 * 86400000;                         // 次の月曜 7:00
+
+test("練習：問題だけ返して、何も保存しない（いつでも何回でも・記録やランキングには関係しない）", async () => {
+  const ctx = setup({ now: TT.quickOpen - 5 * H });
+  const before = ctx.fs.docs.size;
+  const a = await ctx.act("id1", "u1", { action: "battlePractice" });
+  const b = await ctx.act("id1", "u1", { action: "battlePractice" });
+  assert.equal(a.ok, true); assert.ok(a.plan.conn.length === 4 && a.plan.puzzle.options.length === 4 && a.plan.consent.length === 10);
+  assert.ok(a.card >= 100 && a.card <= 999);
+  assert.notDeepEqual(a.plan, b.plan, "毎回ちがう問題");
+  assert.equal(ctx.fs.docs.size, before, "書類は増えない");
+  assert.equal(ctx.fs.plain("yuslotBattle/id1"), null); assert.equal(ctx.fs.plain("yuslotBattle/_board"), null);
+  assert.equal(ctx.fs.plain("yuslotBattle/_week"), null);
+  // 本番の問題は、練習の影響を受けない（その日のカード番号は同じ）
+  ctx.state.now = TT.quickOpen;
+  const s = await ctx.act("id1", "u1", { action: "battleStart" });
+  assert.equal(s.card, await battleCard(ctx.deps, D, "id1"));
+  const closed = setup({ published: false });
+  assert.equal((await closed.act("id1", "u1", { action: "battlePractice" })).error, "not_published");
+});
+
+test("週間ランキング：記録は今週の自己ベストにも入る。当日の新記録は12:00に反映", async () => {
+  const ctx = setup();
+  const r = await playOn(ctx, 1);
+  assert.equal(r.got, true);
+  const w = ctx.fs.plain("yuslotBattle/_week");
+  assert.equal(w.weekStart, WEEK0); assert.equal(w.rows.length, 1); assert.equal(w.rows[0].uid, "id1"); assert.equal(w.rows[0].ms, r.ms);
+  const early = await ctx.act("id2", "u2", { action: "battleRanking" });
+  assert.equal(early.week.rows.length, 0, "12:00 前は出ない"); assert.deepEqual(early.week.prizes, [500, 250, 100]);
+  assert.equal(early.week.startMs, WEEK0); assert.equal(early.week.endMs, MON);
+  ctx.state.now = kakuDayStart(D) + 12 * H; resetBattleCacheForTest(); resetBattleWeekCacheForTest();
+  const late = await ctx.act("id2", "u2", { action: "battleRanking" });
+  assert.equal(late.week.rows.length, 1); assert.equal(late.week.rows[0].name, "u1"); assert.equal(late.week.rows[0].prize, 500);
+  assert.ok(!JSON.stringify(late).includes("id1"), "uid は返さない");
+});
+
+test("結果発表：月曜7:00に、先週の上位3人へ500・250・100コイン（二重には払わない）・お知らせと通知・ランキングは空に", async () => {
+  const ctx = setup({ n: 6 });
+  // 水・木・金に、タイムの違う5人が記録（1日の先着の枠は2つ。1回きりで取れた人も、取れなかった人もタイムは載る）
+  ctx.state.now = TT.quickOpen;
+  const r1 = await playOn(ctx, 1, { slotNo: 0 });                 // u1：水・速い
+  const r2 = await playOn(ctx, 2, { slotNo: 1, wait: 3000 });     // u2：水・少し遅い
+  ctx.state.now = kakuTimes("2026-10-22").quickOpen; resetKakuCacheForTest();
+  const r3 = await playOn(ctx, 3, { slotNo: 0, wait: 9000 });     // u3：木・遅い
+  const r4 = await playOn(ctx, 4, { slotNo: 1, wait: 20000 });    // u4：木・とても遅い
+  ctx.state.now = kakuTimes("2026-10-23").quickOpen; resetKakuCacheForTest();
+  const r5 = await playOn(ctx, 5, { slotNo: 0, wait: 1000 });     // u5：金・2番目に速い
+  assert.equal(ctx.fs.plain("yuslotBattle/_week").rows.length, 5);
+  const expect = [[1, r1.ms], [2, r2.ms], [3, r3.ms], [4, r4.ms], [5, r5.ms]].sort((a, b) => a[1] - b[1]).map(([i]) => i);
+  const coinsBefore = Object.fromEntries([1, 2, 3, 4, 5].map((i) => [i, ctx.fs.plain(`users/u${i}`).coins]));
+  // 日曜まで：まだ払わない
+  ctx.state.now = MON - 60000;
+  await ctx.act("id1", "u1", { action: "battleRanking" });
+  assert.equal(ctx.fs.plain("users/u1").coins, coinsBefore[1], "週の途中は払わない");
+  // 月曜 7:00 の cron
+  const out = await runBattleWeekTick({}, MON + 30000, ctx.deps);
+  assert.equal(out.weekStart, MON);
+  const week = ctx.fs.plain("yuslotBattle/_week");
+  assert.equal(week.weekStart, MON); assert.deepEqual(week.rows, []);
+  const prizes = [500, 250, 100];
+  const topRows = week.last.top;
+  assert.equal(topRows.length, 3);
+  topRows.forEach((t, k) => {
+    assert.equal(t.rank, k + 1); assert.equal(t.prize, prizes[k]); assert.equal(t.paid, true);
+    const i = Number(t.uid.slice(2));
+    assert.equal(ctx.fs.plain(`users/u${i}`).coins, coinsBefore[i] + prizes[k], `${k + 1}位にコイン`);
+  });
+  assert.equal(week.last.total, 5);
+  assert.deepEqual(topRows.map((t) => Number(t.uid.slice(2))), expect.slice(0, 3), "タイムの速い順");
+  const rest = [1, 2, 3, 4, 5].filter((i) => !topRows.some((t) => t.uid === `id${i}`));
+  rest.forEach((i) => assert.equal(ctx.fs.plain(`users/u${i}`).coins, coinsBefore[i], "4位以下には渡さない"));
+  // お知らせ（全員）が1件だけ
+  const ann = ctx.fs.plain(`announcements/battle-${WEEK0}`);
+  assert.ok(ann && ann.title.includes("週間ランキング")); assert.ok(ann.body.includes("500 コイン") && ann.body.includes("250 コイン") && ann.body.includes("100 コイン"));
+  assert.equal(week.last.announced, true);
+  // 二重払いなし：もう一度動かしても、再読み込みしても増えない
+  resetBattleWeekTickForTest();
+  assert.equal((await runBattleWeekTick({}, MON + 60000, ctx.deps)).skipped, true);
+  await battleWeekEnsure(ctx.deps); await ctx.act("id1", "u1", { action: "battleRanking" });
+  topRows.forEach((t, k) => { const i = Number(t.uid.slice(2)); assert.equal(ctx.fs.plain(`users/u${i}`).coins, coinsBefore[i] + prizes[k], "二重払いなし"); });
+  // ランキング画面：今週は空、先週の結果発表が出る（本人には自分の順位と賞金）
+  resetBattleCacheForTest(); resetBattleWeekCacheForTest();
+  ctx.state.now = MON + 3600000;
+  const view = await ctx.act(`id${Number(topRows[0].uid.slice(2))}`, `u${Number(topRows[0].uid.slice(2))}`, { action: "battleRanking" });
+  assert.equal(view.week.rows.length, 0); assert.equal(view.week.startMs, MON);
+  assert.equal(view.last.top.length, 3); assert.equal(view.last.me.rank, 1); assert.equal(view.last.me.prize, 500);
+  assert.ok(!JSON.stringify(view).includes('"id'), "uid は返さない");
+  assert.equal(view.rows.length >= 4, true, "通算のランキングは残る（先週までの記録）");
+});
+
+test("結果発表：月曜の cron が動かなくても、次に記録・ランキングを開いた人が追いつかせる。参加者が少なくても、いない人の賞金は出さない", async () => {
+  const ctx = setup({ n: 4 });
+  ctx.state.now = TT.quickOpen;
+  const r1 = await playOn(ctx, 1);
+  const r2 = await playOn(ctx, 2, { slotNo: 1, wait: 2000 });
+  assert.ok(r1.ms < r2.ms);
+  const c1 = ctx.fs.plain("users/u1").coins, c2 = ctx.fs.plain("users/u2").coins;
+  ctx.state.now = MON + 5 * H;                                      // cron が動かないまま、月曜の昼
+  await ctx.act("id3", "u3", { action: "battleRanking" });
+  assert.equal(ctx.fs.plain("users/u1").coins, c1 + 500); assert.equal(ctx.fs.plain("users/u2").coins, c2 + 250);
+  const week = ctx.fs.plain("yuslotBattle/_week");
+  assert.equal(week.last.top.length, 2, "参加者は2人だけ");
+  assert.ok(ctx.fs.plain(`announcements/battle-${WEEK0}`));
+});
+
+test("結果発表：参加者がいない週は何も払わず、お知らせも出さない。実在しない人の賞金は出さない", async () => {
+  const ctx = setup({ n: 3 });
+  ctx.fs.put("yuslotBattle/_week", encF({ weekStart: WEEK0, rows: [], last: null }));
+  ctx.state.now = MON + 2 * H;
+  await battleWeekEnsure(ctx.deps);
+  assert.equal(ctx.fs.plain("yuslotBattle/_week").weekStart, MON);
+  assert.equal(ctx.fs.plain(`announcements/battle-${WEEK0}`), null);
+  // 1位が削除済みのユーザー
+  const c2 = setup({ n: 3 });
+  c2.fs.put("yuslotBattle/_week", encF({ weekStart: WEEK0, last: null, rows: [{ uid: "gone", name: "きえた", ms: 5000, day: D, pms: 0, pday: "" }, { uid: "id1", name: "u1", ms: 9000, day: D, pms: 0, pday: "" }] }));
+  c2.state.now = MON + 2 * H;
+  await battleWeekEnsure(c2.deps);
+  const last = c2.fs.plain("yuslotBattle/_week").last;
+  assert.equal(last.top[0].paid, false); assert.equal(last.top[1].paid, true); assert.equal(last.top[1].rank, 2, "繰り下げない");
+  assert.equal(c2.fs.plain("users/u1").coins, 5000 + 250);
+});
+
+test("結果発表の cron：月曜 7:00〜7:09 だけ動く（それ以外は何も読まない）", async () => {
+  const ctx = setup();
+  const reads = () => ctx.fs.counts ? 0 : 0;
+  void reads;
+  assert.equal((await runBattleWeekTick({}, MON - 60000, ctx.deps)).skipped, "outside");
+  assert.equal((await runBattleWeekTick({}, MON + 10 * 60000, ctx.deps)).skipped, "outside");
+  assert.equal((await runBattleWeekTick({}, MON + 3 * 86400000, ctx.deps)).skipped, "outside");
+  const ok = await runBattleWeekTick({}, MON + 60000, ctx.deps);
+  assert.ok(!ok.skipped || ok.skipped === true);
+  assert.equal((await runBattleWeekTick({}, MON + 120000, ctx.deps)).skipped, "done");
 });
