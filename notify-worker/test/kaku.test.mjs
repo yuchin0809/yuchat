@@ -311,9 +311,9 @@ test("管理者だけが、その日の確変台の当選者（名前・NPCか�
 
 test("通知の設定：初期は結果の2つだけON。個人ごとに変えられる。抽選結果は申し込んだ本人にだけ、その人の結果だけが届く", async () => {
   const { act, deps, fs, sent, state } = setup({ now: TT.preOpen + M, random: rngOf(4) });
-  assert.deepEqual((await act("id0", "u0", { action: "kakuGetNotify" })).prefs, { pub: false, same: false, result1: true, result2: true });
+  assert.deepEqual((await act("id0", "u0", { action: "kakuGetNotify" })).prefs, { pub: false, same: false, result1: true, result2: true, cancel: false });
   assert.equal((await act("id1", "u1", { action: "kakuSetNotify", prefs: { result1: false, pub: true, bogus: true } })).prefs.result1, false);
-  assert.deepEqual((await act("id1", "u1", { action: "kakuGetNotify" })).prefs, { pub: true, same: false, result1: false, result2: true });
+  assert.deepEqual((await act("id1", "u1", { action: "kakuGetNotify" })).prefs, { pub: true, same: false, result1: false, result2: true, cancel: false });
   for (const i of [0, 1, 2, 3, 4]) fs.put(`fcmTokens/tok${i}`, encF({ uid: `id${i}` }));
   for (const i of [0, 1, 2]) await act(`id${i}`, `u${i}`, { action: "kakuApply", which: "pre" });   // id3・id4 は申し込まない。id1 は結果の通知をOFF
   state.now = TT.preClose;
