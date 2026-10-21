@@ -79,11 +79,12 @@ function setup({ now = TT.quickOpen, published = true, n = 6 } = {}) {
   const act = (uid, name, body) => handleYuslotAction(deps, uid, { ...body, username: name });
   return { fs, deps, state, act };
 }
+const ordOf = (plan) => [...plan.order].sort((a, b) => a - b);
 const who = (i) => [`id${i}`, `u${i}`];
 /* 人間の速さで、きちんと遊んだ記録をつくる（各画面にかかる時間は、最低限の少し上） */
 function proofFor(plan, extra = 100) {
-  const [c0, c1, c2, c3] = plan.conn;
-  const need = [500 * c0 + 300, 500 * c1 + 300, 500 * c2 + 300, 500 * c3 + 700, 100];
+  const [c0, c1, c2, c3, c4, c5] = plan.conn;
+  const need = [500 * c0 + 300, 500 * c1 + 300, 500 * c2 + 300, 500 * c3 + 300, 500 * c4 + 300, 500 * c5 + 700, 100];
   const t = []; let sum = 0;
   need.forEach((x) => { sum += x + extra; t.push(sum); });
   return t;
@@ -93,8 +94,8 @@ async function play(ctx, i, slot, { wait = 0 } = {}) {
   const s = await ctx.act(uid, name, { action: "battleStart" });
   assert.equal(s.ok, true, JSON.stringify(s));
   const t = proofFor(s.plan);
-  ctx.state.now += t[4] + wait;
-  return { start: s, res: await ctx.act(uid, name, { action: "battleFinish", att: s.att, slot, ans: s.plan.puzzle.answer, card: String(s.card), t }) };
+  ctx.state.now += t[6] + wait;
+  return { start: s, res: await ctx.act(uid, name, { action: "battleFinish", att: s.att, slot, ans: s.plan.puzzle.answer, ord: ordOf(s.plan), card: String(s.card), t }) };
 }
 const quickIdx = async (ctx) => { await ctx.act("id0", "u0", { action: "battleStatus" }); return ctx.fs.plain(`yuslotKaku/${D}`).slots.filter((x) => x.kind === "quick").map((x) => x.i); };
 
@@ -105,7 +106,9 @@ test("問題：人ごと・回ごとにサーバーが作る（同じ入力な�
     const p = await battlePlan(deps, D, `uid${u}`, att), p2 = await battlePlan(deps, D, `uid${u}`, att);
     assert.deepEqual(p, p2, "同じ入力なら同じ問題");
     assert.ok(p.conn[0] >= 2 && p.conn[0] <= 4, "最初の接続は2〜4回");
-    assert.ok(p.conn.slice(1).every((x) => x >= 0 && x <= 2) && p.conn.reduce((s, x) => s + x, 0) <= 8, "切り替えは0〜2回、合計は8回まで");
+    assert.ok(p.conn.length === 6 && p.conn.slice(1).every((x) => x >= 0 && x <= 2) && p.conn.reduce((s, x) => s + x, 0) <= 10, "切り替えは0〜2回（5か所）、合計は10回まで");
+    assert.equal(new Set(p.order).size, 4, "並べ替えの数字は4つ"); assert.ok(p.order.every((n) => n >= 1 && n <= 99));
+    assert.ok(p.slide.emoji && p.slide.goal && p.slide.label.includes("右に移してください"));
     assert.equal(new Set(p.puzzle.options).size, 4);
     assert.ok(p.puzzle.answer >= 0 && p.puzzle.answer < 4);
     assert.deepEqual([...p.consent].sort((a, b) => a - b), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
@@ -120,13 +123,13 @@ test("問題：人ごと・回ごとにサーバーが作る（同じ入力な�
 test("チェック：速すぎる・順番がおかしい・サーバーの測った時間より長い申告は通さない", async () => {
   const { deps } = setup();
   const plan = await battlePlan(deps, D, "x", 1), t = proofFor(plan);
-  assert.equal(battleProofOk(plan, t, t[4] + 10), null);
+  assert.equal(battleProofOk(plan, t, t[6] + 10), null);
   assert.equal(battleProofOk(plan, t.map((x) => Math.floor(x / 3)), 5000), "too_fast");
   assert.equal(battleProofOk(plan, [...t].reverse(), 99999), "bad_proof");
-  assert.equal(battleProofOk(plan, t.slice(0, 4), 99999), "bad_proof");
+  assert.equal(battleProofOk(plan, t.slice(0, 5), 99999), "bad_proof");
   assert.equal(battleProofOk(plan, t.map(() => NaN), 99999), "bad_proof");
-  assert.equal(battleProofOk(plan, t, t[4] - 3500), "bad_proof", "端末の申告のほうが長い");
-  assert.equal(battleProofOk(plan, t, t[4] + 3), null, "多少のずれは許す");
+  assert.equal(battleProofOk(plan, t, t[6] - 3500), "bad_proof", "端末の申告のほうが長い");
+  assert.equal(battleProofOk(plan, t, t[6] + 3), null, "多少のずれは許す");
 });
 
 test("状態：待機画面（11:30〜）からカード番号が見え、11:45 前は始められない。公開前は使えない", async () => {
@@ -185,17 +188,19 @@ test("検証：違う答え・カード番号・古い回・速すぎる記録�
   const [q0] = await quickIdx(ctx);
   const s = await ctx.act("id1", "u1", { action: "battleStart" });
   const t = proofFor(s.plan);
-  ctx.state.now += t[4];
-  const send = (over) => ctx.act("id1", "u1", { action: "battleFinish", att: s.att, slot: q0, ans: s.plan.puzzle.answer, card: String(s.card), t, ...over });
+  ctx.state.now += t[6];
+  const send = (over) => ctx.act("id1", "u1", { action: "battleFinish", att: s.att, slot: q0, ans: s.plan.puzzle.answer, ord: ordOf(s.plan), card: String(s.card), t, ...over });
   assert.equal((await send({ ans: (s.plan.puzzle.answer + 1) % 4 })).error, "bad_proof");
   assert.equal((await send({ card: "000" })).error, "bad_proof");
+  assert.equal((await send({ ord: [...ordOf(s.plan)].reverse() })).error, "bad_proof", "数字を小さい順にタップしていない");
+  assert.equal((await send({ ord: undefined })).error, "bad_proof");
   assert.equal((await send({ att: 9 })).error, "stale");
   assert.equal((await send({ t: t.map((x) => Math.floor(x / 4)) })).error, "too_fast");
   assert.equal((await send({ slot: 999 })).error !== undefined, true);
   assert.equal(ctx.fs.plain(`yuslotKaku/${D}`).slots[q0].uid, "");
   assert.equal((await send({})).got, true, "正しい記録なら取れる");
   const none = setup();
-  assert.equal((await none.act("id1", "u1", { action: "battleFinish", att: 1, slot: 0, ans: 0, card: "100", t: [1, 2, 3, 4, 5] })).error, "no_game");
+  assert.equal((await none.act("id1", "u1", { action: "battleFinish", att: 1, slot: 0, ans: 0, card: "100", t: [1, 2, 3, 4, 5, 6, 7] })).error, "no_game");
 });
 
 test("早い者勝ち：先に押した人が取り、遅れた人は「売り切れ」→残りの枠があればやり直せる（時計は進み続ける）", async () => {
@@ -204,19 +209,19 @@ test("早い者勝ち：先に押した人が取り、遅れた人は「売り�
   const a = await ctx.act("id1", "u1", { action: "battleStart" });
   const b = await ctx.act("id2", "u2", { action: "battleStart" });
   const ta = proofFor(a.plan), tb = proofFor(b.plan);
-  ctx.state.now += Math.max(ta[4], tb[4]);
-  const send = (id, nm, s, t, slot) => ctx.act(id, nm, { action: "battleFinish", att: s.att, slot, ans: s.plan.puzzle.answer, card: String(s.card), t });
+  ctx.state.now += Math.max(ta[6], tb[6]);
+  const send = (id, nm, s, t, slot) => ctx.act(id, nm, { action: "battleFinish", att: s.att, slot, ans: s.plan.puzzle.answer, ord: ordOf(s.plan), card: String(s.card), t });
   const ra = await send("id1", "u1", a, ta, q0);
   assert.equal(ra.got, true);
   const rb = await send("id2", "u2", b, tb, q0);
   assert.equal(rb.done, false); assert.equal(rb.got, false); assert.equal(rb.soldOut, true); assert.equal(rb.reason, "taken");
-  assert.equal(rb.att, 2); assert.ok(rb.plan && rb.plan.conn.length === 4, "新しい問題");
+  assert.equal(rb.att, 2); assert.ok(rb.plan && rb.plan.conn.length === 6, "新しい問題");
   assert.deepEqual(rb.closed.filter((x) => x.why === "taken").map((x) => x.i), [q0]);
   assert.equal(ctx.fs.plain("yuslotBattle/id2").st, b.st, "時計（スタート時刻）はそのまま");
   assert.equal(ctx.fs.plain("yuslotBattle/id2").d, false);
   // 2回目：もう一方の枠を取る
-  const t2 = proofFor(rb.plan); ctx.state.now += t2[4];
-  const rb2 = await ctx.act("id2", "u2", { action: "battleFinish", att: rb.att, slot: q1, ans: rb.plan.puzzle.answer, card: String(rb.card), t: t2 });
+  const t2 = proofFor(rb.plan); ctx.state.now += t2[6];
+  const rb2 = await ctx.act("id2", "u2", { action: "battleFinish", att: rb.att, slot: q1, ans: rb.plan.puzzle.answer, ord: ordOf(rb.plan), card: String(rb.card), t: t2 });
   assert.equal(rb2.got, true); assert.equal(rb2.slot, q1);
   assert.ok(rb2.ms > ra.ms, "やり直した分、タイムは長い");
   // 3人目：もう売り切れ。スタートも押せない（記録なし）
@@ -229,16 +234,16 @@ test("売り切れで終わった人（残りの枠なし）もタイムは記�
   const [q0, q1] = await quickIdx(ctx);
   const starts = await Promise.all([1, 2, 3, 4].map((i) => ctx.act(`id${i}`, `u${i}`, { action: "battleStart" })));
   ctx.state.now += 20000;
-  const results = await Promise.all(starts.map((s, k) => ctx.act(`id${k + 1}`, `u${k + 1}`, { action: "battleFinish", att: s.att, slot: q0, ans: s.plan.puzzle.answer, card: String(s.card), t: proofFor(s.plan) })));
+  const results = await Promise.all(starts.map((s, k) => ctx.act(`id${k + 1}`, `u${k + 1}`, { action: "battleFinish", att: s.att, slot: q0, ans: s.plan.puzzle.answer, ord: ordOf(s.plan), card: String(s.card), t: proofFor(s.plan) })));
   assert.equal(results.filter((r) => r.got).length, 1, "同じ枠を取れたのは1人だけ");
   assert.equal(ctx.fs.plain(`yuslotKaku/${D}`).slots.filter((x) => x.kind === "quick" && x.uid).length, 1);
   // 残りの枠を1人が取り、最後の1人は残り枠なしで終わる
   const retry = results.map((r, k) => ({ r, k })).filter((x) => !x.r.got);
   const x = retry[0]; ctx.state.now += 5000;
-  const g = await ctx.act(`id${x.k + 1}`, `u${x.k + 1}`, { action: "battleFinish", att: x.r.att, slot: q1, ans: x.r.plan.puzzle.answer, card: String(x.r.card), t: proofFor(x.r.plan) });
+  const g = await ctx.act(`id${x.k + 1}`, `u${x.k + 1}`, { action: "battleFinish", att: x.r.att, slot: q1, ans: x.r.plan.puzzle.answer, ord: ordOf(x.r.plan), card: String(x.r.card), t: proofFor(x.r.plan) });
   assert.equal(g.got, true);
   const y = retry[1]; ctx.state.now += 5000;
-  const last = await ctx.act(`id${y.k + 1}`, `u${y.k + 1}`, { action: "battleFinish", att: y.r.att, slot: q1, ans: y.r.plan.puzzle.answer, card: String(y.r.card), t: proofFor(y.r.plan) });
+  const last = await ctx.act(`id${y.k + 1}`, `u${y.k + 1}`, { action: "battleFinish", att: y.r.att, slot: q1, ans: y.r.plan.puzzle.answer, ord: ordOf(y.r.plan), card: String(y.r.card), t: proofFor(y.r.plan) });
   assert.equal(last.done, true); assert.equal(last.got, false); assert.equal(last.soldOut, true);
   assert.equal(ctx.fs.plain(`yuslotBattle/id${y.k + 1}`).g, -1);
   const board = ctx.fs.plain("yuslotBattle/_board").rows;
@@ -253,8 +258,8 @@ test("開き直し：ページを閉じて入り直しても時計はそのま�
   assert.equal(s2.att, 2); assert.equal(s2.st, s1.st);
   assert.equal(s2.card, s1.card, "カード番号はその日ずっと同じ");
   const [q0] = await quickIdx(ctx);
-  const old = proofFor(s1.plan); ctx.state.now += old[4];
-  assert.equal((await ctx.act("id1", "u1", { action: "battleFinish", att: 1, slot: q0, ans: s1.plan.puzzle.answer, card: String(s1.card), t: old })).error, "stale", "前の回の記録は使えない");
+  const old = proofFor(s1.plan); ctx.state.now += old[6];
+  assert.equal((await ctx.act("id1", "u1", { action: "battleFinish", att: 1, slot: q0, ans: s1.plan.puzzle.answer, ord: ordOf(s1.plan), card: String(s1.card), t: old })).error, "stale", "前の回の記録は使えない");
 });
 
 test("抽選の枠を持っている人も先着ゲームに参加できる（時間が重なる枠は取れず、重ならない枠は取れる）", async () => {
@@ -274,12 +279,12 @@ test("抽選の枠を持っている人も先着ゲームに参加できる（�
   assert.equal(s.ok, true);
   if (target) {
     // 重なる枠を選んで押すと、取れずに「やり直し」になる（もう一方の枠は取れる）
-    const t = proofFor(s.plan); ctx.state.now += t[4];
-    const r = await ctx.act("id3", "u3", { action: "battleFinish", att: 1, slot: target.i, ans: s.plan.puzzle.answer, card: String(s.card), t });
+    const t = proofFor(s.plan); ctx.state.now += t[6];
+    const r = await ctx.act("id3", "u3", { action: "battleFinish", att: 1, slot: target.i, ans: s.plan.puzzle.answer, ord: ordOf(s.plan), card: String(s.card), t });
     assert.equal(r.done, false); assert.equal(r.reason, "overlap");
     assert.equal(r.closed.find((x) => x.i === target.i).why, "rule");
-    const t2 = proofFor(r.plan); ctx.state.now += t2[4];
-    const r2 = await ctx.act("id3", "u3", { action: "battleFinish", att: 2, slot: other.i, ans: r.plan.puzzle.answer, card: String(r.card), t: t2 });
+    const t2 = proofFor(r.plan); ctx.state.now += t2[6];
+    const r2 = await ctx.act("id3", "u3", { action: "battleFinish", att: 2, slot: other.i, ans: r.plan.puzzle.answer, ord: ordOf(r.plan), card: String(r.card), t: t2 });
     assert.equal(r2.got, true);
   }
 });
@@ -292,8 +297,8 @@ test("先着の枠がすでに取れている人（通信エラーなどの後�
   day.slots[q0].uid = "id1"; day.slots[q0].name = "u1";
   ctx.fs.put(`yuslotKaku/${D}`, encF(day)); resetKakuCacheForTest();
   assert.equal(s.haveQuick, false);
-  const t = proofFor(s.plan); ctx.state.now += t[4];
-  const r = await ctx.act("id1", "u1", { action: "battleFinish", att: 1, slot: q1, ans: s.plan.puzzle.answer, card: String(s.card), t });
+  const t = proofFor(s.plan); ctx.state.now += t[6];
+  const r = await ctx.act("id1", "u1", { action: "battleFinish", att: 1, slot: q1, ans: s.plan.puzzle.answer, ord: ordOf(s.plan), card: String(s.card), t });
   assert.equal(r.done, true); assert.equal(r.got, true); assert.equal(r.slot, q0);
   assert.equal(ctx.fs.plain(`yuslotKaku/${D}`).slots[q1].uid, "", "2枠目は取れない（1人1枠）");
 });
@@ -341,8 +346,8 @@ test("読み取り・書き込みの回数：スタート＝書き込み1、お�
   const s = await ctx.act("id1", "u1", { action: "battleStart" });
   const [q0] = await quickIdx(ctx);
   assert.equal(ctx.fs.plain("yuslotBattle/id1").a, 1);
-  const t = proofFor(s.plan); ctx.state.now += t[4];
-  await ctx.act("id1", "u1", { action: "battleFinish", att: 1, slot: q0, ans: s.plan.puzzle.answer, card: String(s.card), t });
+  const t = proofFor(s.plan); ctx.state.now += t[6];
+  await ctx.act("id1", "u1", { action: "battleFinish", att: 1, slot: q0, ans: s.plan.puzzle.answer, ord: ordOf(s.plan), card: String(s.card), t });
   assert.ok(ctx.fs.counts.commit - c0 <= 4, `commit ${ctx.fs.counts.commit - c0}`);
 });
 
@@ -356,8 +361,8 @@ async function playOn(ctx, i, { slotNo = 0, wait = 0 } = {}) {
   const s = await ctx.act(uid, name, { action: "battleStart" });
   assert.equal(s.ok, true, JSON.stringify(s));
   const t = proofFor(s.plan);
-  ctx.state.now += t[4] + wait;
-  return ctx.act(uid, name, { action: "battleFinish", att: s.att, slot: idx[slotNo], ans: s.plan.puzzle.answer, card: String(s.card), t });
+  ctx.state.now += t[6] + wait;
+  return ctx.act(uid, name, { action: "battleFinish", att: s.att, slot: idx[slotNo], ans: s.plan.puzzle.answer, ord: ordOf(s.plan), card: String(s.card), t });
 }
 const WEEK0 = rankWeekStart(TT.quickOpen);               // 2026-10-19（月）7:00 JST
 const MON = WEEK0 + 7 * 86400000;                         // 次の月曜 7:00
@@ -367,7 +372,7 @@ test("練習：問題だけ返して、何も保存しない（いつでも何�
   const before = ctx.fs.docs.size;
   const a = await ctx.act("id1", "u1", { action: "battlePractice" });
   const b = await ctx.act("id1", "u1", { action: "battlePractice" });
-  assert.equal(a.ok, true); assert.ok(a.plan.conn.length === 4 && a.plan.puzzle.options.length === 4 && a.plan.consent.length === 10);
+  assert.equal(a.ok, true); assert.ok(a.plan.conn.length === 6 && a.plan.order.length === 4 && a.plan.slide.emoji && a.plan.puzzle.options.length === 4 && a.plan.consent.length === 10);
   assert.ok(a.card >= 100 && a.card <= 999);
   assert.notDeepEqual(a.plan, b.plan, "毎回ちがう問題");
   assert.equal(ctx.fs.docs.size, before, "書類は増えない");
