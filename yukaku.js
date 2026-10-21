@@ -6,6 +6,8 @@
    ・Firebase には触れない。Worker に聞くのは、ロビーを開いたときと30秒おき、ボタンを押したときだけ。
 ========================================================= */
 
+import { ticketInit, ticketOpen } from "./yuticket.js?v=20261022-ticket1";
+
 let deps = null;          // { api, esc, machines(id→{name,emoji}), onChange }
 let data = null;          // 直近の kakuStatus
 let prefs = null;         // 通知の設定
@@ -24,7 +26,11 @@ function hm(ms) { const d = new Date(ms + 9 * 3600000); return `${d.getUTCHours(
 function md(ms) { const d = new Date(ms + 9 * 3600000); return `${d.getUTCMonth() + 1}/${d.getUTCDate()}`; }
 const KIND = { pre: "前日抽選", lot: "当日抽選", quick: "先着" };
 
-export function kakuInit(d) { deps = d; injectStyles(); }
+export function kakuInit(d) {
+  deps = d; injectStyles();
+  // 🎫 先着ゲーム（全画面）。閉じたら、売り場の表示（獲得した枠など）を読み直す
+  ticketInit({ api: d.api, esc: d.esc, machineName: () => { const m = data && data.today && d.machines[data.today.machine]; return m ? m.name : "確変台"; }, onClose: () => refreshKaku() });
+}
 export function stopKaku() { running = false; if (timer) { clearTimeout(timer); timer = null; } if (boundaryTimer) { clearTimeout(boundaryTimer); boundaryTimer = null; } }
 export function startKaku() { stopKaku(); running = true; pollLoop(); }
 /* 先着の受付中（11:45〜枠が始まるまで）は、売り切れの表示を早く更新するため10秒おき、ふだんは30秒おきに読み直す */
@@ -95,15 +101,14 @@ export function kakuPanelHtml() {
     else if (now < T.sameClose) html += t.applied2 ? `<div class="yk-ok">✓ 当日分の抽選に申込済み（${hm(T.sameClose)}に抽選。結果はあなたにだけ届きます）</div>` : `<button type="button" class="yk-btn" data-kk="apply" data-which="same">🎟 当日分の抽選に申し込む（${hm(T.sameClose)}まで・無料）</button>`;
     else if (t.applied2) html += lotMine ? `<div class="yk-ok">🎉 当日分の抽選に当選しました！</div>` : `<div class="yk-sub">当日分の抽選は外れでした。${now < T.quickOpen ? `先着は ${hm(T.quickOpen)} から！` : "先着に挑戦してみよう！"}</div>`;
     else html += `<div class="yk-sub">当日分の抽選は終わりました。${now < T.quickOpen ? `先着は ${hm(T.quickOpen)} から！` : ""}</div>`;
-    // 先着：2つの枠のうち、好きなほうを自分で選んで取れる。11:45ちょうどから押せる（それまでは押せない）
-    const open = now >= T.quickOpen;
-    html += `<div class="yk-sub">先着は ${hm(T.quickOpen)} から・1人1枠。下の${quicks.length}つの枠から、好きなほうを選べます。</div>
+    // 先着：ゲームで早さを競う（11:45 から）。ボタンから先着ページ（参加・ランキング）を開く
+    html += `<div class="yk-sub">先着は ${hm(T.quickOpen)} から・1人1枚。ミニゲームの早さで取り合います！ ランキングも見られます。</div>
       <div class="yk-quick">${quicks.map((x) => {
         const started = now >= x.s;
-        const right = x.mine ? `<em>⭐ あなたが獲得！</em>` : x.taken ? `<em>売り切れ</em>` : started ? `<em>受付終了</em>`
-          : `<button type="button" class="yk-btn small" data-kk="quick" data-slot="${x.i}" ${open ? "" : "disabled"}>${open ? "この枠をとる" : `${hm(T.quickOpen)}から`}</button>`;
+        const right = x.mine ? `<em>⭐ あなたが獲得！</em>` : x.taken ? `<em>売り切れ</em>` : started ? `<em>受付終了</em>` : "";
         return `<div class="yk-q"><span>${hm(x.s)}〜${hm(x.e)}（先着）</span>${right}</div>`;
-      }).join("")}</div>`;
+      }).join("")}</div>
+      <button type="button" class="yk-btn" data-kk="ticket">🎫 当日の先着はこちら</button>`;
     if (t.mode === "sameDay") html += `<div class="yk-sub">※今日は前日の抽選がなく、当日分だけの発売です。</div>`;
     html += `</div>`;
   }
@@ -146,7 +151,7 @@ async function onClick(b) {
   busy = true; msg = "";
   try {
     if (kind === "apply") { const r = await deps.api("kakuApply", { which: b.getAttribute("data-which") }); msg = r.already ? "すでに申込済みです。" : "抽選に申し込みました！ 結果をお楽しみに🌈"; }
-    else if (kind === "quick") { await deps.api("kakuQuick", { slot: Number(b.getAttribute("data-slot")) }); msg = "先着で枠をゲットしました！🎉 時間になったら台で遊べます。"; }
+    else if (kind === "ticket") { busy = false; ticketOpen(); return; }
     else if (kind === "savepref") {
       const next = {}; document.querySelectorAll("[data-pref]").forEach((c) => { next[c.getAttribute("data-pref")] = c.checked; });
       prefs = (await deps.api("kakuSetNotify", { prefs: next })).prefs; msg = "通知の設定を保存しました。";

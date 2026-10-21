@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import {
   KAKU_EPOCH, KAKU_MACHINE_NAMES, kakuDayId, kakuDayStart, kakuNextDay, kakuTimes, kakuMachineFor, kakuSameKinds, kakuInitialSlots, kakuNpcName,
   kakuCurrentHolder, kakuIsWeekend, kakuPoolFor, kakuPickWinners, kakuStanding, kakuRunDraw, kakuRunEvent, kakuSeatRight, kakuSpinGate, kakuResultDataFor, runKakuTick, resetKakuCacheForTest,
-  handleAdminAction, handleYuslotAction, resetYuslotCacheForTest, slotApplySpin, slotRates, SLOT_MACHINES, SLOT_KAKU_RATE, SLOT_KAKU_SPECIAL_BOOST
+  handleAdminAction, handleYuslotAction, kakuQuick, resetYuslotCacheForTest, slotApplySpin, slotRates, SLOT_MACHINES, SLOT_KAKU_RATE, SLOT_KAKU_SPECIAL_BOOST
 } from "../worker.js";
 
 console.warn = () => {};
@@ -80,7 +80,8 @@ function setup({ now = TT.preOpen + H, random = rngOf(11), users, published = tr
   const sent = [];
   const state = { now };
   const deps = { firestore: fs, adminUid: ADMIN, random, now: () => state.now, slotSecret: "s", sendFcm: async (token, data) => { sent.push({ token, data }); return { ok: true }; } };
-  const act = (uid, name, body) => handleYuslotAction(deps, uid, { ...body, username: name });
+  // 先着は、ゲーム（battle*）を通らないと買えない。ここでは枠の割り当て（kakuQuick）そのものを直接呼ぶ
+  const act = (uid, name, body) => body.action === "kakuQuick" ? kakuQuick(deps, uid, { ...body, username: name }) : handleYuslotAction(deps, uid, { ...body, username: name });
   return { fs, deps, state, act, sent };
 }
 

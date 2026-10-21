@@ -106,7 +106,8 @@ async function main() {
     kakuEvil: `kakuverify-${stamp}`,
     prefsEvil: `prefsverify-${stamp}`,
     transferEvil: `transferverify-${stamp}`,
-    rankEvil: `rankverify-${stamp}`
+    rankEvil: `rankverify-${stamp}`,
+    battleEvil: `battleverify-${stamp}`
   };
   const cleanupRefs = [
     db.doc(`derbyManualRaces/${ids.closedRace}`),
@@ -128,7 +129,8 @@ async function main() {
     db.doc(`yuslotKaku/${ids.kakuEvil}`),
     db.doc(`yuslotPrefs/${ids.prefsEvil}`),
     db.doc(`coinTransfers/${ids.transferEvil}`),
-    db.doc(`yuslotRank/${ids.rankEvil}`)
+    db.doc(`yuslotRank/${ids.rankEvil}`),
+    db.doc(`yuslotBattle/${ids.battleEvil}`)
   ];
 
   const results = [];
@@ -229,6 +231,11 @@ async function main() {
     const rankRef = db.doc(`yuslotRank/${ids.rankEvil}`);
     await checkDeniedAfterPropagation("自分のランクをブラウザから書く", () => create("yuslotRank", ids.rankEvil, { weekStart: 1, ranks: { [TEST_UID]: 5 } }), () => rankRef.delete());
     await checkDeniedAfterPropagation("全員のランクをブラウザから直接読む", () => get(`yuslotRank/${ids.rankEvil}`));
+
+    /* 🎫 先着ゲーム：一人ひとりの記録とランキングの元データ（yuslotBattle）もサーバー（通知 Worker）だけ */
+    const battleRef = db.doc(`yuslotBattle/${ids.battleEvil}`);
+    await checkDeniedAfterPropagation("自分のタイムをブラウザから書く", () => create("yuslotBattle", ids.battleEvil, { day: "2026-10-21", d: true, ms: 1, g: 0 }), () => battleRef.delete());
+    await checkDeniedAfterPropagation("先着ゲームの記録をブラウザから直接読む", () => get(`yuslotBattle/${ids.battleEvil}`));
 
     /* ④ 読み取りと、管理用以外のデータ（今まで通りのルール） */
     await check("手動レースの読み取り", "ALLOW", get(`derbyManualRaces/${ids.closedRace}`));

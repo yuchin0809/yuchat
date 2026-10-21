@@ -2357,7 +2357,11 @@ export async function handleYuslotAction(deps, uid, body) {
       case "lotterySetPublished": return await lotterySetPublished(deps, uid, body);
       case "kakuStatus": return await kakuStatus(deps, uid, body);
       case "kakuApply": return await kakuApply(deps, uid, body);
-      case "kakuQuick": return await kakuQuick(deps, uid, body);
+      // 先着は、ゲーム（battle*）を通らないと買えない（kakuQuick を直接呼ぶ入口はない）
+      case "battleStatus": return await battleStatus(deps, uid, body);
+      case "battleStart": return await battleStart(deps, uid, body);
+      case "battleFinish": return await battleFinish(deps, uid, body);
+      case "battleRanking": return await battleRanking(deps, uid, body);
       case "rankStatus": return await rankStatus(deps, uid, body);
       case "kakuGetNotify": return { ok: true, prefs: await kakuGetNotify(deps, uid) };
       case "kakuSetNotify": return await kakuSetNotify(deps, uid, body);
@@ -3039,7 +3043,8 @@ export function kakuTimes(dayId) {
     sameClose: t0 + 10 * H + 45 * KAKU_MIN, quickOpen: t0 + 11 * H + 45 * KAKU_MIN, playEnd: t0 + 15 * H + 20 * KAKU_MIN };
 }
 function kakuHash(str) { let h = 2166136261; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
-function kakuSeeded(seed) { let a = kakuHash(seed); return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+function kakuMulberry(a) { return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+function kakuSeeded(seed) { return kakuMulberry(kakuHash(seed)); }
 
 /* その日の確変台（日付だけで決まる。前日と同じ台は避ける） */
 const kakuMachineCache = new Map();
@@ -3203,7 +3208,7 @@ async function kakuApply(deps, uid, body) {
   kakuDocCache.delete(dayId);
   return { ok: true, already: false };
 }
-async function kakuQuick(deps, uid, body) {
+export async function kakuQuick(deps, uid, body) {
   const idx = Number(body?.slot);
   if (!Number.isInteger(idx)) return { status: 400, error: "bad_request" };
   if (!(await kakuGate(deps, uid))) return { status: 403, error: "not_published" };
@@ -3227,7 +3232,211 @@ async function kakuQuick(deps, uid, body) {
   slots[idx] = { ...slot, uid, name: me.name, npc: false };
   try { await kakuWriteSlots(deps, dayId, { data: { slots }, updateTime: cur.updateTime }, {}); }
   catch (error) { if (isRetryableCommitError(error)) return { status: 409, error: "busy" }; throw error; }
-  return { ok: true, slot: idx };
+  return { ok: true, slot: idx, name: me.name };
+}
+/* =========================================================
+   🎫 先着ゲーム（確変台の当日分の先着）
+   ・11:45 になったら「先着はこちら」を押してスタート。接続画面→チケット選択→〇〇を選択→カード番号→同意→「チケットを取る」。
+   ・問題（カード番号・接続画面の出方・お題・同意ボタンの並び）は、サーバーが人ごと・回ごとに作る（鍵つきのハッシュから計算するので保存しない）。
+   ・タイムは、スタートを押してから最後に「チケットを取る」を押すまで（サーバーが測る）。売り切れてやり直しても時計は止まらない。
+   ・枠の割り当ては、サーバーに届いた順（kakuQuick の原子的な書き込み）。ランキングは通算の自己ベスト（当日分は12:00に反映）。
+   ・Firebase：1人あたり、スタートで1回・やり直しごとに1回・おしまいで2回の書き込み。ランキングは書類1つを30秒だけメモリに置く。
+========================================================= */
+const BATTLE_WAIT_MS = 15 * KAKU_MIN;           // 待機画面に入れるのは 11:30 から
+const BATTLE_TOP = 20;                           // ランキングに出す人数
+const BATTLE_REVEAL_MS = 12 * 3600000;           // 当日の記録がランキングに載る時刻（0:00 からの経過）
+const BATTLE_BOARD = "yuslotBattle/_board";
+const BATTLE_CONN_MAX = 8;                       // 1回のゲームでの接続画面（リロード）の合計の上限
+/* お題の絵文字：同じなかまから、お題1つ＋まぎらわしい3つを出す */
+const BATTLE_PUZZLES = [
+  [["🐱", "ねこ"], ["🐶", "いぬ"], ["🐭", "ねずみ"], ["🐰", "うさぎ"], ["🐻", "くま"], ["🐼", "パンダ"], ["🐸", "かえる"], ["🐵", "さる"], ["🐷", "ぶた"], ["🦊", "きつね"], ["🐯", "とら"], ["🐔", "にわとり"]],
+  [["🍎", "りんご"], ["🍊", "みかん"], ["🍌", "バナナ"], ["🍇", "ぶどう"], ["🍓", "いちご"], ["🍉", "すいか"], ["🍑", "もも"], ["🍋", "レモン"], ["🍒", "さくらんぼ"], ["🍐", "なし"]],
+  [["🚗", "くるま"], ["🚕", "タクシー"], ["🚌", "バス"], ["🚓", "パトカー"], ["🚑", "きゅうきゅうしゃ"], ["🚒", "しょうぼうしゃ"], ["🚲", "じてんしゃ"], ["🚃", "でんしゃ"], ["✈️", "ひこうき"], ["🚢", "ふね"]],
+  [["😀", "にっこり"], ["😢", "ないている"], ["😡", "おこっている"], ["😴", "ねむっている"], ["😎", "サングラス"], ["😱", "びっくり"], ["🥺", "うるうる"], ["😍", "ハートの目"], ["🤔", "かんがえ中"], ["😷", "マスク"]],
+  [["☀️", "たいよう"], ["🌙", "つき"], ["⭐", "ほし"], ["☁️", "くも"], ["🌈", "にじ"], ["⚡", "かみなり"], ["❄️", "ゆき"], ["🔥", "ひ"], ["💧", "みず"], ["🌸", "さくら"]]
+];
+
+async function battleRand(deps, ...parts) {
+  const key = await slotHmacKey(deps.slotSecret);
+  const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode("battle:" + parts.join(":"))));
+  return kakuMulberry(((sig[0] << 24) | (sig[1] << 16) | (sig[2] << 8) | sig[3]) >>> 0);
+}
+/* その日のカード番号（人ごと・3桁。待機画面から出す） */
+export async function battleCard(deps, day, uid) { const r = await battleRand(deps, "card", day, uid); return 100 + Math.floor(r() * 900); }
+/* 1回ぶんの問題。conn＝接続画面で押すリロードの回数［最初の接続, チケット選択の後, 〇〇選択の後, カード番号の後］ */
+export async function battlePlan(deps, day, uid, att) {
+  const r = await battleRand(deps, "plan", day, uid, att);
+  const [target, ...rest] = kakuShuffle(BATTLE_PUZZLES[Math.floor(r() * BATTLE_PUZZLES.length)], r);
+  const options = kakuShuffle([target, ...rest.slice(0, 3)], r);
+  const conn = [2 + Math.floor(r() * 3), 0, 0, 0];
+  for (let k = 1; k < 4; k++) conn[k] = r() < 1 / 3 ? 1 + (r() < 0.5 ? 1 : 0) : 0;
+  let over = conn.reduce((s, x) => s + x, 0) - BATTLE_CONN_MAX;
+  for (let k = 3; k >= 1 && over > 0; k--) { const cut = Math.min(conn[k], over); conn[k] -= cut; over -= cut; }
+  return { conn, puzzle: { label: `「${target[1]}」を選択してください`, options: options.map((x) => x[0]), answer: options.indexOf(target) }, consent: kakuShuffle([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], r) };
+}
+/* 端末から届いた操作の記録（t＝各画面を終えた時刻：チケット選択の「次へ」／〇〇の「次へ」／カード番号／同意10個／「チケットを取る」。スタート画面を押してからのミリ秒）が、人間の速さか */
+export function battleProofOk(plan, t, attemptMs) {
+  if (!Array.isArray(t) || t.length !== 5 || !t.every((x) => Number.isFinite(x) && x >= 0)) return "bad_proof";
+  for (let i = 1; i < 5; i++) if (t[i] < t[i - 1]) return "bad_proof";
+  const [c0, c1, c2, c3] = plan.conn;
+  const need = [500 * c0 + 300, 500 * c1 + 300, 500 * c2 + 300, 500 * c3 + 700, 100]; // リロード1回は0.5秒かかる、ボタン1回は0.07秒より速くは押せない、など
+  for (let i = 0; i < 5; i++) if (t[i] - (i ? t[i - 1] : 0) < need[i]) return "too_fast";
+  if (attemptMs < t[4] - 3000) return "bad_proof";                       // 端末の申告が、サーバーの測った時間より長いはずがない
+  if (attemptMs < need.reduce((s, x) => s + x, 0)) return "too_fast";
+  return null;
+}
+const battleQuickOf = (slots) => (slots || []).filter((x) => x.kind === "quick");
+/* いま取れる先着の枠（取られていない・始まっていない・自分のルールに反しない） */
+export function battleOpenSlots(slots, uid, now) {
+  const mine = (slots || []).filter((x) => x.uid === uid);
+  if (mine.some((x) => x.kind === "quick") || mine.length >= KAKU_MAX_PER_DAY) return [];
+  return battleQuickOf(slots).filter((x) => !x.uid && !x.name && now < x.s && !mine.some((m) => m.s < x.e && x.s < m.e)).map((x) => x.i);
+}
+const battleUntaken = (slots, now) => battleQuickOf(slots).filter((x) => !x.uid && !x.name && now < x.s).map((x) => x.i);
+/* やり直しのとき、選べない枠（売り切れ・始まった・自分のルールで取れない） */
+export function battleClosedList(slots, uid, now) {
+  const open = new Set(battleOpenSlots(slots, uid, now));
+  return battleQuickOf(slots).filter((x) => !open.has(x.i)).map((x) => ({ i: x.i, why: x.uid || x.name ? "taken" : now >= x.s ? "started" : "rule" }));
+}
+const battleSlotsView = (slots, uid) => battleQuickOf(slots).map((x) => ({ i: x.i, s: x.s, e: x.e, mine: x.uid === uid }));
+
+async function battleGate(deps, uid) {
+  if (!(await kakuGate(deps, uid))) return { status: 403, error: "not_published" };
+  const now = deps.now(), day = kakuDayId(now);
+  if (day < KAKU_EPOCH) return { status: 409, error: "no_event" };
+  return { now, day, t: kakuTimes(day) };
+}
+async function battleGetRec(deps, uid, day) {
+  const d = await deps.firestore.get(`yuslotBattle/${uid}`);
+  return d && d.day === day ? d : null;
+}
+const battleRecView = (rec) => ({ done: rec.d === true, got: rec.d === true && rec.g >= 0, slot: rec.g, ms: rec.ms || 0 });
+
+async function battleStatus(deps, uid) {
+  const g = await battleGate(deps, uid);
+  if (g.error) return g.error === "no_event" ? { ok: true, active: false, serverNowMs: deps.now() } : g;
+  const { now, day, t } = g;
+  const [cur, rec] = await Promise.all([now >= t.sameOpen - 2 * 3600000 ? kakuEnsureDay(deps, day) : kakuGetDay(deps, day), battleGetRec(deps, uid, day)]);
+  const slots = cur ? cur.data.slots : kakuInitialSlots(day);
+  const out = { ok: true, active: true, serverNowMs: now, times: { waitOpen: t.quickOpen - BATTLE_WAIT_MS, goAt: t.quickOpen }, slots: battleSlotsView(slots, uid), allTaken: battleUntaken(slots, now).length === 0 && now >= t.quickOpen };
+  if (now >= out.times.waitOpen) out.card = await battleCard(deps, day, uid);
+  if (rec) out.rec = battleRecView(rec);
+  return out;
+}
+
+/* 「先着はこちら」：スタート（最初の1回は時計を動かす。やり直し・開き直しは、時計はそのままで新しい問題をもらう） */
+async function battleStart(deps, uid, body) {
+  const g = await battleGate(deps, uid);
+  if (g.error) return g;
+  const { now, day, t } = g;
+  if (now < t.quickOpen) return { status: 409, error: "not_open" };
+  const [cur, rec0] = await Promise.all([kakuEnsureDay(deps, day), battleGetRec(deps, uid, day)]);
+  if (rec0 && rec0.d === true) return { ok: true, done: true, rec: battleRecView(rec0) };
+  const slots = cur.data.slots;
+  if (!battleUntaken(slots, now).length) {            // 完売後は参加できない。途中だった人は、ここで終わりにする（タイムは記録する）
+    if (rec0) { const ms = Math.max(1, now - rec0.st); await battleFinalize(deps, uid, rec0, day, ms, -1); return { ok: true, done: true, rec: { done: true, got: false, slot: -1, ms } }; }
+    return { ok: true, soldOut: true };
+  }
+  const me = await loadMyUser(deps.firestore, uid, body?.username);
+  if (me.error) return me.error;
+  const att = rec0 ? rec0.a + 1 : 1, st = rec0 ? rec0.st : now;
+  await deps.firestore.set(`yuslotBattle/${uid}`, { day, st, as: now, a: att, d: false, n: me.name });
+  const [plan, card] = await Promise.all([battlePlan(deps, day, uid, att), battleCard(deps, day, uid)]);
+  return { ok: true, att, st, serverNowMs: now, card, plan, slots: battleSlotsView(slots, uid), closed: rec0 ? battleClosedList(slots, uid, now) : [],
+    haveQuick: slots.some((x) => x.uid === uid && x.kind === "quick") };
+}
+
+/* 1日1件の記録を確定する（ランキングへの反映は失敗しても、チケットや結果は消さない） */
+async function battleFinalize(deps, uid, rec, day, ms, slot) {
+  await deps.firestore.set(`yuslotBattle/${uid}`, { day, st: rec.st, as: rec.as, a: rec.a, d: true, ms, g: slot, n: rec.n });
+  try { await battleBoardAdd(deps, uid, rec.n, day, ms); }
+  catch (error) { console.warn("battle board update failed", String(error?.message || error).slice(0, 120)); }
+}
+
+/* 「チケットを取る」：記録のチェック → 枠の確保（サーバーに届いた順） → 取れなければ、残りがあればやり直し */
+async function battleFinish(deps, uid, body) {
+  const g = await battleGate(deps, uid);
+  if (g.error) return g;
+  const { now, day, t } = g;
+  if (now < t.quickOpen) return { status: 409, error: "not_open" };
+  const slotIdx = Number(body?.slot), att = Number(body?.att);
+  if (!Number.isInteger(slotIdx) || !Number.isInteger(att)) return { status: 400, error: "bad_request" };
+  const rec = await battleGetRec(deps, uid, day);
+  if (!rec) return { status: 409, error: "no_game" };
+  if (rec.d === true) return { ok: true, done: true, ...battleRecView(rec) };
+  if (rec.a !== att) return { status: 409, error: "stale" };
+  const [plan, card] = await Promise.all([battlePlan(deps, day, uid, att), battleCard(deps, day, uid)]);
+  if (Number(body?.ans) !== plan.puzzle.answer || String(body?.card) !== String(card)) return { status: 400, error: "bad_proof" };
+  const proof = battleProofOk(plan, body?.t, now - rec.as);
+  if (proof) return { status: 400, error: proof };
+  const ms = Math.max(1, now - rec.st);
+  let res;
+  for (let k = 0; k < 3; k++) { res = await kakuQuick(deps, uid, { slot: slotIdx, username: body?.username }); if (res.error !== "busy") break; }
+  if (res.ok) { await battleFinalize(deps, uid, rec, day, ms, slotIdx); return { ok: true, done: true, got: true, slot: slotIdx, ms }; }
+  if (["bad_request", "not_published", "no_event", "not_open"].includes(res.error)) return res;
+  if (res.status !== 409) return res;
+  // 取れなかった：残りの枠があればやり直し、なければここで終わり
+  const cur = await kakuGetDay(deps, day, 0);
+  const slots = cur.data.slots;
+  const held = slots.find((x) => x.uid === uid && x.kind === "quick"); // 直前の通信エラーなどで、すでに取れていた場合
+  if (held) { await battleFinalize(deps, uid, rec, day, ms, held.i); return { ok: true, done: true, got: true, slot: held.i, ms }; }
+  if (!battleOpenSlots(slots, uid, now).length) { await battleFinalize(deps, uid, rec, day, ms, -1); return { ok: true, done: true, got: false, soldOut: true, ms }; }
+  const att2 = att + 1;
+  await deps.firestore.set(`yuslotBattle/${uid}`, { day, st: rec.st, as: now, a: att2, d: false, n: rec.n });
+  return { ok: true, done: false, got: false, soldOut: true, reason: res.error, att: att2, plan: await battlePlan(deps, day, uid, att2), card, serverNowMs: now, closed: battleClosedList(slots, uid, now), slots: battleSlotsView(slots, uid) };
+}
+
+/* ----- ランキング（yuslotBattle/_board：{ rows: [{ uid, name, ms, day, pms, pday }] }）。pms／pday は、今日より前の自己ベスト ----- */
+export function battleBoardMerge(rows, uid, name, day, ms) {
+  const out = rows.map((r) => ({ ...r }));
+  const row = out.find((r) => r.uid === uid);
+  if (!row) { out.push({ uid, name, ms, day, pms: 0, pday: "" }); return out; }
+  row.name = name;
+  if (row.day === day) { if (ms < row.ms) row.ms = ms; return out; }
+  if (ms < row.ms) { row.pms = row.ms; row.pday = row.day; row.ms = ms; row.day = day; }
+  return out;
+}
+async function battleBoardAdd(deps, uid, name, day, ms) {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const raw = await deps.firestore.getRaw(BATTLE_BOARD);
+    const rows = raw ? decodeFields(raw.fields).rows || [] : [];
+    const next = battleBoardMerge(rows, uid, name, day, ms);
+    try {
+      if (raw) await deps.firestore.commit([{ update: { name: deps.firestore.docName(BATTLE_BOARD), fields: encodeFields({ rows: next }) }, updateMask: { fieldPaths: ["rows"] }, currentDocument: { updateTime: raw.updateTime } }]);
+      else if (!(await deps.firestore.createIfAbsent(BATTLE_BOARD, { rows: next }))) continue;
+      battleBoardCache = { at: 0, rows: null };
+      return;
+    } catch (error) { if (isRetryableCommitError(error)) continue; throw error; }
+  }
+  throw new Error("battle board raced");
+}
+let battleBoardCache = { at: 0, rows: null };
+export function resetBattleCacheForTest() { battleBoardCache = { at: 0, rows: null }; }
+async function battleBoardRows(deps, ttlMs = 30000) {
+  const now = deps.now();
+  if (battleBoardCache.rows && now - battleBoardCache.at < ttlMs) return battleBoardCache.rows;
+  const raw = await deps.firestore.getRaw(BATTLE_BOARD);
+  const rows = raw ? decodeFields(raw.fields).rows || [] : [];
+  battleBoardCache = { at: now, rows };
+  return rows;
+}
+async function battleRanking(deps, uid) {
+  if (!(await kakuGate(deps, uid))) return { status: 403, error: "not_published" };
+  const now = deps.now(), day = kakuDayId(now), reveal = now >= kakuDayStart(day) + BATTLE_REVEAL_MS;
+  const rows = await battleBoardRows(deps);
+  const vis = [];
+  let pending = null;
+  for (const r of rows) {
+    if (r.day === day && !reveal) {                       // 当日の記録は 12:00 に反映（それまでは、今日より前の自己ベストを出す）
+      if (r.uid === uid) pending = r.ms;
+      if (r.pms > 0) vis.push({ uid: r.uid, name: r.name, ms: r.pms, day: r.pday });
+    } else vis.push({ uid: r.uid, name: r.name, ms: r.ms, day: r.day });
+  }
+  vis.sort((a, b) => a.ms - b.ms || (a.day < b.day ? -1 : a.day > b.day ? 1 : 0) || (a.name < b.name ? -1 : 1));
+  const mineIdx = vis.findIndex((r) => r.uid === uid);
+  return { ok: true, serverNowMs: now, total: vis.length, revealAtMs: kakuDayStart(day) + BATTLE_REVEAL_MS,
+    rows: vis.slice(0, BATTLE_TOP).map((r, i) => ({ rank: i + 1, name: r.name, ms: r.ms, day: r.day, me: r.uid === uid })),
+    me: mineIdx >= 0 ? { rank: mineIdx + 1, ms: vis[mineIdx].ms, day: vis[mineIdx].day } : null, pendingMs: pending };
 }
 /* 画面に返すのは「自分の枠」と「先着の空き状況（名前なし）」だけ。ほかの人（NPC を含む）の予定・結果は返さない */
 /* いまの枠を使っている（使う）のが「NPC」「ほかのプレイヤー」「自分」「いない」のどれかだけを返す（名前は返さない）。台のカードに表示する */
