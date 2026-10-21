@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   LOTTERY, lotteryNextDrawMs, lotteryRoundId, lotteryEventFor, lotteryPrizeOf, lotteryTiersFor, lotteryNumberLabel, lotterySaleStartMs, lotteryPrizeNumbers, lotteryAllocate, lotteryDrawWinners,
-  lotteryRunDraw, lotteryResizeRound, runLotteryTick, handleYuslotAction, resetLotteryCacheForTest
+  lotteryRunDraw, lotteryResizeRound, runLotteryTick, handleAdminAction, handleYuslotAction, resetLotteryCacheForTest
 } from "../worker.js";
 
 console.warn = () => {}; // 通知の送信（テストでは未接続）の警告を出さない
@@ -45,6 +45,7 @@ function fakeFs(initial = {}) {
         if (w.currentDocument?.exists === true && !cur) throw Object.assign(new Error("404 NOT_FOUND"), { status: 404 });
       }
       for (const w of writes) {
+        if (w.delete) { docs.delete(w.delete.slice(ROOT.length + 1)); continue; }
         const path = w.update.name.slice(ROOT.length + 1);
         const cur = docs.get(path)?.fields || {};
         const next = w.updateMask ? { ...cur } : { ...w.update.fields };
@@ -391,6 +392,40 @@ test("引っ越し前の回：購入は付け替えが済むまで断る（番�
   const d = await lotteryRunDraw(depsD, T);
   assert.equal(d.status, "drawn");
   assert.equal(fsD.plain("lotteryRounds/2026-10-23").tickets, 1, "券が1枚として数えられる（消えない）");
+});
+
+test("管理者の返金：そのユーザーが買った宝くじを全部取り消して全額返金する。番号は空きに戻り、ほかの人の番号・コインは変わらない。二重に返金しない", async () => {
+  const { fs, deps, buy } = setup();
+  const t = await buy("uT", "たろう", 5, "seq");
+  const h = await buy("uH", "はなこ", 3, "random");
+  assert.equal(coins(fs, "たろう"), 1000 - 50);
+  const admin = (body) => handleAdminAction(deps, ADMIN, { action: "lotteryRefund", ...body });
+  // 確認だけ（何も変えない）
+  const pre = await admin({ uid: "uT", dryRun: true });
+  assert.equal(pre.ok, true); assert.equal(pre.dryRun, true); assert.equal(pre.tickets, 5); assert.equal(pre.refund, 50);
+  assert.equal(coins(fs, "たろう"), 950); assert.ok(fs.docs.has("lotteryEntries/2026-10-23_uT"), "確認だけでは消えない");
+  // 実行
+  const r = await admin({ uid: "uT" });
+  assert.equal(r.ok, true); assert.equal(r.tickets, 5); assert.equal(r.refund, 50); assert.equal(r.afterCoins, 1000);
+  assert.equal(coins(fs, "たろう"), 1000, "全額返金");
+  assert.equal(fs.docs.has("lotteryEntries/2026-10-23_uT"), false, "番号の記録は消える");
+  const round = fs.plain("lotteryRounds/2026-10-23");
+  assert.equal(round.tickets, 3); assert.equal(round.sales, 30, "枚数・売上が減る");
+  assert.deepEqual([...round.soldBits].map((c, i) => c === "1" ? i : -1).filter((i) => i >= 0), h.numbers, "売れた番号は はなこ の分だけ残る");
+  assert.deepEqual(fs.plain("lotteryEntries/2026-10-23_uH").numbers, h.numbers); assert.equal(coins(fs, "はなこ"), 1000 - 30, "ほかの人は変わらない");
+  assert.ok([...fs.docs.keys()].some((k) => k.startsWith("adminAuditLogs/")), "操作の記録が残る");
+  // 二重に返金しない
+  const again = await admin({ uid: "uT" });
+  assert.equal(again.ok, true); assert.equal(again.tickets, 0); assert.equal(again.refund, 0); assert.equal(coins(fs, "たろう"), 1000);
+  // 取り消した番号は、また買える
+  const re = await buy("uT", "たろう", 5, "seq");
+  assert.equal(re.ok, true); assert.equal(new Set([...re.numbers, ...h.numbers]).size, 8);
+  // 管理者以外は取り消せない
+  assert.equal((await handleAdminAction(deps, "uT", { action: "lotteryRefund", uid: "uT" })).error, "not_admin");
+  assert.equal((await admin({ uid: "uNobody" })).error, "user_not_found");
+  // 抽選が済んだ回は取り消せない
+  fs.put("lotteryRounds/2026-10-23", encF({ ...fs.plain("lotteryRounds/2026-10-23"), status: "done" }));
+  assert.equal((await admin({ uid: "uT" })).error, "already_drawn");
 });
 
 /* 15人が100枚ずつ（連番と バラ）買って、1,500枚をすべて売り切る */

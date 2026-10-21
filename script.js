@@ -6114,6 +6114,15 @@ function renderUserManageDetail(info) {
       <p id="umCoinError" class="admin-form-error"></p>
     </section>` : "";
 
+  /* 宝くじの購入の取り消し・全額返金（本人から頼まれたとき。いま販売中の回の分だけ） */
+  const lotteryHtml = hasUserDoc && info.user && !deleting ? `
+    <section class="um-coins" aria-label="宝くじの取り消し">
+      <div class="um-coins-balance">🎟 宝くじ</div>
+      <div class="um-coins-row"><button type="button" class="secondary" data-um-lottery-refund>購入を取り消して全額返金…</button></div>
+      <p class="um-note">いま販売中の回で、この人が買った宝くじを全部取り消し、全額を返金します（番号は空きに戻ります。抽選が済んだ回は取り消せません）。</p>
+      <p id="umLotteryError" class="admin-form-error"></p>
+    </section>` : "";
+
   /* 総資産の増減（内訳は開いたときに Worker から読む） */
   const assetHtml = hasUserDoc && info.user && !deleting ? `
     <section class="um-coins um-assets" aria-label="総資産の増減" data-um-assets-uid="${escapeHTML(info.uid)}">
@@ -6132,6 +6141,7 @@ function renderUserManageDetail(info) {
     <h3>👤 ${escapeHTML(info.name || "ログイン情報だけのアカウント")}</h3>
     <dl class="um-detail">${rows.map(([k, v]) => `<dt>${escapeHTML(k)}</dt><dd>${escapeHTML(v)}</dd>`).join("")}</dl>
     ${coinHtml}
+    ${lotteryHtml}
     ${assetHtml}
     ${info.isAdmin ? `<p class="um-note">管理者のアカウントは停止・削除できません。</p>` : `<p class="um-note">サブアカウントかどうか確信がないときは、まず「停止」を使ってください（あとで解除できます）。完全削除は取り消せません。</p>`}
     <div class="um-actions">${buttons.join("")}</div>
@@ -6143,6 +6153,7 @@ function renderUserManageDetail(info) {
   modalEl.querySelector('[data-um-action="delete"]')?.addEventListener("click", () => renderUserManageDelete(info));
   modalEl.querySelector('[data-um-action="deleteAuthOnly"]')?.addEventListener("click", () => renderUserManageDeleteAuthOnly(info));
   modalEl.querySelectorAll("[data-um-coin]").forEach((button) => button.addEventListener("click", () => runUserManageAdjustCoins(info, button.dataset.umCoin)));
+  modalEl.querySelector("[data-um-lottery-refund]")?.addEventListener("click", () => runUserManageLotteryRefund(info));
   modalEl.querySelectorAll("[data-um-asset]").forEach((button) => button.addEventListener("click", () => previewUserManageAssets(info, button.dataset.umAsset)));
   if (assetHtml) loadUserManageAssets(info);
 }
@@ -6319,6 +6330,30 @@ async function runUserManageAdjustCoins(info, direction) {
     }
     showError(errorEl, describeAdminError(error));
     modalEl.querySelectorAll("[data-um-coin]").forEach((b) => { b.disabled = false; });
+  } finally {
+    userManageBusy = false;
+  }
+}
+
+/* 宝くじの購入の取り消し・全額返金：まず何枚・いくらかを Worker に確かめて、確認してから実行する */
+async function runUserManageLotteryRefund(info) {
+  if (userManageBusy) return;
+  const errorEl = document.getElementById("umLotteryError");
+  showError(errorEl, "");
+  userManageBusy = true;
+  try {
+    const pre = await callAdminApi("lotteryRefund", { uid: info.uid, dryRun: true });
+    if (!pre.tickets) { showError(errorEl, "いま販売中の回で、この人が買った宝くじはありません。"); return; }
+    if (!confirm(`${info.name} さんが買った宝くじ（${pre.roundName}）\n${pre.tickets.toLocaleString()} 枚を取り消して、${pre.refund.toLocaleString()} コインを全額返金します。\n\nよろしいですか？`)) return;
+    const r = await callAdminApi("lotteryRefund", { uid: info.uid });
+    if (Number.isSafeInteger(r.afterCoins)) info.user = { ...info.user, coins: r.afterCoins };
+    showAppToast("👤 ユーザー管理", `${info.name}の宝くじ ${r.tickets} 枚を取り消し、${r.refund.toLocaleString()} コインを返金しました。`);
+    userManageBusy = false;
+    renderUserManageDetail(info);
+    loadUserManageList();
+  } catch (error) {
+    console.error("宝くじの取り消しエラー:", error.code || error.message);
+    showError(errorEl, error.code === "already_drawn" ? "この回はもう抽選が済んでいるため、取り消せません。" : describeAdminError(error));
   } finally {
     userManageBusy = false;
   }

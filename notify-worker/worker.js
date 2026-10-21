@@ -482,6 +482,7 @@ export async function handleAdminAction(deps, callerUid, body) {
       case "adjustAssets": return await adminAdjustAssets(deps, callerUid, uid, body);
       case "notifyAnnouncement": return await adminNotifyAnnouncement(deps, body);
       case "renameUserRefs": return await adminRenameUserRefs(deps, body);
+      case "lotteryRefund": return await adminLotteryRefund(deps, callerUid, uid, body);
       case "kakuWinners": return await adminKakuWinners(deps, body);
       case "transferList": return await adminTransferList(deps);
       case "transferApprove": return await adminTransferApprove(deps, callerUid, body);
@@ -3362,6 +3363,49 @@ export async function kakuAnnounceResult(deps, day) {
   await deps.firestore.createIfAbsent(`announcements/kaku-${day}`, { title: truncate(`🌈 今日の確変台は「${machine}」！`, 50), body: truncate(lines.join("\n"), 480), createdAt: now, updatedAt: now, createdByUid: "yuuchat-kaku", createdByName: "ゆうスロ確変台" });
   if (d.mode === "sameDay") return { announced: true };
   return kakuPush(deps, "result1", day, "🌈 確変台の抽選結果", "", (uid) => kakuResultDataFor(d, uid, 1, machine, day));
+}
+
+/* 管理者だけ：そのユーザーが「いま販売中の回」で買った宝くじを全部取り消して、全額返金する（本人から頼まれたとき用）。
+   ・取り消す番号は売れた番号の表からも外す（ほかの人が買えるようになる）。枚数・売上も減らす。本人の番号の記録は消す。
+   ・コインの返金・売れた番号の表・番号の記録の削除・操作の記録は、1回の commit（更新時刻の条件つき）。二重に返金しない。
+   ・dryRun:true なら、何も変えずに「何枚・いくら返金か」だけ返す。すでに抽選が済んだ回は取り消せない。 */
+async function adminLotteryRefund(deps, callerUid, uid, body) {
+  const fs = deps.firestore;
+  const ev = lotteryEventFor(lotteryNextDrawMs(deps.now()));
+  const docs = await findUserDocsByUid(fs, uid);
+  if (docs.length !== 1) return { status: 409, error: docs.length === 0 ? "user_not_found" : "multiple_user_docs" };
+  const name = docs[0].id;
+  const entryPath = `lotteryEntries/${ev.id}_${uid}`, roundPath = `lotteryRounds/${ev.id}`;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    let roundRaw = await fs.getRaw(roundPath);
+    if (roundRaw && lotteryIsLegacyBits(decodeFields(roundRaw.fields))) { await lotteryResizeRound(deps, ev.id); roundRaw = await fs.getRaw(roundPath); }
+    const entryRaw = await fs.getRaw(entryPath);
+    const numbers = entryRaw ? (decodeFields(entryRaw.fields).numbers || []).filter((n) => Number.isInteger(n) && n >= 0) : [];
+    if (!roundRaw || numbers.length === 0) return { ok: true, name, roundId: ev.id, roundName: ev.name, tickets: 0, refund: 0, dryRun: body?.dryRun === true };
+    const round = decodeFields(roundRaw.fields);
+    if (round.status === "done") return { status: 409, error: "already_drawn", roundId: ev.id };
+    const refund = numbers.length * ev.price;
+    if (body?.dryRun === true) return { ok: true, dryRun: true, name, roundId: ev.id, roundName: ev.name, tickets: numbers.length, refund };
+    const userRaw = await fs.getRaw(`users/${name}`);
+    if (!userRaw || userRaw.fields?.uid?.stringValue !== uid) return { status: 409, error: "user_not_found" };
+    const before = readIntegerField(userRaw.fields.coins);
+    if (!Number.isSafeInteger(before) || before + refund > ADMIN_COIN_BALANCE_MAX) return { status: 409, error: "invalid_balance" };
+    const bits = typeof round.soldBits === "string" ? round.soldBits.split("") : Array(LOTTERY.poolSize).fill("0");
+    numbers.forEach((n) => { if (n < bits.length) bits[n] = "0"; });
+    const roundFields = { soldBits: bits.join(""), tickets: Math.max(0, (Number(round.tickets) || 0) - numbers.length), sales: Math.max(0, (Number(round.sales) || 0) - refund) };
+    try {
+      await fs.commit([
+        { update: { name: fs.docName(`users/${name}`), fields: {} }, updateMask: { fieldPaths: [] }, updateTransforms: [{ fieldPath: "coins", increment: restInt(refund) }], currentDocument: { updateTime: userRaw.updateTime } },
+        { update: { name: fs.docName(roundPath), fields: encodeFields(roundFields) }, updateMask: { fieldPaths: Object.keys(roundFields) }, currentDocument: { updateTime: roundRaw.updateTime } },
+        { delete: fs.docName(entryPath), currentDocument: { updateTime: entryRaw.updateTime } },
+        { update: { name: fs.docName(`adminAuditLogs/${crypto.randomUUID().replace(/-/g, "")}`), fields: encodeFields({ action: "lotteryRefund", targetUid: uid, targetName: name, roundId: ev.id, tickets: numbers.length, refund, byUid: callerUid, result: "ok" }) }, updateTransforms: [{ fieldPath: "at", setToServerValue: "REQUEST_TIME" }], currentDocument: { exists: false } }
+      ]);
+    } catch (error) { if (isRetryableCommitError(error)) continue; throw error; }
+    lotteryDocCache.delete(roundPath);
+    await transferNotify(deps, uid, "🎟 宝くじの購入を取り消しました", `${numbers.length}枚の購入を取り消して、${refund} コインを返金しました。`);
+    return { ok: true, name, roundId: ev.id, roundName: ev.name, tickets: numbers.length, refund, afterCoins: before + refund };
+  }
+  return { status: 409, error: "busy" };
 }
 
 /* 管理者だけ：確変台の当選者（その日の枠ごとの名前・NPCかどうか）。プレイヤーには見せない（ほかの人の名前は出さない決まり）。読み取りは1日ぶんのドキュメント1件 */
