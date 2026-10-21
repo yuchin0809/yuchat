@@ -21,7 +21,7 @@ function hm(ms) { const d = new Date(ms + 9 * 3600000); return `${d.getUTCHours(
 function md(day) { const m = /^\d{4}-(\d{2})-(\d{2})$/.exec(day || ""); return m ? `${Number(m[1])}/${Number(m[2])}` : ""; }
 function mdms(ms) { const d = new Date(ms + 9 * 3600000); return `${d.getUTCMonth() + 1}/${d.getUTCDate()}`; }
 const sec = (ms) => (Math.max(0, ms) / 1000).toFixed(2);
-const ORDER = ["conn0", "select", "conn1", "puzzle", "conn2", "card", "conn3", "consent"];
+const ORDER = ["conn0", "select", "conn1", "puzzle", "conn2", "slide", "conn3", "order", "conn4", "card", "conn5", "consent"];
 const CONSENTS = [
   "利用規約に同意する", "プライバシーポリシーに同意する", "キャンセル・返金ができないことに同意する", "転売をしないことに同意する", "1人1枚までであることに同意する",
   "ロボットではないことに同意する", "開始時間を守ることに同意する", "ゆうChatを愛していることに同意する", "コインを使いすぎないことに同意する", "本当に購入することに同意する"
@@ -48,6 +48,7 @@ export async function ticketOpen() {
   ov.innerHTML = `<div class="yt-box"><div class="yt-main"></div></div>`;
   document.body.appendChild(ov); document.body.classList.add("yt-lock");
   ov.addEventListener("click", onClick);
+  ov.addEventListener("pointerdown", onPointerDown);
   tick = setInterval(onTick, 100);
   render();
   await loadPage();
@@ -145,14 +146,17 @@ function rankingHtml(esc) {
   return h + `</div>`;
 }
 
+/* 待機画面の「0 になる時刻」とカード番号。練習のときは、いまから5秒後（本番と同じ流れを、5秒前から体験できる） */
+const waitInfo = () => (S.practice ? { goAt: S.practice.goAt, card: S.practice.card } : { goAt: S.status.times.goAt, card: S.status.card });
 function waitHtml() {
-  const st = S.status, esc = deps.esc;
-  const ready = nowMs() >= st.times.goAt;
-  return `<div class="yt-head">${closeBtn}<div class="yt-title">⏳ 待機中</div></div>
+  const esc = deps.esc, w = waitInfo(), pr = !!S.practice;
+  const ready = nowMs() >= w.goAt;
+  return `<div class="yt-head">${closeBtn}<div class="yt-title">${pr ? "🎮 練習：待機中" : "⏳ 待機中"}</div></div>
+    ${pr ? `<div class="yt-practice yt-practice-wait">🎮 練習です：タイムはランキングに載りません（チケットも取れません）</div>` : ""}
     <div class="yt-card center"><div class="yt-sub">スタートまで</div>
       <div class="yt-count" id="yt-count">0:00</div>
-      <div class="yt-sub">${hm(st.times.goAt)} ちょうどに「先着はこちら」ボタンが出ます。<br>押した瞬間からタイムがスタートします！</div>
-      ${cardHtml(st.card)}
+      <div class="yt-sub">${pr ? "本番と同じ流れで練習できます。0 になると「先着はこちら」ボタンが出ます。" : `${hm(w.goAt)} ちょうどに「先着はこちら」ボタンが出ます。`}<br>押した瞬間からタイムがスタートします！</div>
+      ${cardHtml(w.card)}
       <div class="yt-sub">このカード番号は、ゲーム中は画面の上にも出ます。<br>（あとで3桁を入力します）</div>
       <div id="yt-go">${ready ? goBtn() : ""}</div>
       ${S.err ? `<div class="yt-err">${esc(S.err)}</div>` : ""}
@@ -194,10 +198,22 @@ function gameHtml(esc) {
       }).join("")}</div>
       <button type="button" class="yt-btn big" data-yt="next-select" ${g.slot == null ? "disabled" : ""}>次へ</button></div>`;
   } else if (st === "puzzle") {
-    body = `<div class="yt-page"><div class="yt-sub">ボット対策のため、確認にご協力ください</div><div class="yt-h1">${esc(g.plan.puzzle.label)}</div>
+    body = `<div class="yt-page"><div class="yt-sub">ボット対策のため、確認にご協力ください（1つ目）</div><div class="yt-h1">${esc(g.plan.puzzle.label)}</div>
       ${g.wrong ? `<div class="yt-err">違います。もう一度選んでください。</div>` : ""}
       <div class="yt-emojis">${g.perm.map((idx) => `<button type="button" class="yt-emoji ${g.pick === idx ? "sel" : ""}" data-yt="emoji" data-i="${idx}">${g.plan.puzzle.options[idx]}</button>`).join("")}</div>
       <button type="button" class="yt-btn big" data-yt="next-puzzle" ${g.pick == null ? "disabled" : ""}>次へ</button></div>`;
+  } else if (st === "slide") {
+    const sl = g.plan.slide;
+    body = `<div class="yt-page"><div class="yt-sub">ボット対策のため、確認にご協力ください（2つ目）</div><div class="yt-h1">${esc(sl.label)}</div>
+      <div class="yt-slide ${g.slideDone ? "done" : ""}" id="yt-slide"><span class="yt-slide-goal">${g.slideDone ? "✅" : sl.goal}</span>
+        <span class="yt-slide-handle" data-yt="slide-handle" id="yt-handle" ${g.slideDone ? 'style="left:calc(100% - 64px)"' : ""}>${sl.emoji}</span></div>
+      <div class="yt-sub">${g.slideDone ? "✅ 移せました！" : `指でつかんで、右の ${sl.goal} まで動かしてください。`}</div>
+      <button type="button" class="yt-btn big" data-yt="next-slide" ${g.slideDone ? "" : "disabled"}>次へ</button></div>`;
+  } else if (st === "order") {
+    body = `<div class="yt-page"><div class="yt-sub">ボット対策のため、確認にご協力ください（3つ目）</div><div class="yt-h1">数字を小さい順にタップしてください</div>
+      ${g.wrong ? `<div class="yt-err">順番が違います。はじめからやり直してください。</div>` : ""}
+      <div class="yt-nums">${g.plan.order.map((n) => { const k = g.ordTaps.indexOf(n); return `<button type="button" class="yt-num ${k >= 0 ? "on" : ""}" data-yt="num" data-n="${n}" ${k >= 0 ? "disabled" : ""}>${n}${k >= 0 ? `<small>${k + 1}番目</small>` : ""}</button>`; }).join("")}</div>
+      <button type="button" class="yt-btn big" data-yt="next-order" ${g.ordTaps.length === g.plan.order.length ? "" : "disabled"}>次へ</button></div>`;
   } else if (st === "card") {
     const dots = [0, 1, 2].map((i) => `<span class="yt-dig ${g.digits[i] ? "on" : ""}">${g.digits[i] || ""}</span>`).join("");
     body = `<div class="yt-page"><div class="yt-h1">お支払い：カード番号の入力</div><div class="yt-sub">画面の上に出ている「カード番号」（3桁）を入力してください。</div>
@@ -254,7 +270,7 @@ function onTick() {
     if (can !== S.canJoin) { S.canJoin = can; render(); }
   }
   if (S.screen === "wait") {
-    const st = S.status, remain = st.times.goAt - nowMs();
+    const remain = waitInfo().goAt - nowMs();
     if (remain <= 0 && !S.goShown) { S.goShown = true; const el = ov.querySelector("#yt-go"); if (el) el.innerHTML = goBtn(); }
   }
   updateLive();
@@ -263,7 +279,7 @@ function updateLive() {
   if (!S || !ov) return;
   if (S.screen === "wait") {
     const el = ov.querySelector("#yt-count");
-    if (el) { const remain = Math.max(0, S.status.times.goAt - nowMs()); const s = Math.ceil(remain / 1000); el.textContent = remain <= 0 ? "スタート！" : `${Math.floor(s / 60)}:${pad(s % 60)}`; }
+    if (el) { const remain = Math.max(0, waitInfo().goAt - nowMs()); const s = Math.ceil(remain / 1000); el.textContent = remain <= 0 ? "スタート！" : `${Math.floor(s / 60)}:${pad(s % 60)}`; }
   }
   if (S.screen === "game" && S.game) { const el = ov.querySelector("#yt-time"); if (el) el.textContent = `⏱ ${((nowMs() - S.game.st) / 1000).toFixed(1)}秒`; }
   if (S.screen === "result" && S.result && S.result.kind === "retry" && S.game) { const el = ov.querySelector("#yt-time2"); if (el) el.textContent = sec(nowMs() - S.game.st); }
@@ -275,7 +291,7 @@ const mark = (g) => g.marks.push(Math.round(performance.now() - g.t0));
 
 function newGame(r, prev) {
   return { att: r.att, st: r.st != null ? r.st : prev.st, plan: r.plan, slots: r.slots, closed: r.closed || [], haveQuick: !!r.haveQuick, card: r.card, t0: performance.now(), marks: [],
-    stage: "conn0", connOk: false, connBusy: false, tries: 0, slot: null, pick: null, perm: [0, 1, 2, 3], wrong: false, digits: "", pressed: [] };
+    stage: "conn0", connOk: false, connBusy: false, tries: 0, slot: null, pick: null, perm: [0, 1, 2, 3], wrong: false, digits: "", pressed: [], slideDone: false, ordTaps: [] };
 }
 function goStage(name) {
   const g = S.game; if (!g) return;
@@ -304,7 +320,7 @@ async function startGame() {
     S.busy = false; S.err = ERR[e.code] || `うまくいきませんでした（${e.code || "エラー"}）`; render();
   }
 }
-/* 練習：サーバーが問題だけ作って返す（何も保存しない）。タイムは端末で測るだけで、どこにも送らない */
+/* 練習：サーバーが問題だけ作って返す（何も保存しない）。待機画面の5秒前から始まり、0 で「先着はこちら」→本番と同じ流れ。タイムは端末で測るだけで、どこにも送らない */
 async function startPractice() {
   if (S.busy) return;
   S.busy = true; S.err = ""; render();
@@ -313,14 +329,19 @@ async function startPractice() {
     const r = await deps.api("battlePractice");
     if (S !== mine) return;
     if (typeof r.serverNowMs === "number") offset = r.serverNowMs - Date.now();
-    const g = newGame({ att: 0, st: nowMs(), plan: r.plan, slots: (S.status && S.status.slots) || [], closed: [], card: r.card }, {});
-    g.practice = true;
-    S.game = g; S.screen = "game"; S.busy = false; S.result = null;
-    goStage("conn0");
+    S.practice = { plan: r.plan, card: r.card, goAt: nowMs() + 5000 };
+    S.game = null; S.result = null; S.busy = false; S.goShown = false; S.screen = "wait"; render();
   } catch (e) {
     if (S !== mine) return;
     S.busy = false; S.err = ERR[e.code] || `うまくいきませんでした（${e.code || "エラー"}）`; render();
   }
+}
+function beginPractice() {
+  const p = S.practice; if (!p) return;
+  const g = newGame({ att: 0, st: nowMs(), plan: p.plan, slots: (S.status && S.status.slots) || [], closed: [], card: p.card }, {});
+  g.practice = true;
+  S.game = g; S.screen = "game"; S.busy = false;
+  goStage("conn0");
 }
 async function refreshRanking() { try { S.ranking = await deps.api("battleRanking"); } catch (_) { /* 表示だけ */ } }
 
@@ -331,7 +352,7 @@ async function buy() {
   S.busy = true; render();
   const mine = S;
   try {
-    const r = await deps.api("battleFinish", { att: g.att, slot: g.slot, ans: g.plan.puzzle.answer, card: String(g.card), t: g.marks });
+    const r = await deps.api("battleFinish", { att: g.att, slot: g.slot, ans: g.plan.puzzle.answer, ord: g.ordTaps, card: String(g.card), t: g.marks });
     if (S !== mine) return;
     if (typeof r.serverNowMs === "number") offset = r.serverNowMs - Date.now();
     S.busy = false;
@@ -342,6 +363,24 @@ async function buy() {
     if (S !== mine) return;
     S.busy = false; S.result = { kind: "error", code: e.code }; S.screen = "result"; render();
   }
+}
+
+/* 「〇〇を右に移してください」：指（マウス）でつかんで右のゴールまで動かす。手前で離すと、もとに戻る */
+function onPointerDown(ev) {
+  const h = ev.target.closest && ev.target.closest('[data-yt="slide-handle"]');
+  if (!h || !S || !S.game || S.game.stage !== "slide" || S.game.slideDone) return;
+  ev.preventDefault();
+  const g = S.game, tr = ov.querySelector("#yt-slide").getBoundingClientRect(), max = tr.width - h.offsetWidth;
+  const grab = ev.clientX - h.getBoundingClientRect().left;
+  try { h.setPointerCapture(ev.pointerId); } catch (_) { /* 古いブラウザは、そのまま */ }
+  h.classList.add("drag");
+  const move = (e) => { const x = Math.min(max, Math.max(0, e.clientX - tr.left - grab)); h.style.left = `${x}px`; h._x = x; };
+  const up = () => {
+    h.removeEventListener("pointermove", move); h.removeEventListener("pointerup", up); h.removeEventListener("pointercancel", up); h.classList.remove("drag");
+    if (!(S && S.game === g && g.stage === "slide")) return;
+    if ((h._x || 0) >= max * 0.92) { g.slideDone = true; render(); } else { h.style.left = "0px"; h._x = 0; }
+  };
+  h.addEventListener("pointermove", move); h.addEventListener("pointerup", up); h.addEventListener("pointercancel", up);
 }
 
 async function onClick(ev) {
@@ -360,14 +399,15 @@ async function onClick(ev) {
       S.status = st; S.busy = false; S.err = "";
       if (st.rec && st.rec.done) { S.screen = "page"; return render(); }
       if (st.allTaken) { S.screen = "page"; return render(); }
-      S.screen = "wait"; S.goShown = false; render();
+      S.practice = null; S.screen = "wait"; S.goShown = false; render();
     } catch (e) { if (S !== mine) return; S.busy = false; S.err = ERR[e.code] || `うまくいきませんでした（${e.code || "エラー"}）`; render(); }
     return;
   }
+  if (act === "go" && S.practice) return beginPractice();
   if (act === "go" || act === "restart") return startGame();
   if (act === "practice") return startPractice();
   if (act === "tab") { S.tab = b.getAttribute("data-v") === "all" ? "all" : "week"; render(); return; }
-  if (act === "to-page") { S.screen = "page"; S.game = null; S.result = null; S.busy = false; await loadPage(); return; }
+  if (act === "to-page") { S.screen = "page"; S.practice = null; S.game = null; S.result = null; S.busy = false; await loadPage(); return; }
   if (act === "retry") { beginGame({ ...S.result.next, st: g.st }); return; }
   if (!g) return;
   if (act === "reload") {
@@ -391,20 +431,27 @@ async function onClick(ev) {
     if (g.pick !== g.plan.puzzle.answer) { g.wrong = true; g.pick = null; g.perm = shuffle4(); render(); return; }
     mark(g); goStage("conn2"); return;
   }
+  if (act === "next-slide") { if (!g.slideDone) return; mark(g); goStage("conn3"); return; }
+  if (act === "num") {
+    const n = Number(b.getAttribute("data-n")), want = [...g.plan.order].sort((x, y) => x - y)[g.ordTaps.length];
+    if (n === want) { g.ordTaps.push(n); g.wrong = false; } else { g.ordTaps = []; g.wrong = true; }
+    render(); return;
+  }
+  if (act === "next-order") { if (g.ordTaps.length !== g.plan.order.length) return; mark(g); goStage("conn4"); return; }
   if (act === "key") {
     const k = b.getAttribute("data-k");
     if (k === "back") g.digits = g.digits.slice(0, -1);
     else if (k === "ok") {
       if (g.digits.length !== 3) return;
       if (g.digits !== String(g.card)) { g.wrong = true; g.digits = ""; render(); return; }
-      mark(g); goStage("conn3"); return;
+      mark(g); goStage("conn5"); return;
     } else if (g.digits.length < 3) { g.digits += k; g.wrong = false; }
     render(); return;
   }
   if (act === "consent") {
     const i = Number(b.getAttribute("data-i"));
     if (!g.pressed.includes(i)) g.pressed.push(i);
-    if (g.pressed.length === g.plan.consent.length && g.marks.length === 3) mark(g);
+    if (g.pressed.length === g.plan.consent.length && g.marks.length === 5) mark(g);
     render(); return;
   }
   if (act === "buy") return buy();
@@ -451,6 +498,11 @@ function injectStyles() {
   .yt-prize { margin: 6px 0; padding: 9px 10px; border-radius: 12px; background: rgba(255,225,74,.2); font-size: 12.5px; font-weight: 900; line-height: 1.8; text-align: center; }
   .yt-last { margin: 6px 0 10px; padding: 10px; border-radius: 12px; background: rgba(255,45,120,.16); border: 1px solid rgba(255,255,255,.2); }
   .yt-last-row { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; padding: 5px 0; font-size: 13px; border-top: 1px solid rgba(255,255,255,.14); } .yt-last-row b { color: #ffe14a; } .yt-last-row.me { font-weight: 900; }
+  .yt-practice-wait { margin: 0 0 10px; border-radius: 10px; }
+  .yt-slide { position: relative; height: 72px; margin: 26px 0 12px; border-radius: 999px; background: rgba(255,255,255,.16); border: 2px dashed rgba(255,255,255,.4); } .yt-slide.done { background: rgba(23,227,106,.28); border-color: #17e36a; }
+  .yt-slide-goal { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); font-size: 36px; }
+  .yt-slide-handle { position: absolute; left: 0; top: 2px; width: 64px; height: 64px; border-radius: 50%; background: #fff; display: flex; align-items: center; justify-content: center; font-size: 38px; cursor: grab; touch-action: none; user-select: none; box-shadow: 0 3px 10px rgba(0,0,0,.4); transition: left .15s ease; } .yt-slide-handle.drag { transition: none; cursor: grabbing; }
+  .yt-nums { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 14px 0; } .yt-num { padding: 22px 0; border-radius: 18px; border: 4px solid transparent; background: #fff; color: #1e1b4b; font-size: 44px; font-weight: 900; cursor: pointer; display: flex; flex-direction: column; align-items: center; font-family: inherit; } .yt-num small { font-size: 12px; color: #be123c; } .yt-num.on { background: #dcfce7; border-color: #17e36a; opacity: .85; }
   .yt-big { font-size: 64px; } .yt-card.win { background: linear-gradient(135deg, rgba(255,215,0,.28), rgba(255,45,120,.22)); border-color: #ffd700; } .yt-card.lose { border-color: rgba(255,255,255,.3); }
   .yt-result-time { margin: 10px 0; font-size: 16px; font-weight: 900; } .yt-result-time b { font-size: 34px; color: #ffe14a; font-variant-numeric: tabular-nums; }
   @media (prefers-reduced-motion: reduce) { .yt-btn.pulse:not(:disabled) { animation: none; } }

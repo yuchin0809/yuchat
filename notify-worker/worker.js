@@ -3253,7 +3253,7 @@ const BATTLE_REVEAL_MS = 12 * 3600000;           // 当日の記録がランキ�
 const BATTLE_BOARD = "yuslotBattle/_board";
 const BATTLE_WEEK = "yuslotBattle/_week";           // 今週のランキング：{ weekStart, rows, last }。last＝先週の結果発表
 const BATTLE_PRIZES = [500, 250, 100];                // 週間ランキングの賞金（1位・2位・3位のコイン）
-const BATTLE_CONN_MAX = 8;                       // 1回のゲームでの接続画面（リロード）の合計の上限
+const BATTLE_CONN_MAX = 10;                      // 1回のゲームでの接続画面（リロード）の合計の上限
 /* お題の絵文字：同じなかまから、お題1つ＋まぎらわしい3つを出す */
 const BATTLE_PUZZLES = [
   [["🐱", "ねこ"], ["🐶", "いぬ"], ["🐭", "ねずみ"], ["🐰", "うさぎ"], ["🐻", "くま"], ["🐼", "パンダ"], ["🐸", "かえる"], ["🐵", "さる"], ["🐷", "ぶた"], ["🦊", "きつね"], ["🐯", "とら"], ["🐔", "にわとり"]],
@@ -3270,25 +3270,32 @@ async function battleRand(deps, ...parts) {
 }
 /* その日のカード番号（人ごと・3桁。待機画面から出す） */
 export async function battleCard(deps, day, uid) { const r = await battleRand(deps, "card", day, uid); return 100 + Math.floor(r() * 900); }
-/* 1回ぶんの問題。conn＝接続画面で押すリロードの回数［最初の接続, チケット選択の後, 〇〇選択の後, カード番号の後］ */
+/* 1回ぶんの問題。conn＝接続画面で押すリロードの回数［最初の接続, チケット選択の後, 〇〇選択の後, 右に移す後, 数字の並べ替えの後, カード番号の後］
+   slide＝「〇〇を右に移してください」、order＝「数字を小さい順にタップ」（表示する順番）、puzzle＝絵文字4つから選ぶ */
 export async function battlePlan(deps, day, uid, att) {
   const r = await battleRand(deps, "plan", day, uid, att);
   const [target, ...rest] = kakuShuffle(BATTLE_PUZZLES[Math.floor(r() * BATTLE_PUZZLES.length)], r);
   const options = kakuShuffle([target, ...rest.slice(0, 3)], r);
-  const conn = [2 + Math.floor(r() * 3), 0, 0, 0];
-  for (let k = 1; k < 4; k++) conn[k] = r() < 1 / 3 ? 1 + (r() < 0.5 ? 1 : 0) : 0;
+  const conn = [2 + Math.floor(r() * 3), 0, 0, 0, 0, 0];
+  for (let k = 1; k < conn.length; k++) conn[k] = r() < 1 / 3 ? 1 + (r() < 0.5 ? 1 : 0) : 0;
   let over = conn.reduce((s, x) => s + x, 0) - BATTLE_CONN_MAX;
-  for (let k = 3; k >= 1 && over > 0; k--) { const cut = Math.min(conn[k], over); conn[k] -= cut; over -= cut; }
-  return { conn, puzzle: { label: `「${target[1]}」を選択してください`, options: options.map((x) => x[0]), answer: options.indexOf(target) }, consent: kakuShuffle([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], r) };
+  for (let k = conn.length - 1; k >= 1 && over > 0; k--) { const cut = Math.min(conn[k], over); conn[k] -= cut; over -= cut; }
+  const pool = BATTLE_PUZZLES[Math.floor(r() * BATTLE_PUZZLES.length)];
+  const mover = pool[Math.floor(r() * pool.length)];
+  const goals = ["🏠", "🎫", "🏁", "🎪", "🎡"];
+  const slide = { emoji: mover[0], label: `「${mover[1]}」を右に移してください`, goal: goals[Math.floor(r() * goals.length)] };
+  const order = kakuShuffle(Array.from({ length: 99 }, (_, i) => i + 1), r).slice(0, 4);
+  return { conn, puzzle: { label: `「${target[1]}」を選択してください`, options: options.map((x) => x[0]), answer: options.indexOf(target) }, slide, order, consent: kakuShuffle([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], r) };
 }
-/* 端末から届いた操作の記録（t＝各画面を終えた時刻：チケット選択の「次へ」／〇〇の「次へ」／カード番号／同意10個／「チケットを取る」。スタート画面を押してからのミリ秒）が、人間の速さか */
+/* 端末から届いた操作の記録（t＝各画面を終えた時刻：①チケット選択の「次へ」／②〇〇の「次へ」／③右に移す／④数字の並べ替え／⑤カード番号／⑥同意10個／⑦「チケットを取る」。スタート画面を押してからのミリ秒）が、人間の速さか */
 export function battleProofOk(plan, t, attemptMs) {
-  if (!Array.isArray(t) || t.length !== 5 || !t.every((x) => Number.isFinite(x) && x >= 0)) return "bad_proof";
-  for (let i = 1; i < 5; i++) if (t[i] < t[i - 1]) return "bad_proof";
-  const [c0, c1, c2, c3] = plan.conn;
-  const need = [500 * c0 + 300, 500 * c1 + 300, 500 * c2 + 300, 500 * c3 + 700, 100]; // リロード1回は0.5秒かかる、ボタン1回は0.07秒より速くは押せない、など
-  for (let i = 0; i < 5; i++) if (t[i] - (i ? t[i - 1] : 0) < need[i]) return "too_fast";
-  if (attemptMs < t[4] - 3000) return "bad_proof";                       // 端末の申告が、サーバーの測った時間より長いはずがない
+  const n = 7;
+  if (!Array.isArray(t) || t.length !== n || !t.every((x) => Number.isFinite(x) && x >= 0)) return "bad_proof";
+  for (let i = 1; i < n; i++) if (t[i] < t[i - 1]) return "bad_proof";
+  const [c0, c1, c2, c3, c4, c5] = plan.conn;
+  const need = [500 * c0 + 300, 500 * c1 + 300, 500 * c2 + 300, 500 * c3 + 300, 500 * c4 + 300, 500 * c5 + 700, 100]; // リロード1回は0.5秒かかる、ボタン1回は0.07秒より速くは押せない、など
+  for (let i = 0; i < n; i++) if (t[i] - (i ? t[i - 1] : 0) < need[i]) return "too_fast";
+  if (attemptMs < t[n - 1] - 3000) return "bad_proof";                    // 端末の申告が、サーバーの測った時間より長いはずがない
   if (attemptMs < need.reduce((s, x) => s + x, 0)) return "too_fast";
   return null;
 }
@@ -3376,6 +3383,7 @@ async function battleFinish(deps, uid, body) {
   if (rec.a !== att) return { status: 409, error: "stale" };
   const [plan, card] = await Promise.all([battlePlan(deps, day, uid, att), battleCard(deps, day, uid)]);
   if (Number(body?.ans) !== plan.puzzle.answer || String(body?.card) !== String(card)) return { status: 400, error: "bad_proof" };
+  if (JSON.stringify(body?.ord) !== JSON.stringify([...plan.order].sort((x, y) => x - y))) return { status: 400, error: "bad_proof" };   // 数字を小さい順にタップした記録
   const proof = battleProofOk(plan, body?.t, now - rec.as);
   if (proof) return { status: 400, error: proof };
   const ms = Math.max(1, now - rec.st);
