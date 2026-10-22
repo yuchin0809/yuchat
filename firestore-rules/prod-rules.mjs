@@ -189,6 +189,10 @@ const TEST_CASES = [
   // 🎲 ヨット：途中経過（サイコロの目・点数）とランキングはサーバー（通知 Worker）だけ
   testCase("DENY", "gameRooms：ヨットの進み（yacht）を参加者がブラウザから書き換える", userA, "update", "gameRooms/ry", { data: { yacht: { done: true, winner: 0 } }, existing: { gameType: "yacht", ownerUid: userA.uid, owner: "a", members: ["a", "b"], memberUids: [userA.uid, "uidB"], status: "playing" } }),
   testCase("ALLOW", "gameRooms：ヨットの部屋でも、参加者が status を更新できる（yacht には触れない）", userA, "update", "gameRooms/ry", { data: { status: "waiting" }, existing: { gameType: "yacht", ownerUid: userA.uid, owner: "a", members: ["a", "b"], memberUids: [userA.uid, "uidB"], status: "playing" } }),
+  testCase("DENY", "gameRooms：消しバトの進み（keshi）を参加者がブラウザから書き換える", userA, "update", "gameRooms/rk", { data: { keshi: { done: true, winner: 0 } }, existing: { gameType: "keshi", ownerUid: userA.uid, owner: "a", members: ["a", "b"], memberUids: [userA.uid, "uidB"], status: "playing" } }),
+  testCase("ALLOW", "gameRooms：消しバトの部屋でも、参加者が status を更新できる（keshi には触れない）", userA, "update", "gameRooms/rk", { data: { status: "waiting" }, existing: { gameType: "keshi", ownerUid: userA.uid, owner: "a", members: ["a", "b"], memberUids: [userA.uid, "uidB"], status: "playing" } }),
+  testCase("DENY", "gameRooms：消しバトの進み（keshi）つきで部屋を作る", userA, "create", "gameRooms/rk2", { data: { gameType: "keshi", ownerUid: userA.uid, owner: "a", members: ["a"], memberUids: [userA.uid], status: "waiting", keshi: { done: true } } }),
+  testCase("ALLOW", "gameRooms：消しバトの部屋を、ふつうに作る", userA, "create", "gameRooms/rk3", { data: { gameType: "keshi", ownerUid: userA.uid, owner: "a", members: ["a"], memberUids: [userA.uid], status: "waiting" } }),
   // 🧽 消しバト：買ったパーツ・付けているパーツはサーバー（通知 Worker）だけ
   testCase("DENY", "yuslotKeshiLeague：リーグの戦績を直接読めない", userA, "get", "yuslotKeshiLeague/2026-10-26", { existing: { setsDone: 3, p: {} } }),
   testCase("DENY", "yuslotKeshiLeague：自分の勝ち数を書き換える", userA, "update", "yuslotKeshiLeague/2026-10-26", { data: { p: { [userA.uid]: { w: 99 } } }, existing: { setsDone: 3, p: {} } }),
