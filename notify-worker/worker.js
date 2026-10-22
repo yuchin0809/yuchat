@@ -3628,12 +3628,15 @@ async function battlePractice(deps, uid) {
    ・Firestore：yuslotKaku/{日付} の枠に cx（キャンセル中）・cxAt・cxStart を足すだけ（cxDone＝実行済みの回数）。1人あたりの記録は yuslotBattle/c_{uid}。
 ========================================================= */
 const CANCEL_FROM_MIN = 600, CANCEL_UNTIL_MIN = 870;     // 10:00〜14:30 の間のランダムな時刻
-const CANCEL_WINDOW_MS = 16500;                           // ※内緒：最初の1人のスタートから、この時間で取れなければ NPC が取る
+const CANCEL_WINDOW_MS = 18500;                           // ※内緒：最初の1人のスタートから、この時間で取れなければ NPC が取る
+/* その日だけ追加で出すキャンセル（日本時間の "時:分"）。※その日の通常の時刻より後ろにすること（実行済みの回数 cxDone の数え方がずれないように） */
+const CANCEL_EXTRA = { "2026-10-22": ["13:20", "14:17"] };
 export function kakuCancelPlan(dayId) {
   const r = kakuSeeded("cancel:" + dayId), t0 = kakuDayStart(dayId);
   const n = 1 + Math.floor(r() * 3);
   const times = Array.from({ length: n }, () => t0 + CANCEL_FROM_MIN * KAKU_MIN + Math.floor(r() * (CANCEL_UNTIL_MIN - CANCEL_FROM_MIN) * KAKU_MIN)).sort((a, b) => a - b);
-  return { n, times };
+  for (const hm of CANCEL_EXTRA[dayId] || []) { const [h, m] = hm.split(":").map(Number); times.push(t0 + (h * 60 + m) * KAKU_MIN); }
+  return { n: times.length, times };
 }
 const kakuCancelStrip = (x) => { const { cx, cxAt, cxStart, ...rest } = x; return rest; };
 /* 時間内に取れなかったキャンセル枠は、別の NPC が取る（slots を直接書き換える。変えたら true） */

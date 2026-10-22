@@ -518,6 +518,7 @@ test("キャンセルの予定：1日1〜3回、10:00〜14:30 の完全ランダ
   const counts = new Set();
   for (let d = 0; d < 300; d++) {
     const day = kakuDayId(Date.UTC(2026, 9, 20) + d * 86400000);
+    if (day === "2026-10-22") continue;   // この日だけ追加の回がある（下のテスト）
     const p = kakuCancelPlan(day), p2 = kakuCancelPlan(day);
     assert.deepEqual(p, p2); counts.add(p.n);
     assert.ok(p.n >= 1 && p.n <= 3 && p.times.length === p.n);
@@ -525,6 +526,14 @@ test("キャンセルの予定：1日1〜3回、10:00〜14:30 の完全ランダ
     p.times.forEach((t, i) => { assert.ok(t >= t0 + 10 * H && t < t0 + 14.5 * H, "10:00〜14:30"); if (i) assert.ok(t >= p.times[i - 1]); });
   }
   assert.deepEqual([...counts].sort(), [1, 2, 3]);
+});
+
+test("キャンセルの予定：2026-10-22 だけ、通常の回のあとに追加で2回（13:20 と 14:17）", () => {
+  const p = kakuCancelPlan("2026-10-22"), t0 = kakuDayStart("2026-10-22");
+  assert.equal(p.n, p.times.length);
+  assert.deepEqual(p.times.slice(-2), [t0 + (13 * 60 + 20) * 60000, t0 + (14 * 60 + 17) * 60000]);
+  assert.ok(p.times.slice(0, -2).every((t) => t < p.times.at(-2)) && p.n >= 3 && p.n <= 5);
+  assert.equal(kakuCancelPlan("2026-10-23").n, kakuCancelPlan("2026-10-23").times.length);
 });
 
 test("キャンセル：予定の時刻になるまで何も起きず、時刻になると NPC の枠が1つ空きになる（プレイヤーの枠・抽選前の枠は選ばれない）", async () => {
@@ -597,7 +606,7 @@ test("表：その日の枠ごとに「埋まっています」。NPC かプレ�
   assert.ok(!b.rows.some((r) => d.slots[r.i].kind === "lot"), "当日の抽選（結果が出る前）の枠は出さない");
   assert.equal(b.rows.filter((r) => r.kind === "quick").length, 2); assert.ok(b.rows.filter((r) => r.kind === "quick").every((r) => r.state === "quick"));
   const text = JSON.stringify(b);
-  assert.ok(!/npc|id2|u2|cxStart|cxAt|16500/.test(text), "名前・uid・NPC・時計の中身は返さない");
+  assert.ok(!/npc|id2|u2|cxStart|cxAt|18500/.test(text), "名前・uid・NPC・時計の中身は返さない");
   // 当日抽選の結果が出たあとは、その枠も出る
   const d2 = ctx.fs.plain(`yuslotKaku/${D}`); d2.slots.filter((x) => x.kind === "lot").forEach((x) => { x.npc = true; x.name = "npcL"; });
   ctx.fs.put(`yuslotKaku/${D}`, encF(d2)); resetKakuCacheForTest();
@@ -646,7 +655,7 @@ test("キャンセル枠を取る：ミニゲームの記録が正しく、時�
   assert.equal(f.got, true);
   const now = slotsOf(ctx)[cx.i];
   assert.equal(now.uid, "id1"); assert.equal(now.name, "u1"); assert.equal(now.npc, false); assert.ok(!now.cx && !now.cxStart, "キャンセルの印は消える");
-  assert.ok(!/cxStart|16500|cxAt/.test(JSON.stringify(s) + JSON.stringify(f)), "時計の中身は返さない");
+  assert.ok(!/cxStart|18500|cxAt/.test(JSON.stringify(s) + JSON.stringify(f)), "時計の中身は返さない");
   assert.equal(ctx.fs.plain("yuslotBattle/_board"), null, "ランキングには載らない");
   assert.equal(ctx.fs.plain("yuslotBattle/_week"), null);
   assert.equal(ctx.fs.plain("yuslotBattle/id1"), null, "先着ゲームの記録（1日1件）にも影響しない");
@@ -669,14 +678,14 @@ test("キャンセル枠：最初の1人のスタートから時間内に誰も�
   const s2 = await ctx.act("id2", "u2", { action: "claimStart", slot: cx.i });
   assert.equal(slotsOf(ctx)[cx.i].cxStart, start1, "時計は最初の1人のまま（2人目で延びない）");
   const t = proofFor(s2.plan); ctx.state.now += t[6];
-  assert.ok(ctx.state.now - start1 < 16500, "時間内");
+  assert.ok(ctx.state.now - start1 < 18500, "時間内");
   const f2 = await ctx.act("id2", "u2", { action: "claimFinish", att: s2.att, slot: cx.i, ans: s2.plan.puzzle.answer, ord: ordOf(s2.plan), card: String(s2.card), t });
   assert.equal(f2.got, true);
   // 別の日の別の枠で：時間切れ
   const ctx2 = setup({ n: 4 });
   const cy = await openOne(ctx2);
   const a = await ctx2.act("id1", "u1", { action: "claimStart", slot: cy.i });
-  const ta = proofFor(a.plan); ctx2.state.now += 16600;                  // 16.5秒を過ぎてから終える
+  const ta = proofFor(a.plan); ctx2.state.now += 18600;                  // 18.5秒を過ぎてから終える
   const fa = await ctx2.act("id1", "u1", { action: "claimFinish", att: a.att, slot: cy.i, ans: a.plan.puzzle.answer, ord: ordOf(a.plan), card: String(a.card), t: ta });
   assert.equal(fa.lost, true); assert.equal(fa.got, false);
   const taken = slotsOf(ctx2)[cy.i];
