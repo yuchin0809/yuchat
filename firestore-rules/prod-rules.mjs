@@ -187,6 +187,8 @@ const TEST_CASES = [
   testCase("DENY", "yuslotBattle：自分のタイムを書き換える", userA, "update", "yuslotBattle/" + userA.uid, { data: { ms: 1 }, existing: { day: "2030-01-04", d: true, ms: 9000 } }),
   testCase("DENY", "yuslotBattle：最上位管理者でもブラウザから書けない", admin, "update", "yuslotBattle/_board", { data: { rows: [] }, existing: { rows: [] } }),
   // 🎲 ヨット：途中経過（サイコロの目・点数）とランキングはサーバー（通知 Worker）だけ
+  testCase("DENY", "gameRooms：ヨットの進み（yacht）を参加者がブラウザから書き換える", userA, "update", "gameRooms/ry", { data: { yacht: { done: true, winner: 0 } }, existing: { gameType: "yacht", ownerUid: userA.uid, owner: "a", members: ["a", "b"], memberUids: [userA.uid, "uidB"], status: "playing" } }),
+  testCase("ALLOW", "gameRooms：ヨットの部屋でも、参加者が status を更新できる（yacht には触れない）", userA, "update", "gameRooms/ry", { data: { status: "waiting" }, existing: { gameType: "yacht", ownerUid: userA.uid, owner: "a", members: ["a", "b"], memberUids: [userA.uid, "uidB"], status: "playing" } }),
   testCase("DENY", "yuslotYacht：自分のゲームを直接読めない", userA, "get", "yuslotYacht/" + userA.uid, { existing: { gid: "g", dice: [1, 2, 3, 4, 5] } }),
   testCase("DENY", "yuslotYacht：自分の点数を書き換える", userA, "update", "yuslotYacht/" + userA.uid, { data: { total: 999 }, existing: { gid: "g", done: true, total: 10 } }),
   testCase("DENY", "yuslotYacht：ランキングを直接読めない", userA, "get", "yuslotYacht/_week", { existing: { rows: [] } }),

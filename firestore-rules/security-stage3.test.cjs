@@ -67,6 +67,8 @@ async function ng(n, p) { try { await assertFails(p); pass++; logs.push("PASS �
   await ng("carol が room1 から alice を追い出す（参加者でも参加中でもない）", updateDoc(doc(carol, "gameRooms/roomDel"), { members: ["carol"], memberUids: ["uidC"], updatedAt: serverTimestamp() }));
   await ok("参加者 bob が roomPlay の盤面（gameState）を更新（対局）", updateDoc(doc(bob, "gameRooms/roomPlay"), { gameState: { currentPlayer: "white" }, updatedAt: serverTimestamp() }));
   await ng("非参加者 carol が roomPlay の盤面を更新", updateDoc(doc(carol, "gameRooms/roomPlay"), { gameState: { currentPlayer: "white" } }));
+  await ng("参加者 bob が roomPlay にヨットの進み（yacht）を書き込む", updateDoc(doc(bob, "gameRooms/roomPlay"), { yacht: { c0: [50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50] }, updatedAt: serverTimestamp() }));
+  await ng("alice が最初からヨットの進み（yacht）つきで部屋を作る", setDoc(doc(alice, "gameRooms/evilY"), { gameType: "yacht", owner: "alice", ownerUid: "uidA", members: ["alice"], memberUids: ["uidA"], status: "waiting", yacht: { done: true }, createdAt: serverTimestamp() }));
   await ok("招待された carol が invitedUsers から自分だけを外す（辞退）", updateDoc(doc(carol, "gameRooms/roomInvite"), { invitedUsers: [], updatedAt: serverTimestamp() }));
   await ng("非メンバー carol が roomInvite の状態を勝手に変える（参加せず）", updateDoc(doc(carol, "gameRooms/roomInvite"), { status: "playing" }));
   await ng("参加するふりで carol が他の参加者を追い出す（memberUids から他人を消す）", updateDoc(doc(carol, "gameRooms/room1"), { members: ["carol"], memberUids: ["uidC"] }));

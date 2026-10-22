@@ -466,13 +466,19 @@ service cloud.firestore {
 
       allow create: if signedIn()
         && request.resource.data.get('ownerUid', '') == request.auth.uid
-        && request.resource.data.get('memberUids', []).hasOnly([request.auth.uid]);
+        && request.resource.data.get('memberUids', []).hasOnly([request.auth.uid])
+        && !('yacht' in request.resource.data);
 
+      // 🎲 ヨットの対戦の進み（yacht：サイコロの目・点数・手番）は通知 Worker（サービスアカウント）だけが書く。ブラウザからは変えられない
       allow update: if signedIn() && (
-        (request.auth.uid in resource.data.get('memberUids', []))
-        || isJoiningGameRoom()
+        ((request.auth.uid in resource.data.get('memberUids', [])) && yachtUntouched())
+        || (isJoiningGameRoom() && yachtUntouched())
         || invitedSelfRemoveOnly()
       );
+
+      function yachtUntouched() {
+        return !request.resource.data.diff(resource.data).affectedKeys().hasAny(['yacht']);
+      }
 
       allow delete: if signedIn() && (
         isGameRoomOwner(resource.data)
