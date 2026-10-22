@@ -4553,9 +4553,18 @@ function showRaceHitAnimation(bet, payout) {
   }, 4500);
 }
 
+/* 払い戻し（コインの加算）は、発走からレース演出が終わって結果が出る頃まで待つ（Worker・derby-runner も同じ時刻まで払わない） */
+const RACE_SETTLE_DELAY_MS = 80000;
+const settleWaitTimers = new Map();
+
 async function settleMyBets(raceId) {
   const session = appSessionSeq;
   if (!currentUser || !username) return;
+  const waitMs = parseRaceIdToDate(raceId).getTime() + RACE_SETTLE_DELAY_MS - derbyNow().getTime();
+  if (waitMs > 0) {
+    if (!settleWaitTimers.has(raceId)) settleWaitTimers.set(raceId, setTimeout(() => { settleWaitTimers.delete(raceId); settleMyBets(raceId); }, waitMs + 1000));
+    return;
+  }
 
   /* 精算（結果の確認・払い戻しの計算・コインの加算）はすべて Worker に任せる（固定オッズも山分け方式も）。
      ブラウザは払い戻し額を自分で決めない・馬券やコインを直接書き換えない。

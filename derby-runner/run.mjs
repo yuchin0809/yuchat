@@ -105,6 +105,10 @@ const LOOKBACK_DAYS = 7;
 /* 早めに起動したとき、最大でどれだけ開催時刻まで待つか（GitHub Actions の1ジョブは最長6時間） */
 const MAX_WAIT_MINUTES = 80;
 
+/* 発走から、レース演出が終わって結果が出るまでは、払い戻し（コインの加算）をしない。
+   演出の最長（derby-show.js の 60＋14＋3秒）を少し過ぎた時刻。Worker（DERBY_SETTLE_DELAY_MS）・script.js と同じ値 */
+export const SETTLE_DELAY_MS = 80000;
+
 /* ----- レース結果の生成（script.js と同じ） ----- */
 
 function generateWeightedRaceOrder() {
@@ -394,7 +398,8 @@ export async function getDueManualRaces(db, now, lookbackDays = LOOKBACK_DAYS) {
     .filter((race) => race.raceTime <= now);
 }
 
-export async function runDerby({ db, now = new Date(), lookbackDays = LOOKBACK_DAYS, log = console.log }) {
+/* waitForSettle：true なら、結果が出る時刻まで待ってから払い戻す。false（既定）なら待たずに、その回の払い戻しは次の実行に回す */
+export async function runDerby({ db, now = new Date(), lookbackDays = LOOKBACK_DAYS, log = console.log, waitForSettle = false }) {
   const summary = [];
 
   /* 自動開催の回（11:30・15:02）と手動レースを、開催時刻の順に処理する */
@@ -416,6 +421,18 @@ export async function runDerby({ db, now = new Date(), lookbackDays = LOOKBACK_D
       const { created, race } = await ensureRaceResult(db, raceId, raceTime);
       entry.result = created ? "created" : `exists(${race.generatedBy || "client"})`;
 
+      const settleAt = raceTime.getTime() + SETTLE_DELAY_MS;
+      const nowMs = waitForSettle ? Date.now() : now.getTime();
+      if (nowMs < settleAt) {
+        if (!waitForSettle) {
+          entry.settle = "deferred";
+          log(JSON.stringify(entry));
+          summary.push(entry);
+          continue;
+        }
+        log(`結果が出るまで ${Math.round((settleAt - nowMs) / 1000)} 秒待ってから払い戻します: ${raceId}`);
+        await new Promise((resolve) => setTimeout(resolve, settleAt - nowMs));
+      }
       const settle = await settleRaceBets(db, raceId, race.resultOrder, closeTime);
       Object.assign(entry, settle);
       if (settle.errors.length) entry.status = "error";
@@ -535,7 +552,7 @@ if (isMain) {
   const createdBeforeWait = new Set(earlierSummary.filter((e) => e.result === "created").map((e) => e.raceId));
   const summary = [
     ...earlierSummary.filter((e) => e.status !== "ok"),
-    ...(await runDerby({ db: getFirestore(), now })).map((e) => (createdBeforeWait.has(e.raceId) ? { ...e, result: "created(開催時刻を待つ前)" } : e))
+    ...(await runDerby({ db: getFirestore(), now, waitForSettle: !process.env.DERBY_NOW })).map((e) => (createdBeforeWait.has(e.raceId) ? { ...e, result: "created(開催時刻を待つ前)" } : e))
   ];
 
   /* 1日1回の処理（13:00 以降の最初の実行だけ）は、レースの開催・精算が終わってから行う（失敗してもレースの処理には影響しない）。
