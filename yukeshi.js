@@ -1,11 +1,11 @@
 /* =========================================================
-   🧽 消しバト（ゆうワールドのお店）：消しゴムの改造（第1段階）
+   消しバト（ゆうワールドのお店）：消しゴムの改造（第1段階）
    ・パーツの種類・値段・強さの計算・コインの引き落としは、すべて Worker（keshiState / keshiBuy / keshiEquip）が行う。
      このファイルは、画面（3Dの消しゴム・強さ・パーツの一覧）を描いて、「買う」「付ける」を頼むだけ。
    ・ゆうワールド（yuworld.js）から renderKeshi({ root, api, esc, onBack }) で開く。
 ========================================================= */
-import { keshiStatsView } from "./yukeshi-core.js?v=20261023-keshi4";
-import { createEraserStage, SLEEVE_COLORS } from "./yukeshi3d.js?v=20261023-keshi4";
+import { keshiStatsView, eraserIcon } from "./yukeshi-core.js?v=20261023-keshi5";
+import { createEraserStage, SLEEVE_COLORS } from "./yukeshi3d.js?v=20261023-keshi5";
 
 const SLOT_NAMES = { body: "本体", edge: "ふち", sole: "そこ", weight: "おもり" };
 const STAT_NAMES = [["m", "重さ"], ["s", "すべり"], ["b", "反発"], ["z", "大きさ"]];
@@ -19,7 +19,7 @@ export function renderKeshi(c) {
   ctx = c; st = null; table = null; busy = false; sel = { tab: "body", part: "plain" };
   injectStyles();
   const my = token;
-  ctx.root.innerHTML = `<div class="yk2-head"><button type="button" class="yw-back" id="ykBack">← お店の一覧</button><h2>🧽 消しバト</h2></div><div class="yk2-card yk2-msg">読み込み中…</div>`;
+  ctx.root.innerHTML = `<div class="yk2-head"><button type="button" class="yw-back" id="ykBack">← お店の一覧</button><h2>${eraserIcon("ker-inline")} 消しバト</h2></div><div class="yk2-card yk2-msg">読み込み中…</div>`;
   $("#ykBack")?.addEventListener("click", back);
   return load(my);
 }
@@ -35,7 +35,7 @@ async function load(my) {
 }
 function fail(code) {
   const text = code === "not_published" ? "消しバトはまだ公開されていません。" : "読み込みに失敗しました。通信環境をご確認のうえ、もう一度お試しください。";
-  ctx.root.innerHTML = `<div class="yk2-head"><button type="button" class="yw-back" id="ykBack">← お店の一覧</button><h2>🧽 消しバト</h2></div>
+  ctx.root.innerHTML = `<div class="yk2-head"><button type="button" class="yw-back" id="ykBack">← お店の一覧</button><h2>${eraserIcon("ker-inline")} 消しバト</h2></div>
     <div class="yk2-card yk2-msg"><b>${ctx.esc(text)}</b>${code === "not_published" ? "" : `<p><button type="button" class="yw-btn" id="ykRetry">もう一度</button></p>`}</div>`;
   $("#ykBack")?.addEventListener("click", back);
   $("#ykRetry")?.addEventListener("click", () => renderKeshi(ctx));
@@ -44,10 +44,10 @@ function fail(code) {
 /* 画面の枠は1回だけ作る（3Dの消しゴムを作り直さないため）。パーツの一覧などは、変わるたびに中身だけ描き直す */
 function drawShell() {
   const my = token;
-  ctx.root.innerHTML = `<div class="yk2-head"><button type="button" class="yw-back" id="ykBack">← お店の一覧</button><h2>🧽 消しバト</h2><div class="yk2-coins" id="ykCoins"></div></div>
+  ctx.root.innerHTML = `<div class="yk2-head"><button type="button" class="yw-back" id="ykBack">← お店の一覧</button><h2>${eraserIcon("ker-inline")} 消しバト</h2><div class="yk2-coins" id="ykCoins"></div></div>
     <button type="button" class="yk2-league-btn" id="ykLeague"><span>🏆</span><b>最強決定戦（リーグ戦）</b><em>エントリー受付中</em></button>
     <p class="yk2-note">2人対戦は、このあと追加します。まずは、自分だけの最強の消しゴムを作ろう！</p>
-    <div class="yk2-stagebox"><div class="yk2-stage" id="ykStage"><div class="yk2-fallback">🧽</div></div><div class="yk2-rating" id="ykRating"></div></div>
+    <div class="yk2-stagebox"><div class="yk2-stage" id="ykStage"><div class="yk2-fallback">${eraserIcon("ker-big")}</div></div><div class="yk2-rating" id="ykRating"></div></div>
     <div class="yk2-card"><div class="yk2-stats" id="ykStats"></div></div>
     <div class="yk2-tabs" id="ykTabs"></div>
     <div class="yk2-card"><div class="yk2-parts" id="ykParts"></div><div id="ykAct"></div></div>`;
@@ -168,7 +168,7 @@ function drawLeague() {
     <div class="yl2-days">${days}</div>
     <div class="yl2-soon">${soon}</div>
     ${lastCard}${entry}
-    <div class="yl2-actions"><button type="button" id="ylPrize2">🏅 報酬</button><button type="button" id="ylRanking">👑 ランキング</button><button type="button" id="ylOrder">🧽 消しゴム変更</button></div>
+    <div class="yl2-actions"><button type="button" id="ylPrize2">🏅 報酬</button><button type="button" id="ylRanking">👑 ランキング</button><button type="button" id="ylOrder">${eraserIcon("ker-inline")} 消しゴム変更</button></div>
     <div class="yl2-sec">最新試合結果<span>${lastSet && me ? lastSet : ""}</span></div><div class="yl2-matches">${matches}</div>
     <div class="yl2-sec">通算戦績<span>${me ? `${me.w}勝 ${me.l}敗` : "0勝 0敗"}</span></div><div class="yl2-table"><div class="yl2-row head"><span>日付</span><span>勝敗</span><span>順位</span></div>${rows}</div>`;
   const help = () => sheet("最強決定戦のルール", `<ol class="yl2-rules"><li>自分の消しゴム1個で戦います。パーツを買って組み合わせて、最強の消しゴムを作ろう。</li>
@@ -205,7 +205,7 @@ function injectStyles() {
   .yk2-card { background: #fff; border-radius: 14px; padding: 12px 14px; margin: 10px 0; box-shadow: 0 4px 16px rgba(0,0,0,.07); } .yk2-msg { text-align: center; padding: 26px 16px; }
   .yk2-stagebox { position: relative; border-radius: 16px; overflow: hidden; background: linear-gradient(135deg, #c8964b, #8a5a1f); box-shadow: inset 0 0 30px rgba(0,0,0,.3); }
   .yk2-stage { position: relative; height: 240px; display: flex; align-items: center; justify-content: center; } .yk2-gl { display: block; position: absolute; left: 0; top: 0; }
-  .yk2-fallback { font-size: 80px; }
+  .yk2-fallback { font-size: 80px; } .ker-big { width: 150px; height: 105px; } .ker-inline { width: 1.5em; height: 1.05em; vertical-align: -0.15em; } .yl2-actions .ker-inline { vertical-align: -0.2em; }
   .yk2-rating { position: absolute; right: 10px; top: 10px; background: rgba(0,0,0,.55); color: #fff; border-radius: 10px; padding: 4px 10px; font-size: 13px; } .yk2-rating b { font-size: 22px; margin: 0 4px; }
   .up { color: #2fbf55; font-size: 12px; font-style: normal; font-weight: 800; } .down { color: #ff6b5e; font-size: 12px; font-style: normal; font-weight: 800; }
   .yk2-stat { display: grid; grid-template-columns: 52px 1fr 30px 38px; gap: 8px; align-items: center; font-size: 13px; padding: 3px 0; }
