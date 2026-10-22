@@ -15,7 +15,8 @@
 /* 🎟 ゆう宝くじ売り場の画面（別ファイル。Worker の lottery* アクションを呼んで表示するだけ） */
 import { renderLottery, stopLottery } from "./yulottery.js?v=20261021-lottery7";
 import { renderYacht, stopYacht } from "./yuyacht.js?v=20261023-yacht5";
-import { renderKeshi, stopKeshi } from "./yukeshi.js?v=20261023-keshi4";
+import { renderKeshi, stopKeshi } from "./yukeshi.js?v=20261023-keshi5";
+import { eraserIcon } from "./yukeshi-core.js?v=20261023-keshi5";
 /* 🌈 確変台のパネル（台の一覧の上）。抽選・先着・通知設定。Worker の kaku* アクションを呼んで表示するだけ */
 import { kakuInit, kakuPanelHtml, kakuBind, kakuMachineInfo, startKaku, stopKaku, refreshKaku } from "./yukaku.js?v=20261023-kaku15";
 /* 🏅 会員ランクのカード（台の一覧の上）。ランクの判定・進みは Worker の rankStatus が返す */
@@ -190,7 +191,7 @@ function renderShop() {
           <div class="yw-shop-desc">サイコロを振って役を作る、得点を競うゲーム。週間ランキングで1位500コイン！</div></div>
       </button>
       <button type="button" class="yw-shop-card${state.keshiPublished ? "" : " is-soon"}" id="ywOpenKeshi" ${state.keshiPublished || state.isTopAdmin ? "" : "disabled"}>
-        <div class="yw-shop-banner yw-keshi-banner"><span>🧽</span></div>
+        <div class="yw-shop-banner yw-keshi-banner"><span>${eraserIcon("yw-keshi-svg")}</span></div>
         <div class="yw-shop-body"><div class="yw-shop-name">消しバト${state.keshiPublished ? "" : " <span class=\"yw-badge\">準備中</span>"}</div>
           <div class="yw-shop-desc">パーツで自分だけの最強の消しゴムを作って、机の上で戦わせよう。</div></div>
       </button>
@@ -869,6 +870,7 @@ function injectStyles() {
   .yw-othello-banner { background: linear-gradient(135deg, #1b7a43, #0f5a30); }
   .yw-shogi-banner { background: linear-gradient(135deg, #c8964b, #8a5a1f); }
   .yw-daifugo-banner { background: linear-gradient(135deg, #2d6cdf, #1b2f7a); }
+  .yw-keshi-svg { width: 96px; height: 68px; filter: drop-shadow(0 3px 3px rgba(0,0,0,.3)); }
   .yw-keshi-banner { background: linear-gradient(135deg, #2f6fe0, #7bb7ff); }
   .yw-yacht-banner { background: linear-gradient(135deg, #12b3a8, #0a5f8a); }
   .yw-shop-card.is-soon .yw-shop-banner { filter: brightness(.55) saturate(.7); }
