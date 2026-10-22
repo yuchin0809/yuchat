@@ -527,6 +527,25 @@ test("キャンセルの予定：1日1〜3回、10:00〜14:30 の完全ランダ
   assert.deepEqual([...counts].sort(), [1, 2, 3]);
 });
 
+test("キャンセルの予定：2026-10-23 からの平日は、授業中（Ⅰ〜Ⅶ時限）をさけて、休み時間・礼拝・昼休みの時間だけ。土日は今まで通り。それ以前の日は変わらない", () => {
+  const free = [[10 * 60 + 10, 10 * 60 + 55], [11 * 60 + 40, 11 * 60 + 50], [12 * 60 + 35, 13 * 60 + 20], [14 * 60 + 5, 14 * 60 + 15]];
+  const minOf = (day, t) => Math.floor((t - kakuDayStart(day)) / 60000);
+  let weekdays = 0, weekends = 0; const hit = [0, 0, 0, 0], counts = new Set();
+  for (let d = 0; d < 400; d++) {
+    const ms = Date.UTC(2026, 9, 23) + d * 86400000, day = kakuDayId(ms), dow = new Date(ms + 9 * 3600000).getUTCDay();
+    const p = kakuCancelPlan(day); assert.deepEqual(p, kakuCancelPlan(day)); counts.add(p.n);
+    p.times.forEach((t) => {
+      const m = minOf(day, t);
+      if (dow >= 1 && dow <= 5) { weekdays++; const k = free.findIndex(([a, b]) => m >= a && m < b); assert.ok(k >= 0, `${day} ${m}分は授業中`); hit[k]++; }
+      else { weekends++; assert.ok(m >= 600 && m < 870); }
+    });
+  }
+  assert.ok(weekdays > 400 && weekends > 100); assert.deepEqual([...counts].sort(), [1, 2, 3]);
+  assert.ok(hit.every((x) => x > 0) && hit[0] > hit[1] && hit[2] > hit[3], "どの時間帯にも出る。長い時間帯のほうが多い");
+  assert.deepEqual(kakuCancelPlan("2026-10-21").times.every((t) => t >= kakuDayStart("2026-10-21") + 600 * 60000 && t < kakuDayStart("2026-10-21") + 870 * 60000), true);
+  assert.equal(kakuCancelPlan("2026-10-21").n, kakuCancelPlan("2026-10-21").times.length);
+});
+
 test("キャンセルの予定：2026-10-22 だけ、通常の回のあとに追加で2回（13:20 と 14:10）", () => {
   const p = kakuCancelPlan("2026-10-22"), t0 = kakuDayStart("2026-10-22");
   assert.equal(p.n, p.times.length);
