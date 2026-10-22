@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
-import { SLOT_MACHINES } from "../worker.js";
+import { SLOT_MACHINES, SLOT_ASSET_MIN } from "../worker.js";
 
 const clientSrc = fs.readFileSync(fileURLToPath(new URL("../../yuworld.js", import.meta.url)), "utf8");
 
@@ -54,4 +54,11 @@ test("オリジナル絵柄の画像ファイルが実在する（置き換え�
     assert.ok(fs.existsSync(p), `画像が無い: assets/yuworld/symbol-${id}.png`);
     assert.ok(fs.statSync(p).size > 1000, `画像が小さすぎる（壊れている可能性）: symbol-${id}.png`);
   }
+});
+
+test("クライアントの「遊ぶのに必要な総資産」が Worker と一致（assetMin と SLOT_ASSET_MIN）", () => {
+  const block = clientSrc.match(/const MACHINES = \[([\s\S]*?)\];/)[1];
+  const client = {};
+  for (const m of block.matchAll(/\{\s*id:\s*"([^"]+)"[^\n]*?assetMin:\s*(\d+)/g)) client[m[1]] = Number(m[2]);
+  assert.deepEqual(client, SLOT_ASSET_MIN, "台ごとの必要な総資産がサーバーと違う");
 });

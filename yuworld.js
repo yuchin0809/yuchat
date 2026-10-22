@@ -24,9 +24,9 @@ const MACHINES = [
   { id: "yubasic",    name: "ゆうベーシック",     price: 1, special: "orig",    emoji: "🔰", tag: "入門",   tier: 1, desc: "いちばん遊びやすい入門台。オリジナル絵柄が揃うと大当たり＆FEVER！" },
   { id: "yurush",     name: "ゆうラッシュ",       price: 2, special: "orig",    emoji: "💨", tag: "軽快",   tier: 2, desc: "テンポよく回せる金色の台。オリジナル絵柄が揃うと大当たり＆FEVER！" },
   { id: "yuchance",   name: "ゆうチャンス",       price: 3, special: "triple7", emoji: "🎯", tag: "777",    tier: 3, desc: "強い発光と粒子が華やかな台。777が揃えば大当たり＆FEVER！" },
-  { id: "yutreasure", name: "ゆうトレジャー",     price: 5, assetMin: 600, special: "triple7", emoji: "🧰", tier: 4, tag: "宝箱", desc: "宝箱と金貨がうれしい中級台。7も狙える。" },
-  { id: "yurainbow",  name: "ゆうレインボー",     price: 7, assetMin: 800, special: "triple7", emoji: "🌈", tier: 5, tag: "虹",   desc: "虹色ときらめきが爽快な上級台。7とFEVER！" },
-  { id: "yujackpot",  name: "ゆうジャックポット", price: 9, assetMin: 1000, special: "triple7", emoji: "👑", tier: 6, tag: "最高額", desc: "最も豪華な台。金・虹の光と特別大当たり演出。7で大当たり＆FEVER！" }
+  { id: "yutreasure", name: "ゆうトレジャー",     price: 5, special: "triple7", emoji: "🧰", tier: 4, tag: "宝箱", assetMin: 600, desc: "宝箱と金貨がうれしい中級台。7も狙える。" },
+  { id: "yurainbow",  name: "ゆうレインボー",     price: 7, special: "triple7", emoji: "🌈", tier: 5, tag: "虹",   assetMin: 800, desc: "虹色ときらめきが爽快な上級台。7とFEVER！" },
+  { id: "yujackpot",  name: "ゆうジャックポット", price: 9, special: "triple7", emoji: "👑", tier: 6, tag: "最高額", assetMin: 1000, desc: "最も豪華な台。金・虹の光と特別大当たり演出。7で大当たり＆FEVER！" }
 ];
 const MACHINE_BY_ID = Object.fromEntries(MACHINES.map((m) => [m.id, m]));
 const specialSymOf = (m) => (m.special === "orig" ? "orig" : "triple7");
