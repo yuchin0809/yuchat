@@ -113,8 +113,7 @@ async function loadConfigAndRender() {
   state.isTopAdmin = cfg.isTopAdmin === true;
   state.open = cfg.open !== false;
   if (typeof cfg.serverNowMs === "number") state.clockOffset = cfg.serverNowMs - Date.now();
-  if (!state.published && !state.isTopAdmin) { state.screen = "preparing"; render(); return; }
-  state.screen = "shop"; render();
+  state.screen = "shop"; render();   // お店の一覧は誰でも見られる（ゆうスロが準備中でも、オセロなどのゲームは遊べる）。準備中のお店は、開くときに断る
 }
 
 /* ---------- 描画 ---------- */
@@ -122,7 +121,7 @@ function render() {
   if (!rootEl) return;
   if (state.screen !== "game" && state.zoomRO) { state.zoomRO.disconnect(); state.zoomRO = null; }
   if (state.screen === "loading") return renderMessage("読み込み中…", "");
-  if (state.screen === "preparing") return renderMessage("🚧 現在準備中です", "このお店はまだ公開されていません。公開までもうしばらくお待ちください。");
+  if (state.screen === "preparing") { renderMessage("🚧 現在準備中です", "このお店はまだ公開されていません。公開までもうしばらくお待ちください。"); rootEl.insertAdjacentHTML("beforeend", `<button type="button" class="yw-back" id="ywBackShop">← お店の一覧へ</button>`); $("#ywBackShop")?.addEventListener("click", () => { state.screen = "shop"; render(); }); return; }
   if (state.screen === "shop") return renderShop();
   if (state.screen === "lobby") return renderLobby();
   if (state.screen === "game") return renderGame();
@@ -145,25 +144,45 @@ function openLotteryScreen() {
   });
 }
 
+/* ゲーム（オセロ・将棋・大富豪）のお店。soon＝少し暗くして「準備中」と出す。開くと script.js のゲーム画面（今までの「ゲーム」タブと同じ）に移る */
+const GAME_SHOPS = [
+  { id: "othello", icon: "⚫", name: "オセロ", cls: "yw-othello-banner", desc: "友達とオセロで対戦。ルームを作って招待しよう。" },
+  { id: "shogi", icon: "♟️", name: "将棋", cls: "yw-shogi-banner", desc: "友達と将棋で対戦。ルームを作って招待しよう。" },
+  { id: "daifugo", icon: "🃏", name: "大富豪", cls: "yw-daifugo-banner", soon: true, desc: "みんなで大富豪。ただいまメンテナンス中です。" }
+];
 function renderShop() {
+  const blocked = !state.published && !state.isTopAdmin;
   const adminPanel = state.isTopAdmin ? `<div class="yw-admin"><span>管理者メニュー：ゆうスロの公開状態 <b>${state.published ? "公開中" : "非公開（準備中）"}</b></span>
       <button type="button" id="ywToggle" class="yw-btn yw-btn-sub">${state.published ? "非公開にする" : "公開する"}</button></div>` : "";
+  const invited = new Set(typeof deps.pendingInviteTypes === "function" ? deps.pendingInviteTypes() : []);
+  const gameCards = GAME_SHOPS.map((g) => `<button type="button" class="yw-shop-card${g.soon ? " is-soon" : ""}" data-game="${g.id}">
+        <div class="yw-shop-banner ${g.cls}"><span>${g.icon}</span></div>
+        <div class="yw-shop-body"><div class="yw-shop-name">${g.name}${g.soon ? " <span class=\"yw-badge\">準備中</span>" : ""}${invited.has(g.id) ? " <span class=\"yw-badge yw-badge-invite\">招待</span>" : ""}</div>
+          <div class="yw-shop-desc">${g.desc}</div></div>
+      </button>`).join("");
   rootEl.innerHTML = `<div class="yw-head"><h2>🎡 ゆうワールド</h2><p>お店をえらんで遊べます。コインはゆうChat共通です。</p></div>
     ${adminPanel}
     <div class="yw-shop-grid">
-      <button type="button" class="yw-shop-card" id="ywOpenSlot">
+      <button type="button" class="yw-shop-card${blocked ? " is-soon" : ""}" id="ywOpenSlot">
         <div class="yw-shop-banner yw-slot-banner"><span>🎰</span></div>
         <div class="yw-shop-body"><div class="yw-shop-name">ゆうスロ${state.published ? "" : " <span class=\"yw-badge\">準備中</span>"}</div>
           <div class="yw-shop-desc">6台のスロット。777やオリジナル絵柄で大当たり＆FEVER！営業時間 7:00〜23:00。</div></div>
       </button>
-      <button type="button" class="yw-shop-card" id="ywOpenLottery">
+      <button type="button" class="yw-shop-card${blocked ? " is-soon" : ""}" id="ywOpenLottery">
         <div class="yw-shop-banner yw-lottery-banner"><span>🎟</span></div>
-        <div class="yw-shop-body"><div class="yw-shop-name">ゆう宝くじ売り場</div>
+        <div class="yw-shop-body"><div class="yw-shop-name">ゆう宝くじ売り場${blocked ? " <span class=\"yw-badge\">準備中</span>" : ""}</div>
           <div class="yw-shop-desc">毎週月曜8:00に発売、金曜14:30に抽選。連番・バラで買えて、1等は全体で1本・1万コイン！前後賞もあり、毎週名前と賞金が変わるよ。1枚10コイン。</div></div>
       </button>
+      ${gameCards}
+      <button type="button" class="yw-shop-card is-soon" id="ywOpenYacht" disabled>
+        <div class="yw-shop-banner yw-yacht-banner"><span>🎲</span></div>
+        <div class="yw-shop-body"><div class="yw-shop-name">ヨット <span class="yw-badge">準備中</span></div>
+          <div class="yw-shop-desc">サイコロを振って役を作る、得点を競うゲーム。</div></div>
+      </button>
     </div>`;
-  $("#ywOpenSlot")?.addEventListener("click", () => { unlockAudio(); openLobby(); });
-  $("#ywOpenLottery")?.addEventListener("click", () => { unlockAudio(); state.screen = "lottery"; render(); });
+  $("#ywOpenSlot")?.addEventListener("click", () => { if (blocked) { state.screen = "preparing"; render(); return; } unlockAudio(); openLobby(); });
+  $("#ywOpenLottery")?.addEventListener("click", () => { if (blocked) { state.screen = "preparing"; render(); return; } unlockAudio(); state.screen = "lottery"; render(); });
+  rootEl.querySelectorAll("[data-game]").forEach((el) => el.addEventListener("click", () => { if (typeof deps.openGame === "function") deps.openGame(el.dataset.game); }));
   $("#ywToggle")?.addEventListener("click", onTogglePublish);
 }
 async function onTogglePublish() {
@@ -815,6 +834,14 @@ function injectStyles() {
   .yw-shop-body { padding: 12px 14px 16px; }
   .yw-shop-name { font-weight: 800; font-size: 16px; margin-bottom: 4px; }
   .yw-shop-desc { color: #666; font-size: 12.5px; line-height: 1.6; }
+  .yw-othello-banner { background: linear-gradient(135deg, #1b7a43, #0f5a30); }
+  .yw-shogi-banner { background: linear-gradient(135deg, #c8964b, #8a5a1f); }
+  .yw-daifugo-banner { background: linear-gradient(135deg, #2d6cdf, #1b2f7a); }
+  .yw-yacht-banner { background: linear-gradient(135deg, #12b3a8, #0a5f8a); }
+  .yw-shop-card.is-soon .yw-shop-banner { filter: brightness(.55) saturate(.7); }
+  .yw-shop-card.is-soon .yw-shop-body { opacity: .6; }
+  .yw-shop-card:disabled { cursor: default; color: inherit; }
+  .yw-badge-invite { background: #34c759; }
   .yw-badge { background: #ff3b30; color: #fff; font-size: 11px; border-radius: 6px; padding: 1px 6px; vertical-align: middle; }
   .yw-machine { background: #fff; border-radius: 14px; padding: 14px; box-shadow: 0 4px 16px rgba(0,0,0,.06); display: flex; flex-direction: column; border-top: 4px solid #cfd6e4; }
   .yw-machine.is-busy { opacity: .7; }
