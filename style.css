@@ -6151,3 +6151,7 @@ button.secondary {
     opacity: .6;
     cursor: default;
 }
+
+/* 🎮 ゲーム（オセロ・将棋・大富豪）は、ゆうワールドのお店から開く。種類の切り替えはお店のカードで行うので、ここでは出さない */
+#gamesView .game-type-selector { display: none; }
+.games-back { background: none; border: none; color: #4a7; font-size: 14px; cursor: pointer; padding: 4px 0 8px; }

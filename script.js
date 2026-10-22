@@ -34,7 +34,7 @@ import {
 /* 🎡 ゆうワールド（ゆうスロなどのお店）。残高・抽選・公開・営業時間の判定はすべて Worker 任せ（Firebase には触らない） */
 import {
   initYuWorld, openYuWorldView, stopYuWorldView
-} from "./yuworld.js?v=20261023-yuworld34";
+} from "./yuworld.js?v=20261023-yuworld36";
 
 /* 💸 コインの送金（申請は本人・OK/却下は管理者）。中身の確定は Worker */
 import { transferInit, transferOpenUser, transferOpenAdmin, transferReset } from "./yutransfer.js?v=20261020-transfer1";
@@ -3648,7 +3648,7 @@ function switchView(view) {
   });
 
   tabButtons.forEach((button) => {
-    button.classList.toggle("active", button.dataset.view === view);
+    button.classList.toggle("active", button.dataset.view === (view === "games" ? "yuworld" : view));   /* ゲームの画面は、ゆうワールドの中 */
   });
 
   if (view === "chat") { markSelectedChatAsRead(); renderFriends(); renderGroups(); }
@@ -3668,6 +3668,8 @@ function switchView(view) {
 
 /* 🎡 ゆうワールド（ゆうスロ）を初期化する。トークン・ユーザー名・最上位管理者かどうかは呼ばれた時点の状態を使う */
 initYuWorld({
+  openGame: (type) => openGameFromWorld(type),
+  pendingInviteTypes: () => pendingGameInvites.map((invite) => invite.gameType),
   endpoint: NOTIFY_ENDPOINT.replace(/\/notify$/, "/yuslot"),
   getToken: () => currentUser.getIdToken(),
   getUsername: () => username,
@@ -7228,6 +7230,13 @@ gameTypeButtons.forEach((button) => {
 
 let latestGameRooms = [];
 
+/* ゆうワールドのお店（オセロ・将棋・大富豪）から、ゲームの画面を開く */
+function openGameFromWorld(type) {
+  document.querySelector(`.game-type[data-game="${type}"]`)?.click();
+  switchView("games");
+}
+document.getElementById("gamesBackToWorld")?.addEventListener("click", () => switchView("yuworld"));
+
 function stopGameRoomsSubscription() {
   if (unsubscribeGameRooms) { unsubscribeGameRooms(); unsubscribeGameRooms = null; }
 }
@@ -7728,7 +7737,7 @@ function listenGameInvites() {
 }
 
 function renderGameInvites() {
-  const gamesTabButton = document.querySelector('.tabs button[data-view="games"]');
+  const gamesTabButton = document.querySelector('.tabs button[data-view="yuworld"]');
   gamesTabButton?.classList.toggle("has-invite", pendingGameInvites.length > 0);
 
   if (!gameInvitesEl) return;
@@ -7827,7 +7836,7 @@ async function acceptGameInvite(invite) {
       return;
     }
 
-    switchView("games");
+    openGameFromWorld(invite.gameType);
     const joined = await joinGameRoom({ id: invite.roomId, gameType: invite.gameType });
     if (joined) await resolveGameInvite(invite, "accepted");
   } catch (error) {
