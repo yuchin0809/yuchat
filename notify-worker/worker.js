@@ -3663,7 +3663,7 @@ const CANCEL_FREE_FROM_DAY = "2026-10-23";
 const CANCEL_FREE_WINDOWS = [[610, 655], [700, 710], [755, 800], [845, 855]];
 const CANCEL_WINDOW_MS = 18500;                           // ※内緒：最初の1人のスタートから、この時間で取れなければ NPC が取る
 /* その日だけ追加で出すキャンセル（日本時間の "時:分"）。※その日の通常の時刻より後ろにすること（実行済みの回数 cxDone の数え方がずれないように） */
-const CANCEL_EXTRA = { "2026-10-22": ["13:20", "14:10"] };
+const CANCEL_EXTRA = { "2026-10-22": ["13:20", "14:10"], "2026-10-23": ["12:45", "14:08"] };   // 10/23 は授業中をさけた時間（昼休み・5限と6限の間）
 export function kakuCancelPlan(dayId) {
   const r = kakuSeeded("cancel:" + dayId), t0 = kakuDayStart(dayId);
   const n = 1 + Math.floor(r() * 3);
