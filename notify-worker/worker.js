@@ -2328,7 +2328,7 @@ function slotRandomHex(n = 16) {
 
 /* ----- 公開設定（worldConfig/yuslot）。短時間キャッシュしてスピン中の読み取りを避ける ----- */
 let slotConfigCache = { value: null, at: 0 };
-export function resetYuslotCacheForTest() { slotConfigCache = { value: null, at: 0 }; }
+export function resetYuslotCacheForTest() { slotConfigCache = { value: null, at: 0 }; slotSeatsCache = { at: 0, docs: null }; battleCancelPrefCache.clear(); }
 async function slotGetPublished(deps, { maxAgeMs = 30000 } = {}) {
   const now = deps.now();
   if (slotConfigCache.value !== null && now - slotConfigCache.at < maxAgeMs) return slotConfigCache.value;
@@ -2397,17 +2397,28 @@ async function yuslotSetConfig(deps, uid, body) {
   return { ok: true, published };
 }
 
+/* ロビーの席の一覧。6台を1台ずつ読まず、yuslotSeats を1回の問い合わせで読む（読み取り＝席に座っている台の数だけ）。
+   ロビーは8秒おきに開かれるので、結果は Worker のメモリに数秒だけ置く（着席・退席のときは捨てる）。表示は数秒だけ遅れることがあるが、着席の判定そのものは毎回、席の書類を読み直す */
+const SLOT_LOBBY_TTL_MS = 6000;
+let slotSeatsCache = { at: 0, docs: null };
+export function resetSlotSeatsCacheForTest() { slotSeatsCache = { at: 0, docs: null }; }
+async function slotSeatDocs(deps, now) {
+  if (slotSeatsCache.docs && now - slotSeatsCache.at < SLOT_LOBBY_TTL_MS && now >= slotSeatsCache.at) return slotSeatsCache.docs;
+  const rows = await deps.firestore.query("yuslotSeats", []);
+  const docs = new Map(rows.map((r) => [r.id, r.data]));
+  slotSeatsCache = { at: now, docs };
+  return docs;
+}
 async function yuslotLobby(deps, uid) {
   const published = await slotGetPublished(deps);
   if (!published && !slotIsTopAdmin(deps, uid)) return { status: 403, error: "not_published" };
   const now = deps.now();
-  const ids = Object.keys(SLOT_MACHINES);
+  const docs = await slotSeatDocs(deps, now);
   const seats = {};
-  await Promise.all(ids.map(async (id) => {
-    const raw = await deps.firestore.getRaw(`yuslotSeats/${id}`);
-    const d = raw ? decodeFields(raw.fields) : null;
+  for (const id of Object.keys(SLOT_MACHINES)) {
+    const d = docs.get(id) || null;
     seats[id] = d && Number(d.graceUntilMs || 0) > now && !slotSeatStale(d, id, now) ? { name: d.name || "", occupied: true, mine: d.uid === uid } : { occupied: false };
-  }));
+  }
   return { ok: true, seats, open: slotBusinessOpen(now), serverNowMs: now };
 }
 
@@ -2476,6 +2487,7 @@ async function yuslotSeat(deps, uid, body) {
     if (isRetryableCommitError(error) || error.status === 409) return { status: 409, error: "seat_taken" };
     throw error;
   }
+  slotSeatsCache = { at: 0, docs: null };
 
   const session = {
     v: 1, uid, name: me.name, machine, price: SLOT_MACHINES[machine].price,
@@ -2568,6 +2580,7 @@ async function yuslotPersist(deps, uid, session, { release }) {
     });
   }
   await deps.firestore.commit(writes);
+  if (release) slotSeatsCache = { at: 0, docs: null };
   return { ok: true, applied: toApply };
 }
 
@@ -3670,6 +3683,18 @@ export async function runKakuCancelTick(env = {}, scheduledTime = Date.now(), de
   return r;
 }
 
+/* 「キャンセルの通知」の設定は、表を開くたびには読まない（15秒おきに開かれるので、人ごとに1分だけメモリに置く。設定を変えたら捨てる） */
+const battleCancelPrefCache = new Map();
+async function battleCancelNotify(deps, uid, now) {
+  const hit = battleCancelPrefCache.get(uid);
+  if (hit && now - hit.at < 60000 && now >= hit.at) return hit.on;
+  const on = (await kakuGetNotify(deps, uid)).cancel === true;
+  if (battleCancelPrefCache.size > 500) battleCancelPrefCache.clear();
+  battleCancelPrefCache.set(uid, { at: now, on });
+  return on;
+}
+export function resetBattlePrefCacheForTest() { battleCancelPrefCache.clear(); }
+
 /* ----- ユーザー向けの表（その日の枠ごと） ----- */
 export async function battleBoard(deps, uid) {
   if (!(await kakuGate(deps, uid))) return { status: 403, error: "not_published" };
@@ -3695,8 +3720,7 @@ export async function battleBoard(deps, uid) {
     else state = "filled";
     rows.push({ i: x.i, s: x.s, e: x.e, kind: x.kind, state });
   }
-  const prefs = await kakuGetNotify(deps, uid);
-  return { ok: true, active: true, serverNowMs: now, day, rows, notify: prefs.cancel === true };
+  return { ok: true, active: true, serverNowMs: now, day, rows, notify: await battleCancelNotify(deps, uid, now) };
 }
 
 /* ----- キャンセル枠を取るミニゲーム（先着と同じ全工程。ランキングには載せない） ----- */
@@ -3843,6 +3867,7 @@ async function kakuSetNotify(deps, uid, body) {
   const cur = await kakuGetNotify(deps, uid), next = { ...cur };
   for (const k of Object.keys(KAKU_NOTIFY_DEFAULTS)) if (typeof body?.prefs?.[k] === "boolean") next[k] = body.prefs[k];
   await deps.firestore.set(`yuslotPrefs/${uid}`, { uid, kakuNotify: next, updatedAtMs: deps.now() });
+  battleCancelPrefCache.delete(uid);
   return { ok: true, prefs: next };
 }
 async function kakuPushFilter(deps, kind) {
