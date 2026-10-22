@@ -74,13 +74,14 @@ function setup({ now = JST(2026, 10, 21, 12), wagered = {}, published = true } =
   return { fs, deps, state, setWagered };
 }
 
-test("週の始まり：月曜 7:00（日本時間）。月曜 6:59 までは前の週", () => {
-  const mon = JST(2026, 10, 26, 7);
-  assert.equal(rankWeekStart(mon), mon);
-  assert.equal(rankWeekStart(mon + 3 * 86400000 + 5 * 3600000), mon, "木曜");
-  assert.equal(rankWeekStart(mon - 1), JST(2026, 10, 19, 7), "月曜 6:59:59 は前の週");
-  assert.equal(rankWeekStart(JST(2026, 10, 25, 23, 59)), JST(2026, 10, 19, 7), "日曜の夜");
-  assert.equal(rankWeekStart(JST(2026, 10, 19, 7)), JST(2026, 10, 19, 7));
+test("週の始まり：金曜 15:10（日本時間）。金曜 15:09 までは前の週", () => {
+  const fri = JST(2026, 10, 30, 15, 10);
+  assert.equal(rankWeekStart(fri), fri);
+  assert.equal(rankWeekStart(fri + 3 * 86400000 + 5 * 3600000), fri, "月曜");
+  assert.equal(rankWeekStart(fri - 1), JST(2026, 10, 23, 15, 10), "金曜 15:09:59 は前の週");
+  assert.equal(rankWeekStart(JST(2026, 11, 6, 15, 9)), fri, "次の金曜の15:09");
+  assert.equal(rankWeekStart(JST(2026, 10, 23, 15, 10)), JST(2026, 10, 23, 15, 10));
+  assert.equal(rankWeekStart(JST(2026, 10, 22, 12, 0)), JST(2026, 10, 16, 15, 10), "切り替え前の木曜（記録された週の始まりより前）");
 });
 
 test("ランクの条件：500／2,000／6,000／15,000／35,000 コイン以上（ちょうどでも上がる）", () => {
@@ -99,18 +100,18 @@ test("最初の週：ドキュメントを作るだけ（全員ランクなし�
   assert.equal(fs.counts.commit, commits); assert.equal(fs.counts.query, queries, "users を読み直さない");
 });
 
-test("月曜 7:00 を過ぎると、先週の使ったコインでランクが決まる。次の週は「その週に使った分」だけで決まる（下がることもある）", async () => {
+test("金曜 15:10 を過ぎると、先週の使ったコインでランクが決まる。次の週は「その週に使った分」だけで決まる（下がることもある）", async () => {
   const { fs, deps, state, setWagered } = setup({ wagered: { alice: 36000, bob: 2500, carol: 300 } });
   await rankEnsureCurrent(deps);                                  // 最初の週
-  state.now = JST(2026, 10, 26, 7, 1);
+  state.now = JST(2026, 10, 23, 15, 11);
   const w1 = await rankEnsureCurrent(deps);
-  assert.equal(w1.data.weekStart, JST(2026, 10, 26, 7));
+  assert.equal(w1.data.weekStart, JST(2026, 10, 23, 15, 10));
   assert.deepEqual(w1.data.ranks, { id_alice: 5, id_bob: 2 }, "alice=ダイヤ・bob=シルバー・carol=なし");
   assert.deepEqual(w1.data.lastWeek, { id_alice: 36000, id_bob: 2500, id_carol: 300 });
   assert.deepEqual(w1.data.base, { id_alice: 36000, id_bob: 2500, id_carol: 300 }, "いまの累計が次の週の始まり");
   // 1週間（alice は遊ばない・bob は +7000・carol は +600）
   setWagered("bob", 9500); setWagered("carol", 900);
-  state.now = JST(2026, 11, 2, 7, 0);
+  state.now = JST(2026, 10, 30, 15, 10);
   const w2 = await rankEnsureCurrent(deps);
   assert.deepEqual(w2.data.ranks, { id_bob: 3, id_carol: 1 }, "alice は遊ばなかったのでランクなし（下がる）・bob=ゴールド・carol=ブロンズ");
   assert.deepEqual(w2.data.lastWeek, { id_bob: 7000, id_carol: 600 });
@@ -122,23 +123,23 @@ test("月曜 7:00 を過ぎると、先週の使ったコインでランクが�
 test("週の集計は1回の commit：同時に呼んでも二重に集計されない", async () => {
   const { deps, state, fs } = setup({ wagered: { alice: 700 } });
   await rankEnsureCurrent(deps);
-  state.now = JST(2026, 10, 26, 7, 2);
+  state.now = JST(2026, 10, 23, 15, 12);
   const rs = await Promise.all([1, 2, 3, 4].map(() => rankEnsureCurrent(deps)));
-  assert.ok(rs.every((r) => r.data.weekStart === JST(2026, 10, 26, 7)));
+  assert.ok(rs.every((r) => r.data.weekStart === JST(2026, 10, 23, 15, 10)));
   assert.deepEqual(fs.plain("yuslotRank/current").ranks, { id_alice: 1 });
   assert.deepEqual(fs.plain("yuslotRank/current").base, { id_alice: 700 });
 });
 
-test("cron：月曜 7:00〜7:09 だけ動き、同じ週は1回だけ。それ以外の時刻は何も読まない", async () => {
+test("cron：金曜 15:10〜15:19 だけ動き、同じ週は1回だけ。それ以外の時刻は何も読まない", async () => {
   const { deps, fs } = setup({ wagered: { alice: 3000 } });
   await rankEnsureCurrent(deps);
   const reads = () => fs.counts.get + fs.counts.getRaw + fs.counts.query;
   const r0 = reads();
-  assert.equal((await runRankTick({}, JST(2026, 10, 26, 6, 59), deps)).skipped, "outside");
-  assert.equal((await runRankTick({}, JST(2026, 10, 26, 7, 10), deps)).skipped, "outside");
-  assert.equal((await runRankTick({}, JST(2026, 10, 27, 7, 0), deps)).skipped, "outside", "火曜");
+  assert.equal((await runRankTick({}, JST(2026, 10, 23, 15, 9), deps)).skipped, "outside");
+  assert.equal((await runRankTick({}, JST(2026, 10, 23, 15, 20), deps)).skipped, "outside");
+  assert.equal((await runRankTick({}, JST(2026, 10, 24, 15, 10), deps)).skipped, "outside", "土曜");
   assert.equal(reads(), r0, "時刻が違えば何も読まない");
-  const t = JST(2026, 10, 26, 7, 0);
+  const t = JST(2026, 10, 23, 15, 10);
   deps.now = () => t;
   const r = await runRankTick({}, t, deps);
   assert.equal(r.ranked, 1);
@@ -154,14 +155,14 @@ test("画面用の状態：自分のランク・今週の進み・次のラン�
   assert.equal(r.projectedName, "ゆうシルバー"); assert.deepEqual(r.next, { name: "ゆうブロンズ", min: 500 });
   assert.deepEqual(r.levels.map((l) => l.min), [0, 500, 2000, 6000, 15000, 35000]);
   assert.ok(!JSON.stringify(r).includes("mult"), "倍率は返さない");
-  state.now = JST(2026, 10, 26, 7, 5);
+  state.now = JST(2026, 10, 23, 15, 15);
   r = await act("alice");
   assert.equal(r.level, 2); assert.equal(r.name, "ゆうシルバー"); assert.equal(r.thisWeek, 0); assert.equal(r.lastWeek, 2500);
   setWagered("alice", 2500 + 800);
   state.now += 6 * 60000;                                                  // 5分のメモリは過ぎたが、同じ週
   r = await act("alice");
   assert.equal(r.thisWeek, 800); assert.equal(r.projectedName, "ゆうブロンズ"); assert.deepEqual(r.next, { name: "ゆうゴールド", min: 6000 });
-  assert.equal(r.nextRollMs, JST(2026, 11, 2, 7));
+  assert.equal(r.nextRollMs, JST(2026, 10, 30, 15, 10));
   const un = setup({ published: false });
   assert.equal((await handleYuslotAction(un.deps, "id_alice", { action: "rankStatus", username: "alice" })).error, "not_published");
 });
