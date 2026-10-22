@@ -189,6 +189,10 @@ const TEST_CASES = [
   // 🎲 ヨット：途中経過（サイコロの目・点数）とランキングはサーバー（通知 Worker）だけ
   testCase("DENY", "gameRooms：ヨットの進み（yacht）を参加者がブラウザから書き換える", userA, "update", "gameRooms/ry", { data: { yacht: { done: true, winner: 0 } }, existing: { gameType: "yacht", ownerUid: userA.uid, owner: "a", members: ["a", "b"], memberUids: [userA.uid, "uidB"], status: "playing" } }),
   testCase("ALLOW", "gameRooms：ヨットの部屋でも、参加者が status を更新できる（yacht には触れない）", userA, "update", "gameRooms/ry", { data: { status: "waiting" }, existing: { gameType: "yacht", ownerUid: userA.uid, owner: "a", members: ["a", "b"], memberUids: [userA.uid, "uidB"], status: "playing" } }),
+  // 🧽 消しバト：買ったパーツ・付けているパーツはサーバー（通知 Worker）だけ
+  testCase("DENY", "yuslotKeshi：自分の消しゴムを直接読めない", userA, "get", "yuslotKeshi/" + userA.uid, { existing: { owned: ["body:titan"] } }),
+  testCase("DENY", "yuslotKeshi：パーツを勝手に増やす", userA, "update", "yuslotKeshi/" + userA.uid, { data: { owned: ["body:titan", "weight:gold"] }, existing: { owned: [] } }),
+  testCase("DENY", "yuslotKeshi：最上位管理者でもブラウザから書けない", admin, "update", "yuslotKeshi/" + userA.uid, { data: { owned: ["body:titan"] }, existing: { owned: [] } }),
   testCase("DENY", "yuslotYacht：自分のゲームを直接読めない", userA, "get", "yuslotYacht/" + userA.uid, { existing: { gid: "g", dice: [1, 2, 3, 4, 5] } }),
   testCase("DENY", "yuslotYacht：自分の点数を書き換える", userA, "update", "yuslotYacht/" + userA.uid, { data: { total: 999 }, existing: { gid: "g", done: true, total: 10 } }),
   testCase("DENY", "yuslotYacht：ランキングを直接読めない", userA, "get", "yuslotYacht/_week", { existing: { rows: [] } }),

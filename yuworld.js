@@ -15,6 +15,7 @@
 /* 🎟 ゆう宝くじ売り場の画面（別ファイル。Worker の lottery* アクションを呼んで表示するだけ） */
 import { renderLottery, stopLottery } from "./yulottery.js?v=20261021-lottery7";
 import { renderYacht, stopYacht } from "./yuyacht.js?v=20261023-yacht5";
+import { renderKeshi, stopKeshi } from "./yukeshi.js?v=20261023-keshi2";
 /* 🌈 確変台のパネル（台の一覧の上）。抽選・先着・通知設定。Worker の kaku* アクションを呼んで表示するだけ */
 import { kakuInit, kakuPanelHtml, kakuBind, kakuMachineInfo, startKaku, stopKaku, refreshKaku } from "./yukaku.js?v=20261023-kaku15";
 /* 🏅 会員ランクのカード（台の一覧の上）。ランクの判定・進みは Worker の rankStatus が返す */
@@ -54,7 +55,7 @@ function fxHigh() { return state.fxLevel === "high" && !reduced(); }
 const state = {
   kaku: false, kakuEnd: 0,
   screen: "loading",
-  published: false, yachtPublished: false, isTopAdmin: false, open: true,
+  published: false, yachtPublished: false, keshiPublished: false, isTopAdmin: false, open: true,
   clockOffset: 0,
   session: null, machine: null,
   balance: 0, freeSpins: 0,
@@ -80,7 +81,7 @@ export function initYuWorld(options) {
 }
 export async function openYuWorldView() { if (!rootEl) return; if (state.screen !== "game") await loadConfigAndRender(); }
 export async function stopYuWorldView() {
-  stopFlushTimer(); stopFeverTimer(); stopLobbyTimer(); stopLottery(); stopYacht();
+  stopFlushTimer(); stopFeverTimer(); stopLobbyTimer(); stopLottery(); stopYacht(); stopKeshi();
   if (state.session) { try { await settle(); } catch (_) {} }
 }
 
@@ -112,6 +113,7 @@ async function loadConfigAndRender() {
   try { cfg = await api("config"); } catch (_) { cfg = { published: false, isTopAdmin: false, open: false }; }
   state.published = cfg.published === true;
   state.yachtPublished = cfg.yachtPublished === true;
+  state.keshiPublished = cfg.keshiPublished === true;
   state.isTopAdmin = cfg.isTopAdmin === true;
   state.open = cfg.open !== false;
   if (typeof cfg.serverNowMs === "number") state.clockOffset = cfg.serverNowMs - Date.now();
@@ -125,6 +127,7 @@ function render() {
   if (state.screen === "loading") return renderMessage("読み込み中…", "");
   if (state.screen === "preparing") { renderMessage("🚧 現在準備中です", "このお店はまだ公開されていません。公開までもうしばらくお待ちください。"); rootEl.insertAdjacentHTML("beforeend", `<button type="button" class="yw-back" id="ywBackShop">← お店の一覧へ</button>`); $("#ywBackShop")?.addEventListener("click", () => { state.screen = "shop"; render(); }); return; }
   if (state.screen === "shop") return renderShop();
+  if (state.screen === "keshi") return renderKeshi({ root: rootEl, api, esc, onBack: () => { state.screen = "shop"; render(); } });
   if (state.screen === "yacht") return renderYacht({ root: rootEl, api, esc, openRooms: () => { if (typeof deps.openGame === "function") deps.openGame("yacht"); }, onBack: () => { state.screen = "shop"; render(); } });
   if (state.screen === "lobby") return renderLobby();
   if (state.screen === "game") return renderGame();
@@ -158,7 +161,9 @@ function renderShop() {
   const adminPanel = state.isTopAdmin ? `<div class="yw-admin"><span>管理者メニュー：ゆうスロの公開状態 <b>${state.published ? "公開中" : "非公開（準備中）"}</b></span>
       <button type="button" id="ywToggle" class="yw-btn yw-btn-sub">${state.published ? "非公開にする" : "公開する"}</button></div>
     <div class="yw-admin"><span>管理者メニュー：ヨットの公開状態 <b>${state.yachtPublished ? "公開中" : "非公開（準備中）"}</b></span>
-      <button type="button" id="ywToggleYacht" class="yw-btn yw-btn-sub">${state.yachtPublished ? "非公開にする" : "公開する"}</button></div>` : "";
+      <button type="button" id="ywToggleYacht" class="yw-btn yw-btn-sub">${state.yachtPublished ? "非公開にする" : "公開する"}</button></div>
+    <div class="yw-admin"><span>管理者メニュー：消しバトの公開状態 <b>${state.keshiPublished ? "公開中" : "非公開（準備中）"}</b></span>
+      <button type="button" id="ywToggleKeshi" class="yw-btn yw-btn-sub">${state.keshiPublished ? "非公開にする" : "公開する"}</button></div>` : "";
   const invited = new Set(typeof deps.pendingInviteTypes === "function" ? deps.pendingInviteTypes() : []);
   const gameCards = GAME_SHOPS.map((g) => `<button type="button" class="yw-shop-card${g.soon ? " is-soon" : ""}" data-game="${g.id}">
         <div class="yw-shop-banner ${g.cls}"><span>${g.icon}</span></div>
@@ -184,13 +189,26 @@ function renderShop() {
         <div class="yw-shop-body"><div class="yw-shop-name">ヨット${state.yachtPublished ? "" : " <span class=\"yw-badge\">準備中</span>"}</div>
           <div class="yw-shop-desc">サイコロを振って役を作る、得点を競うゲーム。週間ランキングで1位500コイン！</div></div>
       </button>
+      <button type="button" class="yw-shop-card${state.keshiPublished ? "" : " is-soon"}" id="ywOpenKeshi" ${state.keshiPublished || state.isTopAdmin ? "" : "disabled"}>
+        <div class="yw-shop-banner yw-keshi-banner"><span>🧽</span></div>
+        <div class="yw-shop-body"><div class="yw-shop-name">消しバト${state.keshiPublished ? "" : " <span class=\"yw-badge\">準備中</span>"}</div>
+          <div class="yw-shop-desc">パーツで自分だけの最強の消しゴムを作って、机の上で戦わせよう。</div></div>
+      </button>
     </div>`;
   $("#ywOpenSlot")?.addEventListener("click", () => { if (blocked) { state.screen = "preparing"; render(); return; } unlockAudio(); openLobby(); });
   $("#ywOpenLottery")?.addEventListener("click", () => { if (blocked) { state.screen = "preparing"; render(); return; } unlockAudio(); state.screen = "lottery"; render(); });
   rootEl.querySelectorAll("[data-game]").forEach((el) => el.addEventListener("click", () => { if (typeof deps.openGame === "function") deps.openGame(el.dataset.game); }));
   $("#ywOpenYacht")?.addEventListener("click", () => { state.screen = "yacht"; render(); });
+  $("#ywOpenKeshi")?.addEventListener("click", () => { state.screen = "keshi"; render(); });
   $("#ywToggle")?.addEventListener("click", onTogglePublish);
   $("#ywToggleYacht")?.addEventListener("click", onToggleYacht);
+  $("#ywToggleKeshi")?.addEventListener("click", onToggleKeshi);
+}
+async function onToggleKeshi() {
+  const next = !state.keshiPublished;
+  if (!confirm(next ? "消しバトを公開しますか？（一般ユーザーも遊べるようになります）" : "消しバトを非公開にしますか？（一般ユーザーは遊べなくなります）")) return;
+  try { const r = await api("setConfig", { keshiPublished: next }); state.keshiPublished = r.keshiPublished === true; render(); }
+  catch (e) { alert("変更できませんでした（" + (e.code || "エラー") + "）"); }
 }
 async function onToggleYacht() {
   const next = !state.yachtPublished;
@@ -851,6 +869,7 @@ function injectStyles() {
   .yw-othello-banner { background: linear-gradient(135deg, #1b7a43, #0f5a30); }
   .yw-shogi-banner { background: linear-gradient(135deg, #c8964b, #8a5a1f); }
   .yw-daifugo-banner { background: linear-gradient(135deg, #2d6cdf, #1b2f7a); }
+  .yw-keshi-banner { background: linear-gradient(135deg, #2f6fe0, #7bb7ff); }
   .yw-yacht-banner { background: linear-gradient(135deg, #12b3a8, #0a5f8a); }
   .yw-shop-card.is-soon .yw-shop-banner { filter: brightness(.55) saturate(.7); }
   .yw-shop-card.is-soon .yw-shop-body { opacity: .6; }

@@ -2334,19 +2334,19 @@ function slotRandomHex(n = 16) {
 }
 
 /* ----- 公開設定（worldConfig/yuslot）。短時間キャッシュしてスピン中の読み取りを避ける ----- */
-let slotConfigCache = { value: null, yacht: false, at: 0 };
-export function resetYuslotCacheForTest() { slotConfigCache = { value: null, yacht: false, at: 0 }; slotSeatsCache = { at: 0, docs: null }; battleCancelPrefCache.clear(); yachtWeekCache = { at: 0, value: null }; }
+let slotConfigCache = { value: null, yacht: false, keshi: false, at: 0 };
+export function resetYuslotCacheForTest() { slotConfigCache = { value: null, yacht: false, keshi: false, at: 0 }; slotSeatsCache = { at: 0, docs: null }; battleCancelPrefCache.clear(); yachtWeekCache = { at: 0, value: null }; }
 /* 公開設定：ゆうスロ（yuslotPublished）とヨット（yachtPublished）は同じ書類。1回の読み取りで両方わかる */
 async function slotGetConfig(deps, { maxAgeMs = 30000 } = {}) {
   const now = deps.now();
-  if (slotConfigCache.value !== null && now - slotConfigCache.at < maxAgeMs) return { published: slotConfigCache.value, yacht: slotConfigCache.yacht };
+  if (slotConfigCache.value !== null && now - slotConfigCache.at < maxAgeMs) return { published: slotConfigCache.value, yacht: slotConfigCache.yacht, keshi: slotConfigCache.keshi };
   try {
     const doc = await deps.firestore.get("worldConfig/yuslot");
-    slotConfigCache = { value: doc?.yuslotPublished === true, yacht: doc?.yachtPublished === true, at: now };
-    return { published: slotConfigCache.value, yacht: slotConfigCache.yacht };
+    slotConfigCache = { value: doc?.yuslotPublished === true, yacht: doc?.yachtPublished === true, keshi: doc?.keshiPublished === true, at: now };
+    return { published: slotConfigCache.value, yacht: slotConfigCache.yacht, keshi: slotConfigCache.keshi };
   } catch (error) {
     console.warn("yuslot config read failed", String(error?.message || error).slice(0, 120));
-    return { published: false, yacht: false }; // 取得失敗は非公開扱い
+    return { published: false, yacht: false, keshi: false }; // 取得失敗は非公開扱い
   }
 }
 async function slotGetPublished(deps, opts) { return (await slotGetConfig(deps, opts)).published; }
@@ -2384,6 +2384,9 @@ export async function handleYuslotAction(deps, uid, body) {
       case "yachtRoll": return await yachtRoll(deps, uid, body);
       case "yachtScore": return await yachtScore(deps, uid, body);
       case "yachtRanking": return await yachtRanking(deps, uid, body);
+      case "keshiState": return await keshiState(deps, uid, body);
+      case "keshiBuy": return await keshiBuy(deps, uid, body);
+      case "keshiEquip": return await keshiEquip(deps, uid, body);
       case "yachtRoomStart": return await yachtRoomStart(deps, uid, body);
       case "yachtRoomRoll": return await yachtRoomRoll(deps, uid, body);
       case "yachtRoomScore": return await yachtRoomScore(deps, uid, body);
@@ -2399,8 +2402,8 @@ export async function handleYuslotAction(deps, uid, body) {
 }
 
 async function yuslotConfig(deps, uid) {
-  const { published, yacht } = await slotGetConfig(deps);
-  return { ok: true, published, yachtPublished: yacht, isTopAdmin: slotIsTopAdmin(deps, uid), open: slotBusinessOpen(deps.now()), serverNowMs: deps.now(), day: slotBusinessDay(deps.now()) };
+  const { published, yacht, keshi } = await slotGetConfig(deps);
+  return { ok: true, published, yachtPublished: yacht, keshiPublished: keshi, isTopAdmin: slotIsTopAdmin(deps, uid), open: slotBusinessOpen(deps.now()), serverNowMs: deps.now(), day: slotBusinessDay(deps.now()) };
 }
 
 async function yuslotSetConfig(deps, uid, body) {
@@ -2408,12 +2411,13 @@ async function yuslotSetConfig(deps, uid, body) {
   const cur = await slotGetConfig(deps, { maxAgeMs: 0 });
   const fields = { updatedAtMs: { integerValue: String(deps.now()) }, updatedByUid: { stringValue: uid } };
   const mask = ["updatedAtMs", "updatedByUid"];
-  let published = cur.published, yacht = cur.yacht;
+  let { published, yacht, keshi } = cur;
   if (typeof body?.yachtPublished === "boolean") { yacht = body.yachtPublished; fields.yachtPublished = { booleanValue: yacht }; mask.push("yachtPublished"); }
-  if (typeof body?.yachtPublished !== "boolean" || typeof body?.published === "boolean") { published = body?.published === true; fields.yuslotPublished = { booleanValue: published }; mask.push("yuslotPublished"); }
+  if (typeof body?.keshiPublished === "boolean") { keshi = body.keshiPublished; fields.keshiPublished = { booleanValue: keshi }; mask.push("keshiPublished"); }
+  if (typeof body?.published === "boolean" || (typeof body?.yachtPublished !== "boolean" && typeof body?.keshiPublished !== "boolean")) { published = body?.published === true; fields.yuslotPublished = { booleanValue: published }; mask.push("yuslotPublished"); }
   await deps.firestore.commit([{ update: { name: deps.firestore.docName("worldConfig/yuslot"), fields }, updateMask: { fieldPaths: mask } }]);
-  slotConfigCache = { value: published, yacht, at: deps.now() };
-  return { ok: true, published, yachtPublished: yacht };
+  slotConfigCache = { value: published, yacht, keshi, at: deps.now() };
+  return { ok: true, published, yachtPublished: yacht, keshiPublished: keshi };
 }
 
 /* ロビーの席の一覧。6台を1台ずつ読まず、yuslotSeats を1回の問い合わせで読む（読み取り＝席に座っている台の数だけ）。
@@ -4471,6 +4475,136 @@ export async function runYachtWeekTick(env = {}, scheduledTime = Date.now(), dep
   return { weekStart: cur.data.weekStart };
 }
 
+
+/* =========================================================
+   🧽 消しバト（ゆうワールド）：消しゴムの改造（第1段階）
+   ・消しゴムは1人1個。ショップのパーツをコインで買って、4か所（本体・ふち・そこ・おもり）に付けて、色を選ぶ。
+   ・パーツは「重さ・すべり・反発・大きさ」を増やしたり減らしたりする。強さの上限はない（高いパーツほど強くなる）が、効きは重ねるほど少しずつ鈍くなる。
+   ・「総合力」は、リーグ戦（あとで追加）の勝ちやすさに使う。パーツの値段・効き目は、この表だけを直せば変えられる。
+   ・Firestore：yuslotKeshi/{uid} の1件（買ったパーツ・付けているパーツ・色）。コインは users の coins。買うたびに、ユーザー・この書類の2件を1回の commit で書く。
+   ・公開：worldConfig/yuslot の keshiPublished（最上位管理者だけが切り替える）。非公開のあいだは最上位管理者だけが使える。
+========================================================= */
+export const KESHI_SLOTS = ["body", "edge", "sole", "weight"];
+const KESHI_BASE = 50;
+export const KESHI_COLORS = ["ブルー", "レッド", "グリーン", "イエロー", "ピンク", "パープル", "ブラック", "オレンジ"];
+/* パーツ：m＝重さ、s＝すべり、b＝反発、z＝大きさ（いまの値に足す点数） */
+export const KESHI_PARTS = {
+  body: [
+    { id: "plain", name: "ふつうの消しゴム", price: 0, m: 0, s: 0, b: 0, z: 0, desc: "だれでも持っている、白い消しゴム" },
+    { id: "sponge", name: "スポンジ消しゴム", price: 120, m: -6, s: 4, b: 8, z: 2, desc: "軽くてよく弾む" },
+    { id: "sand", name: "砂消し", price: 150, m: 4, s: -6, b: 2, z: 0, desc: "ざらざらで重く、すべりにくい" },
+    { id: "pro", name: "高級ゴム", price: 600, m: 6, s: 6, b: 6, z: 0, desc: "全部がバランスよく強い" },
+    { id: "titan", name: "チタン芯入り", price: 1800, m: 14, s: 8, b: 10, z: -2, desc: "芯が入った、重くて強い本体" }
+  ],
+  edge: [
+    { id: "paper", name: "紙のカバー", price: 0, m: 0, s: 0, b: 0, z: 0, desc: "ふつうの紙のカバー" },
+    { id: "plastic", name: "プラスチックカバー", price: 100, m: 2, s: 6, b: 0, z: 0, desc: "つるつるですべりやすい" },
+    { id: "band", name: "ゴムバンド", price: 200, m: 0, s: 0, b: 10, z: 0, desc: "ぶつかったときに強く弾く" },
+    { id: "metal", name: "金属フレーム", price: 900, m: 10, s: 2, b: 12, z: 2, desc: "重くて、当たりに強い" },
+    { id: "crystal", name: "クリスタルフレーム", price: 2500, m: 12, s: 10, b: 14, z: 2, desc: "すべって弾む、いちばん強いふち" }
+  ],
+  sole: [
+    { id: "bare", name: "そのまま", price: 0, m: 0, s: 0, b: 0, z: 0, desc: "なにも付けていない" },
+    { id: "tape", name: "つるつるテープ", price: 100, m: 0, s: 8, b: 0, z: 0, desc: "机の上をすべる" },
+    { id: "wax", name: "ワックス", price: 250, m: -2, s: 14, b: 0, z: 0, desc: "よくすべる" },
+    { id: "teflon", name: "テフロンシート", price: 1000, m: -4, s: 24, b: 0, z: 0, desc: "ものすごくすべる" },
+    { id: "air", name: "エアクッション底", price: 2200, m: -6, s: 28, b: 4, z: 0, desc: "ほとんど摩擦がない" }
+  ],
+  weight: [
+    { id: "none", name: "なし", price: 0, m: 0, s: 0, b: 0, z: 0, desc: "おもりなし" },
+    { id: "coin", name: "10円玉", price: 80, m: 8, s: 0, b: -2, z: 0, desc: "ちょっと重くなる" },
+    { id: "bolt", name: "ボルト", price: 300, m: 14, s: 0, b: 0, z: -1, desc: "しっかり重くなる" },
+    { id: "lead", name: "鉛のおもり", price: 1200, m: 24, s: -2, b: 0, z: -2, desc: "かなり重くなる" },
+    { id: "gold", name: "金のおもり", price: 3000, m: 32, s: 0, b: 4, z: -3, desc: "いちばん重い" }
+  ]
+};
+const KESHI_PART_BY = Object.fromEntries(KESHI_SLOTS.map((k) => [k, Object.fromEntries(KESHI_PARTS[k].map((p) => [p.id, p]))]));
+export const KESHI_DEFAULT_EQ = Object.freeze({ body: "plain", edge: "paper", sole: "bare", weight: "none" });
+/* 足した点数は、増えるほど効きが鈍くなる（60 × tanh(足した点数 ÷ 60)）。減る分はそのまま */
+const keshiSoft = (d) => (d >= 0 ? 60 * Math.tanh(d / 60) : d);
+export function keshiStats(eq) {
+  const d = { m: 0, s: 0, b: 0, z: 0 };
+  KESHI_SLOTS.forEach((slot) => { const p = KESHI_PART_BY[slot][eq?.[slot]] || KESHI_PART_BY[slot][KESHI_DEFAULT_EQ[slot]]; d.m += p.m; d.s += p.s; d.b += p.b; d.z += p.z; });
+  const st = { m: Math.round(KESHI_BASE + keshiSoft(d.m)), s: Math.round(KESHI_BASE + keshiSoft(d.s)), b: Math.round(KESHI_BASE + keshiSoft(d.b)), z: Math.round(KESHI_BASE + keshiSoft(d.z)) };
+  st.rating = Math.round(0.35 * st.m + 0.25 * st.s + 0.30 * st.b + 0.10 * st.z);
+  return st;
+}
+const keshiIsFree = (slot, id) => !!KESHI_PART_BY[slot][id] && KESHI_PART_BY[slot][id].price === 0;
+async function keshiGate(deps, uid) {
+  const { keshi } = await slotGetConfig(deps);
+  return keshi || slotIsTopAdmin(deps, uid) ? null : { status: 403, error: "not_published" };
+}
+async function keshiLoad(deps, uid) {
+  const raw = await deps.firestore.getRaw(`yuslotKeshi/${uid}`);
+  const d = raw ? decodeFields(raw.fields) : {};
+  const owned = Array.isArray(d.owned) ? d.owned.filter((x) => typeof x === "string") : [];
+  const eq = { ...KESHI_DEFAULT_EQ };
+  KESHI_SLOTS.forEach((slot) => { const id = d.eq?.[slot]; if (typeof id === "string" && KESHI_PART_BY[slot][id] && (keshiIsFree(slot, id) || owned.includes(`${slot}:${id}`))) eq[slot] = id; });
+  const color = Number.isInteger(d.color) && d.color >= 0 && d.color < KESHI_COLORS.length ? d.color : 0;
+  return { raw, owned, eq, color };
+}
+function keshiView(cur, coins, now) {
+  const have = {};
+  KESHI_SLOTS.forEach((slot) => { have[slot] = KESHI_PARTS[slot].filter((p) => p.price === 0 || cur.owned.includes(`${slot}:${p.id}`)).map((p) => p.id); });
+  return { ok: true, coins, have, eq: cur.eq, color: cur.color, stats: keshiStats(cur.eq), serverNowMs: now };
+}
+const keshiTable = () => ({ slots: KESHI_SLOTS, parts: KESHI_PARTS, colors: KESHI_COLORS, base: KESHI_BASE });
+async function keshiState(deps, uid, body) {
+  const g = await keshiGate(deps, uid);
+  if (g) return g;
+  const me = await loadMyUser(deps.firestore, uid, body?.username);
+  if (me.error) return me.error;
+  const cur = await keshiLoad(deps, uid);
+  return { ...keshiView(cur, Number(decodeFields(me.raw.fields).coins || 0), deps.now()), table: keshiTable() };
+}
+function keshiWrite(deps, uid, cur, fields) {
+  const fs = deps.firestore;
+  const writes = [{ update: { name: fs.docName(`yuslotKeshi/${uid}`), fields: encodeFields(fields) }, updateMask: { fieldPaths: Object.keys(fields) }, currentDocument: cur.raw ? { updateTime: cur.raw.updateTime } : { exists: false } }];
+  return writes;
+}
+/* パーツを買う（買ったらそのまま付ける）。コインの引き落としと、書類の更新は1回の commit */
+async function keshiBuy(deps, uid, body) {
+  const g = await keshiGate(deps, uid);
+  if (g) return g;
+  const slot = String(body?.slot || ""), id = String(body?.part || "");
+  const part = KESHI_PART_BY[slot]?.[id];
+  if (!part) return { status: 400, error: "bad_request" };
+  const me = await loadMyUser(deps.firestore, uid, body?.username);
+  if (me.error) return me.error;
+  const cur = await keshiLoad(deps, uid);
+  if (part.price === 0 || cur.owned.includes(`${slot}:${id}`)) return { status: 409, error: "already_owned" };
+  const coins = Number(decodeFields(me.raw.fields).coins || 0);
+  if (coins < part.price) return { status: 409, error: "insufficient_coins" };
+  if (await lotterySeatedElsewhere(deps, uid, deps.now())) return { status: 409, error: "seated" };   // ゆうスロの席に着いているあいだは、コインが動くので買えない
+  const owned = [...cur.owned, `${slot}:${id}`], eq = { ...cur.eq, [slot]: id };
+  const writes = keshiWrite(deps, uid, cur, { owned, eq, color: cur.color, n: me.name });
+  writes.unshift({ update: { name: deps.firestore.docName(`users/${me.name}`), fields: { coins: restInt(coins - part.price) } }, updateMask: { fieldPaths: ["coins"] }, currentDocument: { updateTime: me.raw.updateTime } });
+  try { await deps.firestore.commit(writes); }
+  catch (error) { if (isRetryableCommitError(error)) return { status: 409, error: "busy" }; throw error; }
+  return { ...keshiView({ ...cur, owned, eq }, coins - part.price, deps.now()), bought: { slot, part: id, price: part.price } };
+}
+/* 付けるパーツと色を決める（持っているものだけ） */
+async function keshiEquip(deps, uid, body) {
+  const g = await keshiGate(deps, uid);
+  if (g) return g;
+  const cur = await keshiLoad(deps, uid);
+  const want = body?.eq && typeof body.eq === "object" ? body.eq : {};
+  const eq = { ...cur.eq };
+  for (const slot of KESHI_SLOTS) {
+    if (want[slot] === undefined) continue;
+    const id = String(want[slot]);
+    if (!KESHI_PART_BY[slot][id] || !(keshiIsFree(slot, id) || cur.owned.includes(`${slot}:${id}`))) return { status: 409, error: "not_owned" };
+    eq[slot] = id;
+  }
+  let color = cur.color;
+  if (body?.color !== undefined) { color = Number(body.color); if (!Number.isInteger(color) || color < 0 || color >= KESHI_COLORS.length) return { status: 400, error: "bad_request" }; }
+  const me = await loadMyUser(deps.firestore, uid, body?.username);
+  if (me.error) return me.error;
+  const writes = keshiWrite(deps, uid, cur, { owned: cur.owned, eq, color, n: me.name });
+  try { await deps.firestore.commit(writes); }
+  catch (error) { if (isRetryableCommitError(error)) return { status: 409, error: "busy" }; throw error; }
+  return keshiView({ ...cur, eq, color }, Number(decodeFields(me.raw.fields).coins || 0), deps.now());
+}
 
 /* =========================================================
    🛠 ゆう経済の1日1回の処理（株価の更新・利息・総資産ランキング）の見守り
