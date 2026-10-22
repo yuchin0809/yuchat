@@ -34,7 +34,7 @@ import {
 /* 🎡 ゆうワールド（ゆうスロなどのお店）。残高・抽選・公開・営業時間の判定はすべて Worker 任せ（Firebase には触らない） */
 import {
   initYuWorld, openYuWorldView, stopYuWorldView
-} from "./yuworld.js?v=20261023-yuworld44";
+} from "./yuworld.js?v=20261023-yuworld45";
 import { renderYachtRoom } from "./yuyacht.js?v=20261023-yacht5";
 
 /* 💸 コインの送金（申請は本人・OK/却下は管理者）。中身の確定は Worker */
