@@ -169,6 +169,51 @@ test("同時に買っても、コインが二重に引かれない（片方は�
   assert.equal(ctx.fs.plain("yuslotKeshi/id1").owned.length, ok.length);
 });
 
+test("まとめて買う：本体・ふち・そこなどを1回で買って付ける。コインは合計だけ1回引かれ、持ち物と装備が同時に変わる", async () => {
+  const ctx = setup({ coins: 1000 });
+  const r = await ctx.act(1, { action: "keshiBuyMany", items: [{ slot: "body", part: "sand" }, { slot: "edge", part: "band" }, { slot: "sole", part: "wax" }] });
+  assert.equal(r.ok, true); assert.equal(r.spent, 150 + 200 + 250); assert.equal(r.coins, 400); assert.equal(ctx.coinsOf(1), 400);
+  assert.deepEqual([r.eq.body, r.eq.edge, r.eq.sole, r.eq.weight], ["sand", "band", "wax", "none"]);
+  assert.deepEqual(r.bought.map((b) => b.part).sort(), ["band", "sand", "wax"]);
+  assert.deepEqual(ctx.fs.plain("yuslotKeshi/id1").owned.sort(), ["body:sand", "edge:band", "sole:wax"]);
+  assert.deepEqual(r.stats, keshiStats(r.eq));
+  assert.equal(ctx.fs.counts.commit, 1, "書き込みは1回");
+});
+
+test("まとめて買う：持っている・無料のパーツは買わずに付けるだけ。全部持っているときはコインが動かない", async () => {
+  const ctx = setup({ coins: 1000 });
+  await ctx.act(1, { action: "keshiBuy", slot: "body", part: "sand" });
+  const before = ctx.coinsOf(1);
+  const r = await ctx.act(1, { action: "keshiBuyMany", items: [{ slot: "body", part: "plain" }, { slot: "edge", part: "plastic" }] });
+  assert.equal(r.spent, 100); assert.equal(ctx.coinsOf(1), before - 100); assert.deepEqual(r.bought.map((b) => b.part), ["plastic"]);
+  assert.equal(r.eq.body, "plain", "無料の初期パーツには、買わずに戻せる");
+  const r2 = await ctx.act(1, { action: "keshiBuyMany", items: [{ slot: "body", part: "sand" }, { slot: "edge", part: "plastic" }] });
+  assert.equal(r2.ok, true); assert.equal(r2.spent, 0); assert.deepEqual(r2.bought, []); assert.equal(ctx.coinsOf(1), before - 100);
+  assert.deepEqual([r2.eq.body, r2.eq.edge], ["sand", "plastic"]);
+});
+
+test("まとめて買う：合計がコインより多ければ、1個も買わない。形が悪い・同じ枠が重なる・存在しないパーツ・席に着いているときも断る", async () => {
+  const ctx = setup({ coins: 500 });
+  const r = await ctx.act(1, { action: "keshiBuyMany", items: [{ slot: "body", part: "sand" }, { slot: "edge", part: "band" }, { slot: "sole", part: "wax" }] });
+  assert.equal(r.error, "insufficient_coins"); assert.equal(ctx.coinsOf(1), 500); assert.equal(ctx.fs.plain("yuslotKeshi/id1"), null, "1個も買っていない");
+  for (const items of [undefined, [], "x", [{ slot: "body", part: "sand" }, { slot: "body", part: "pro" }], [{ slot: "body", part: "nope" }], [{ slot: "hat", part: "sand" }], [null], Array(5).fill({ slot: "body", part: "sand" })]) {
+    assert.equal((await ctx.act(1, { action: "keshiBuyMany", items })).error, "bad_request", JSON.stringify(items));
+  }
+  ctx.fs.put("yuslotSeats/yujackpot", encF({ uid: "id1", graceUntilMs: ctx.state.now + 60000 }));
+  assert.equal((await ctx.act(1, { action: "keshiBuyMany", items: [{ slot: "body", part: "sand" }] })).error, "seated");
+  assert.equal(ctx.coinsOf(1), 500);
+});
+
+test("まとめて買う：非公開のあいだは最上位管理者だけ。同時に押しても、コインが二重に引かれない", async () => {
+  const closed = setup({ keshi: false });
+  assert.equal((await closed.act(1, { action: "keshiBuyMany", items: [{ slot: "body", part: "sand" }] })).error, "not_published");
+  const ctx = setup({ coins: 1000 });
+  const rs = await Promise.all([ctx.act(1, { action: "keshiBuyMany", items: [{ slot: "body", part: "sand" }, { slot: "sole", part: "wax" }] }), ctx.act(1, { action: "keshiBuyMany", items: [{ slot: "edge", part: "band" }] })]);
+  const ok = rs.filter((r) => r.ok), busy = rs.filter((r) => r.error === "busy");
+  assert.ok(ok.length >= 1 && ok.length + busy.length === 2);
+  assert.equal(ctx.coinsOf(1), 1000 - ok.reduce((a, r) => a + r.spent, 0));
+});
+
 test("付け替え：持っているパーツと、無料の初期パーツだけ。色は8色から。ほかの人の消しゴムには触れない", async () => {
   const ctx = setup({ coins: 2000 });
   await ctx.act(1, { action: "keshiBuy", slot: "body", part: "sand" });

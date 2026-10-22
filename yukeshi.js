@@ -4,19 +4,19 @@
      このファイルは、画面（3Dの消しゴム・強さ・パーツの一覧）を描いて、「買う」「付ける」を頼むだけ。
    ・ゆうワールド（yuworld.js）から renderKeshi({ root, api, esc, openRooms, onBack }) で開く。
 ========================================================= */
-import { keshiStatsView, eraserIcon } from "./yukeshi-core.js?v=20261023-keshi6";
-import { createEraserStage, SLEEVE_COLORS } from "./yukeshi3d.js?v=20261023-keshi6";
+import { keshiStatsView, eraserIcon } from "./yukeshi-core.js?v=20261023-keshi7";
+import { createEraserStage, SLEEVE_COLORS } from "./yukeshi3d.js?v=20261023-keshi7";
 
 const SLOT_NAMES = { body: "本体", edge: "ふち", sole: "そこ", weight: "おもり" };
 const STAT_NAMES = [["m", "重さ"], ["s", "すべり"], ["b", "反発"], ["z", "大きさ"]];
-let ctx = null, st = null, table = null, sel = { tab: "body", part: "plain" }, busy = false, stage = null, stylesDone = false, token = 0;
+let ctx = null, st = null, table = null, sel = { tab: "body", picks: {} }, busy = false, stage = null, stylesDone = false, token = 0, practice = null;
 const $ = (s) => ctx && ctx.root.querySelector(s);
 
-export function stopKeshi() { token++; if (stage) { try { stage.dispose(); } catch (_) {} stage = null; } }
+export function stopKeshi() { token++; if (stage) { try { stage.dispose(); } catch (_) {} stage = null; } if (practice) practice.stopPractice(); }
 
 export function renderKeshi(c) {
   stopKeshi();
-  ctx = c; st = null; table = null; busy = false; sel = { tab: "body", part: "plain" };
+  ctx = c; st = null; table = null; busy = false; sel = { tab: "body", picks: {} };
   injectStyles();
   const my = token;
   ctx.root.innerHTML = `<div class="yk2-head"><button type="button" class="yw-back" id="ykBack">← お店の一覧</button><h2>${eraserIcon("ker-inline")} 消しバト</h2></div><div class="yk2-card yk2-msg">読み込み中…</div>`;
@@ -29,7 +29,7 @@ async function load(my) {
   try {
     const r = await ctx.api("keshiState");
     if (my !== token) return;
-    st = r; table = r.table; sel = { tab: "body", part: st.eq.body };
+    st = r; table = r.table; sel = { tab: "body", picks: { ...st.eq } };
     drawShell();
   } catch (e) { if (my === token) fail(e && e.code); }
 }
@@ -47,13 +47,15 @@ function drawShell() {
   ctx.root.innerHTML = `<div class="yk2-head"><button type="button" class="yw-back" id="ykBack">← お店の一覧</button><h2>${eraserIcon("ker-inline")} 消しバト</h2><div class="yk2-coins" id="ykCoins"></div></div>
     <button type="button" class="yk2-league-btn" id="ykLeague"><span>🏆</span><b>最強決定戦（リーグ戦）</b><em>エントリー受付中</em></button>
     <button type="button" class="yk2-league-btn yk2-vs-btn" id="ykVs"><span>🥊</span><b>2人対戦</b><em>友達と1対1</em></button>
-    <p class="yk2-note">パーツを買って、自分だけの最強の消しゴムを作ろう！</p>
+    <button type="button" class="yk2-league-btn yk2-prac-btn" id="ykPractice"><span>🎯</span><b>試し打ち</b><em>いま選んでいる組み合わせで</em></button>
+    <p class="yk2-note">パーツを買って、自分だけの最強の消しゴムを作ろう！ パーツは、いくつか選んでまとめて買えます。</p>
     <div class="yk2-stagebox"><div class="yk2-stage" id="ykStage"><div class="yk2-fallback">${eraserIcon("ker-big")}</div></div><div class="yk2-rating" id="ykRating"></div></div>
     <div class="yk2-card"><div class="yk2-stats" id="ykStats"></div></div>
     <div class="yk2-tabs" id="ykTabs"></div>
     <div class="yk2-card"><div class="yk2-parts" id="ykParts"></div><div id="ykAct"></div></div>`;
   $("#ykBack")?.addEventListener("click", back);
   $("#ykLeague")?.addEventListener("click", openLeague);
+  $("#ykPractice")?.addEventListener("click", openPractice);
   $("#ykVs")?.addEventListener("click", () => { if (typeof ctx.openRooms === "function") { stopKeshi(); ctx.openRooms(); } });
   draw();
   createEraserStage($("#ykStage")).then((s) => {
@@ -62,7 +64,23 @@ function drawShell() {
     stage = s; $("#ykStage")?.querySelector(".yk2-fallback")?.remove(); updateStage();
   }).catch(() => {});
 }
-const previewEq = () => ({ ...st.eq, ...(sel.tab !== "color" && sel.part ? { [sel.tab]: sel.part } : {}) });
+const previewEq = () => ({ ...st.eq, ...sel.picks });
+/* 選んでいる変更（付けているものと違う枠）と、その中で買うもの・合計 */
+function plan() {
+  const slots = Object.keys(SLOT_NAMES).filter((slot) => sel.picks[slot] !== st.eq[slot]);
+  const part = (slot) => table.parts[slot].find((x) => x.id === sel.picks[slot]);
+  const toBuy = slots.filter((slot) => !st.have[slot].includes(sel.picks[slot]));
+  return { slots, toBuy, part, total: toBuy.reduce((a, slot) => a + part(slot).price, 0) };
+}
+async function openPractice() {
+  if (busy) return;
+  const pl = plan(), eq = previewEq(), color = st.color, my = token;
+  stopKeshi();
+  try { practice = practice || await import("./yukeshi-practice.js?v=20261023-keshi7"); }
+  catch (_) { alert("試し打ちを開けませんでした。通信環境をご確認のうえ、もう一度お試しください。"); drawShell(); return; }
+  if (token !== my + 1) return;
+  practice.renderPractice({ root: ctx.root, esc: ctx.esc, table, eq, color, title: pl.slots.length ? `選んでいるパーツ：${pl.slots.map((slot) => pl.part(slot).name).join("・")}（まだ買っていないものも試せます）` : "いま付けているパーツ", onBack: () => drawShell() });
+}
 function updateStage() { if (stage) stage.set(previewEq(), st.color); }
 const sign = (n) => (n > 0 ? "+" + n : String(n));
 function effectText(p) { const t = STAT_NAMES.filter(([k]) => p[k]).map(([k, label]) => `${label}${sign(p[k])}`); return t.length ? t.join(" ") : "変化なし"; }
@@ -75,7 +93,8 @@ function draw() {
     const diff = pre[k] - cur[k];
     return `<div class="yk2-stat"><span class="n">${label}</span><span class="bar"><i style="width:${Math.max(4, Math.min(100, pre[k]))}%"></i></span><b>${pre[k]}</b><em class="${diff > 0 ? "up" : diff < 0 ? "down" : ""}">${diff ? (diff > 0 ? "▲" : "▼") + Math.abs(diff) : ""}</em></div>`;
   }).join("");
-  $("#ykTabs").innerHTML = [...Object.entries(SLOT_NAMES), ["color", "カバーの色"]].map(([k, label]) => `<button type="button" class="yk2-tab${sel.tab === k ? " on" : ""}" data-tab="${k}">${label}</button>`).join("");
+  const pl = st ? plan() : null;
+  $("#ykTabs").innerHTML = [...Object.entries(SLOT_NAMES), ["color", "カバーの色"]].map(([k, label]) => `<button type="button" class="yk2-tab${sel.tab === k ? " on" : ""}" data-tab="${k}">${label}${pl.slots.includes(k) ? " ●" : ""}</button>`).join("");
   if (sel.tab === "color") {
     $("#ykParts").innerHTML = `<div class="yk2-colors">${SLEEVE_COLORS.map((c, i) => `<button type="button" class="yk2-color${st.color === i ? " on" : ""}" data-color="${i}" style="background:${c}" aria-label="${ctx.esc(table.colors[i])}"><span>${ctx.esc(table.colors[i])}</span></button>`).join("")}</div>`;
     $("#ykAct").innerHTML = `<p class="yk2-desc">カバーの色は、いくつでも無料で変えられます。強さには関係しません。</p>`;
@@ -83,22 +102,22 @@ function draw() {
     const slot = sel.tab, have = st.have[slot];
     $("#ykParts").innerHTML = table.parts[slot].map((p) => {
       const owned = have.includes(p.id), on = st.eq[slot] === p.id;
-      return `<button type="button" class="yk2-part${sel.part === p.id ? " sel" : ""}${on ? " eq" : ""}" data-part="${p.id}"><span class="nm">${ctx.esc(p.name)}</span><span class="fx">${effectText(p)}</span><span class="pr">${on ? "装備中" : owned ? "持っている" : `🪙 ${p.price.toLocaleString("ja-JP")}`}</span></button>`;
+      return `<button type="button" class="yk2-part${sel.picks[slot] === p.id ? " sel" : ""}${on ? " eq" : ""}" data-part="${p.id}"><span class="nm">${ctx.esc(p.name)}</span><span class="fx">${effectText(p)}</span><span class="pr">${on ? "装備中" : owned ? "持っている" : `🪙 ${p.price.toLocaleString("ja-JP")}`}</span></button>`;
     }).join("");
-    const p = table.parts[slot].find((x) => x.id === sel.part) || table.parts[slot][0];
-    const owned = have.includes(p.id), on = st.eq[slot] === p.id;
+    const p = table.parts[slot].find((x) => x.id === sel.picks[slot]) || table.parts[slot][0];
+    const sum = pl.slots.length ? `<div class="yk2-sum"><b>選んでいる変更</b>${pl.slots.map((k) => { const q = pl.part(k), own = st.have[k].includes(q.id); return `<div><span>${SLOT_NAMES[k]}：${ctx.esc(q.name)}</span><em>${own ? "持っている" : `🪙 ${q.price.toLocaleString("ja-JP")}`}</em></div>`; }).join("")}${pl.toBuy.length ? `<div class="tot"><span>買うものの合計</span><em>🪙 ${pl.total.toLocaleString("ja-JP")}</em></div>` : ""}<button type="button" class="yk2-resetpick" id="ykResetPick">選びなおす</button></div>` : "";
     let btn;
-    if (on) btn = `<button type="button" class="yw-btn yk2-go" disabled>装備中</button>`;
-    else if (owned) btn = `<button type="button" class="yw-btn yk2-go" id="ykEquip" ${busy ? "disabled" : ""}>この消しゴムに付ける</button>`;
-    else if (st.coins < p.price) btn = `<button type="button" class="yw-btn yk2-go" disabled>コインが足りません（🪙 ${p.price.toLocaleString("ja-JP")}）</button>`;
-    else btn = `<button type="button" class="yw-btn yk2-go yk2-buy" id="ykBuy" ${busy ? "disabled" : ""}>買って付ける（🪙 ${p.price.toLocaleString("ja-JP")}）</button>`;
-    $("#ykAct").innerHTML = `<p class="yk2-desc"><b>${ctx.esc(p.name)}</b>：${ctx.esc(p.desc)}（${effectText(p)}）</p>${btn}`;
+    if (!pl.slots.length) btn = `<button type="button" class="yw-btn yk2-go" disabled>この組み合わせで装備中</button>`;
+    else if (!pl.toBuy.length) btn = `<button type="button" class="yw-btn yk2-go" id="ykApply" ${busy ? "disabled" : ""}>選んだパーツを付ける</button>`;
+    else if (st.coins < pl.total) btn = `<button type="button" class="yw-btn yk2-go" disabled>コインが足りません（合計 🪙 ${pl.total.toLocaleString("ja-JP")}）</button>`;
+    else btn = `<button type="button" class="yw-btn yk2-go yk2-buy" id="ykApply" ${busy ? "disabled" : ""}>${pl.toBuy.length > 1 ? `${pl.toBuy.length}個まとめて買って付ける` : "買って付ける"}（🪙 ${pl.total.toLocaleString("ja-JP")}）</button>`;
+    $("#ykAct").innerHTML = `<p class="yk2-desc"><b>${ctx.esc(p.name)}</b>：${ctx.esc(p.desc)}（${effectText(p)}）</p>${sum}${btn}`;
   }
-  ctx.root.querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", () => { sel.tab = b.dataset.tab; sel.part = sel.tab === "color" ? null : st.eq[sel.tab]; draw(); updateStage(); }));
-  ctx.root.querySelectorAll("[data-part]").forEach((b) => b.addEventListener("click", () => { sel.part = b.dataset.part; draw(); updateStage(); }));
+  ctx.root.querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", () => { sel.tab = b.dataset.tab; draw(); updateStage(); }));
+  ctx.root.querySelectorAll("[data-part]").forEach((b) => b.addEventListener("click", () => { sel.picks[sel.tab] = b.dataset.part; draw(); updateStage(); }));
+  $("#ykResetPick")?.addEventListener("click", () => { sel.picks = { ...st.eq }; draw(); updateStage(); });
   ctx.root.querySelectorAll("[data-color]").forEach((b) => b.addEventListener("click", () => setColor(Number(b.dataset.color))));
-  $("#ykEquip")?.addEventListener("click", equip);
-  $("#ykBuy")?.addEventListener("click", buy);
+  $("#ykApply")?.addEventListener("click", apply);
 }
 async function call(action, payload) {
   if (busy) return null;
@@ -107,12 +126,13 @@ async function call(action, payload) {
   catch (e) { errorMsg(e && e.code); return null; }
   finally { busy = false; draw(); updateStage(); }
 }
-async function equip() { await call("keshiEquip", { eq: { [sel.tab]: sel.part } }); }
-async function setColor(i) { if (busy || st.color === i) return; await call("keshiEquip", { color: i }); }
-async function buy() {
-  const p = table.parts[sel.tab].find((x) => x.id === sel.part); if (!p) return;
-  if (!confirm(`「${p.name}」を ${p.price.toLocaleString("ja-JP")} コインで買って、消しゴムに付けますか？`)) return;
-  const r = await call("keshiBuy", { slot: sel.tab, part: sel.part });
+/* 選んでいるパーツをまとめて付ける。買うものがあれば、合計を確かめてから、まとめて買う */
+async function apply() {
+  const pl = plan(); if (!pl.slots.length) return;
+  if (!pl.toBuy.length) { await call("keshiEquip", { eq: Object.fromEntries(pl.slots.map((slot) => [slot, sel.picks[slot]])) }); return; }
+  const lines = pl.toBuy.map((slot) => `・${SLOT_NAMES[slot]}：${pl.part(slot).name}（${pl.part(slot).price.toLocaleString("ja-JP")} コイン）`).join("\n");
+  if (!confirm(`次の${pl.toBuy.length}個を、合計 ${pl.total.toLocaleString("ja-JP")} コインで買って、消しゴムに付けますか？\n${lines}`)) return;
+  const r = await call("keshiBuyMany", { items: pl.slots.map((slot) => ({ slot, part: sel.picks[slot] })) });
   if (r && r.bought) { ctx.root.querySelector("#ykCoins")?.classList.add("pop"); setTimeout(() => ctx.root.querySelector("#ykCoins")?.classList.remove("pop"), 600); }
 }
 function errorMsg(code) {
@@ -221,6 +241,9 @@ function injectStyles() {
   .yk2-desc { font-size: 12.5px; color: #555; line-height: 1.7; margin: 10px 0 8px; } .yk2-go { display: block; width: 100%; padding: 12px; font-size: 15px; } .yk2-buy { background: #e0902f; } .yw-btn:disabled { opacity: .5; cursor: default; }
   .yk2-colors { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; } .yk2-color { height: 54px; border: 3px solid transparent; border-radius: 12px; color: #fff; font-weight: 800; font-size: 11px; text-shadow: 0 1px 2px rgba(0,0,0,.6); cursor: pointer; } .yk2-color.on { border-color: #222; box-shadow: 0 0 0 2px #fff inset; }
   .yk2-league-btn { display: flex; align-items: center; gap: 10px; width: 100%; margin: 10px 0 2px; padding: 12px 14px; border: none; border-radius: 14px; cursor: pointer; text-align: left; color: #ffe9a8; background: linear-gradient(135deg, #1b2347, #3b2a6b); box-shadow: 0 4px 14px rgba(40,20,90,.35); }
+  .yk2-prac-btn { margin-top: 8px; background: linear-gradient(135deg, #5b3a1a, #a8651f); box-shadow: 0 4px 14px rgba(120,70,20,.35); } .yk2-prac-btn em { background: #14507a; }
+  .yk2-sum { background: #fff8e8; border: 1px solid #f0dc9a; border-radius: 10px; padding: 8px 10px; margin: 0 0 10px; font-size: 12.5px; } .yk2-sum > b { display: block; margin-bottom: 4px; } .yk2-sum div { display: flex; justify-content: space-between; gap: 8px; padding: 2px 0; } .yk2-sum em { font-style: normal; font-weight: 800; color: #b45309; } .yk2-sum .tot { border-top: 1px dashed #d9c27a; margin-top: 4px; padding-top: 5px; font-weight: 800; }
+  .yk2-resetpick { margin-top: 6px; border: none; background: none; color: #14507a; font-size: 12px; text-decoration: underline; cursor: pointer; padding: 2px 0; }
   .yk2-vs-btn { margin-top: 8px; background: linear-gradient(135deg, #14507a, #2a8fc9); box-shadow: 0 4px 14px rgba(20,80,122,.35); } .yk2-vs-btn em { background: #2fa85a; }
   .yk2-league-btn span { font-size: 24px; } .yk2-league-btn b { flex: 1; font-size: 15px; } .yk2-league-btn em { font-style: normal; font-size: 11px; background: #e0902f; color: #fff; border-radius: 999px; padding: 2px 8px; }
   .yl2-banner { position: relative; border-radius: 14px; padding: 14px 14px 12px; color: #fff; background: radial-gradient(circle at 20% 10%, #4a3a8c, #1b1840 70%); box-shadow: inset 0 0 0 2px #d4a93a, 0 4px 14px rgba(20,10,60,.4); }
