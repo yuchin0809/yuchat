@@ -61,7 +61,7 @@ service cloud.firestore {
     //   gameInvites：送った人・送られた人だけ／fcmTokens：アプリからは読まない（通知サーバーだけが読む）
     //   gameRooms・gameRoomOwners：専用のルールで判定（gameRooms はロビー表示のため読み取りは今まで通り許可）
     function hasDedicatedReadRules(collection) {
-      return collection in ['messages', 'groups', 'fcmTokens', 'gameInvites', 'gameRooms', 'gameRoomOwners', 'yuslotSeats', 'lotteryEntries', 'lotteryRounds', 'yuslotKaku', 'yuslotPrefs', 'coinTransfers', 'yuslotRank', 'yuslotBattle'];
+      return collection in ['messages', 'groups', 'fcmTokens', 'gameInvites', 'gameRooms', 'gameRoomOwners', 'yuslotSeats', 'lotteryEntries', 'lotteryRounds', 'yuslotKaku', 'yuslotPrefs', 'coinTransfers', 'yuslotRank', 'yuslotBattle', 'yuslotYacht'];
     }
 
     // 下のコレクションは管理者だけが読める
@@ -91,7 +91,9 @@ service cloud.firestore {
         // 🏅 ゆうスロの会員ランク：週の始まりの累計・今週のランクは通知 Worker（サービスアカウント）だけが書く
         'yuslotRank',
         // 🎫 先着ゲーム：その日の記録とランキング（yuslotBattle）は通知 Worker（サービスアカウント）だけが書く
-        'yuslotBattle'];
+        'yuslotBattle',
+        // 🎲 ヨット：1人ひとりのゲームの途中経過・点数と週間ランキング（yuslotYacht）は通知 Worker（サービスアカウント）だけが書く
+        'yuslotYacht'];
     }
 
     // ===== もとのルール（管理者用・自動処理用・廃止したコレクション・専用ルールのあるコレクション以外は今まで通り） =====

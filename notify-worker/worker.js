@@ -68,6 +68,8 @@ export default {
     ctx.waitUntil(runDailyWatchdogTick(env, event.scheduledTime).catch((error) => console.error("daily watchdog error", String(error?.message || error).slice(0, 300))));
     /* 🎫 先着ゲームの週間ランキング：毎週金曜 15:10（日本時間）に結果発表（1位500・2位250・3位100コイン）。それ以外の分は Firestore に触れずにすぐ戻る */
     ctx.waitUntil(runBattleWeekTick(env, event.scheduledTime).catch((error) => console.error("battle week error", String(error?.message || error).slice(0, 300))));
+    /* 🎲 ヨットの週間ランキング：毎週金曜 15:10（日本時間）に結果発表（1位500・2位300・3位100コイン。お知らせ・通知は出さない）。それ以外の分は Firestore に触れずにすぐ戻る */
+    ctx.waitUntil(runYachtWeekTick(env, event.scheduledTime).catch((error) => console.error("yacht week error", String(error?.message || error).slice(0, 300))));
     /* 💸 コイン送金：3日たっても承認されない申請を、1日1回（日本時間 3:07）自動で却下して返金する。それ以外の分は Firestore に触れずにすぐ戻る */
     ctx.waitUntil(runTransferExpiryTick(env, event.scheduledTime).catch((error) => console.error("transfer expiry error", String(error?.message || error).slice(0, 300))));
   }
@@ -2332,21 +2334,22 @@ function slotRandomHex(n = 16) {
 }
 
 /* ----- 公開設定（worldConfig/yuslot）。短時間キャッシュしてスピン中の読み取りを避ける ----- */
-let slotConfigCache = { value: null, at: 0 };
-export function resetYuslotCacheForTest() { slotConfigCache = { value: null, at: 0 }; slotSeatsCache = { at: 0, docs: null }; battleCancelPrefCache.clear(); }
-async function slotGetPublished(deps, { maxAgeMs = 30000 } = {}) {
+let slotConfigCache = { value: null, yacht: false, at: 0 };
+export function resetYuslotCacheForTest() { slotConfigCache = { value: null, yacht: false, at: 0 }; slotSeatsCache = { at: 0, docs: null }; battleCancelPrefCache.clear(); yachtWeekCache = { at: 0, value: null }; }
+/* 公開設定：ゆうスロ（yuslotPublished）とヨット（yachtPublished）は同じ書類。1回の読み取りで両方わかる */
+async function slotGetConfig(deps, { maxAgeMs = 30000 } = {}) {
   const now = deps.now();
-  if (slotConfigCache.value !== null && now - slotConfigCache.at < maxAgeMs) return slotConfigCache.value;
+  if (slotConfigCache.value !== null && now - slotConfigCache.at < maxAgeMs) return { published: slotConfigCache.value, yacht: slotConfigCache.yacht };
   try {
     const doc = await deps.firestore.get("worldConfig/yuslot");
-    const published = doc?.yuslotPublished === true;
-    slotConfigCache = { value: published, at: now };
-    return published;
+    slotConfigCache = { value: doc?.yuslotPublished === true, yacht: doc?.yachtPublished === true, at: now };
+    return { published: slotConfigCache.value, yacht: slotConfigCache.yacht };
   } catch (error) {
     console.warn("yuslot config read failed", String(error?.message || error).slice(0, 120));
-    return slotConfigCache.value === true ? false : false; // 取得失敗は非公開扱い
+    return { published: false, yacht: false }; // 取得失敗は非公開扱い
   }
 }
+async function slotGetPublished(deps, opts) { return (await slotGetConfig(deps, opts)).published; }
 function slotIsTopAdmin(deps, uid) { return uid && uid === deps.adminUid; }
 
 export async function handleYuslotAction(deps, uid, body) {
@@ -2376,6 +2379,11 @@ export async function handleYuslotAction(deps, uid, body) {
       case "claimStart": return await claimStart(deps, uid, body);
       case "claimFinish": return await claimFinish(deps, uid, body);
       case "rankStatus": return await rankStatus(deps, uid, body);
+      case "yachtState": return await yachtState(deps, uid, body);
+      case "yachtStart": return await yachtStart(deps, uid, body);
+      case "yachtRoll": return await yachtRoll(deps, uid, body);
+      case "yachtScore": return await yachtScore(deps, uid, body);
+      case "yachtRanking": return await yachtRanking(deps, uid, body);
       case "kakuGetNotify": return { ok: true, prefs: await kakuGetNotify(deps, uid) };
       case "kakuSetNotify": return await kakuSetNotify(deps, uid, body);
       default: return { status: 400, error: "unknown_action" };
@@ -2387,19 +2395,21 @@ export async function handleYuslotAction(deps, uid, body) {
 }
 
 async function yuslotConfig(deps, uid) {
-  const published = await slotGetPublished(deps);
-  return { ok: true, published, isTopAdmin: slotIsTopAdmin(deps, uid), open: slotBusinessOpen(deps.now()), serverNowMs: deps.now(), day: slotBusinessDay(deps.now()) };
+  const { published, yacht } = await slotGetConfig(deps);
+  return { ok: true, published, yachtPublished: yacht, isTopAdmin: slotIsTopAdmin(deps, uid), open: slotBusinessOpen(deps.now()), serverNowMs: deps.now(), day: slotBusinessDay(deps.now()) };
 }
 
 async function yuslotSetConfig(deps, uid, body) {
   if (!slotIsTopAdmin(deps, uid)) return { status: 403, error: "not_top_admin" };
-  const published = body?.published === true;
-  await deps.firestore.commit([{
-    update: { name: deps.firestore.docName("worldConfig/yuslot"), fields: { yuslotPublished: { booleanValue: published }, updatedAtMs: { integerValue: String(deps.now()) }, updatedByUid: { stringValue: uid } } },
-    updateMask: { fieldPaths: ["yuslotPublished", "updatedAtMs", "updatedByUid"] }
-  }]);
-  slotConfigCache = { value: published, at: deps.now() };
-  return { ok: true, published };
+  const cur = await slotGetConfig(deps, { maxAgeMs: 0 });
+  const fields = { updatedAtMs: { integerValue: String(deps.now()) }, updatedByUid: { stringValue: uid } };
+  const mask = ["updatedAtMs", "updatedByUid"];
+  let published = cur.published, yacht = cur.yacht;
+  if (typeof body?.yachtPublished === "boolean") { yacht = body.yachtPublished; fields.yachtPublished = { booleanValue: yacht }; mask.push("yachtPublished"); }
+  if (typeof body?.yachtPublished !== "boolean" || typeof body?.published === "boolean") { published = body?.published === true; fields.yuslotPublished = { booleanValue: published }; mask.push("yuslotPublished"); }
+  await deps.firestore.commit([{ update: { name: deps.firestore.docName("worldConfig/yuslot"), fields }, updateMask: { fieldPaths: mask } }]);
+  slotConfigCache = { value: published, yacht, at: deps.now() };
+  return { ok: true, published, yachtPublished: yacht };
 }
 
 /* ロビーの席の一覧。6台を1台ずつ読まず、yuslotSeats を1回の問い合わせで読む（読み取り＝席に座っている台の数だけ）。
@@ -4135,6 +4145,215 @@ async function rankStatus(deps, uid, body) {
     weekStartMs: Number(d.weekStart) || rankWeekStart(deps.now()), nextRollMs: rankWeekStart(deps.now()) + RANK_WEEK_MS
   };
 }
+
+/* =========================================================
+   🎲 ヨット（ゆうワールド）
+   ・5個のサイコロを1ターンに最大3回まで振り（キープした目は振り直さない）、12個の役をひとつずつ埋めて、12ターンの合計点を競う。
+   ・役と点数：エース〜シックス＝その目の合計／チョイス＝5個の合計／フォーダイス＝同じ目4個以上で5個の合計／フルハウス＝3個＋2個で5個の合計
+     ／S.ストレート＝4つ連続で15点／B.ストレート＝5つ連続で30点／ヨット＝5個とも同じ目で50点。エース〜シックスの合計が63点以上でボーナス35点。
+   ・サイコロの目は、すべてサーバーが決める（ブラウザは「どれをキープするか」「どの役に記録するか」を送るだけ）。
+   ・1人用：1人あたり yuslotYacht/{uid} の1件だけ（いまのゲームの途中経過。終わったら点数を残す）。振る・記録するたびに1回の書き込み
+     （記録のときに、次のターンの最初の目も一緒に振る）。1ゲームで約30回。
+   ・週間ランキング（yuslotYacht/_week）：1人1件の週のハイスコア。毎週金曜 15:10 に先週の上位3人へ 500・300・100 コイン（お知らせ・通知は出さない）。
+   ・公開：worldConfig/yuslot の yachtPublished（最上位管理者だけが切り替える）。非公開のあいだは最上位管理者だけが遊べる。
+========================================================= */
+const YACHT_CATS = ["ace", "deuce", "trey", "four", "five", "six", "choice", "fourdice", "fullhouse", "sstraight", "bstraight", "yacht"];
+const YACHT_PRIZES = [500, 300, 100];
+const YACHT_TOP = 20;
+const YACHT_WEEK = "yuslotYacht/_week";
+export function yachtCategoryScore(cat, dice) {
+  const c = [0, 0, 0, 0, 0, 0, 0];
+  dice.forEach((d) => { c[d]++; });
+  const sum = dice.reduce((a, b) => a + b, 0);
+  if (cat >= 0 && cat <= 5) return (cat + 1) * c[cat + 1];
+  const has = (...v) => v.every((x) => c[x] > 0);
+  switch (cat) {
+    case 6: return sum;
+    case 7: return c.some((n) => n >= 4) ? sum : 0;
+    case 8: { const v = c.filter((n) => n > 0).sort(); return v.length === 2 && v[0] === 2 && v[1] === 3 ? sum : 0; }
+    case 9: return has(1, 2, 3, 4) || has(2, 3, 4, 5) || has(3, 4, 5, 6) ? 15 : 0;
+    case 10: return has(1, 2, 3, 4, 5) || has(2, 3, 4, 5, 6) ? 30 : 0;
+    case 11: return c.some((n) => n === 5) ? 50 : 0;
+    default: return 0;
+  }
+}
+/* 記録した役（card：12個。まだ埋めていない役は -1）から、小計・ボーナス・合計 */
+export function yachtTotals(card) {
+  const upper = card.slice(0, 6).reduce((a, v) => a + (v > 0 ? v : 0), 0);
+  const bonus = upper >= 63 ? 35 : 0;
+  const rest = card.slice(6).reduce((a, v) => a + (v > 0 ? v : 0), 0);
+  return { upper, bonus, total: upper + bonus + rest };
+}
+const yachtRoll5 = (deps, keep) => Array.from({ length: 5 }, (_, i) => (keep && keep[i] ? keep.dice[i] : 1 + Math.floor((deps.random || Math.random)() * 6)));
+function yachtView(g, now) {
+  const dice = g.dice || [], card = g.card || [];
+  const t = yachtTotals(card);
+  return {
+    ok: true, gid: g.gid, turn: g.turn, roll: g.roll, dice, card, done: g.done === true,
+    upper: t.upper, bonus: t.bonus, total: t.total,
+    opts: g.done === true ? [] : card.map((v, i) => (v < 0 ? yachtCategoryScore(i, dice) : -1)),
+    serverNowMs: now
+  };
+}
+async function yachtGate(deps, uid) {
+  const { yacht } = await slotGetConfig(deps);
+  return yacht || slotIsTopAdmin(deps, uid) ? null : { status: 403, error: "not_published" };
+}
+async function yachtLoad(deps, uid) {
+  const raw = await deps.firestore.getRaw(`yuslotYacht/${uid}`);
+  return raw ? { data: decodeFields(raw.fields), updateTime: raw.updateTime } : null;
+}
+/* 途中のゲームを返す（なければ null）。開き直したときに続きから遊べる */
+async function yachtState(deps, uid) {
+  const g = await yachtGate(deps, uid);
+  if (g) return g;
+  const cur = await yachtLoad(deps, uid);
+  return { ok: true, game: cur && cur.data.gid && cur.data.done !== true ? yachtView(cur.data, deps.now()) : null, serverNowMs: deps.now() };
+}
+/* 新しいゲームを始める（途中のゲームがあれば続きを返す。「あきらめて新しく始める」は restart: true） */
+async function yachtStart(deps, uid, body) {
+  const g = await yachtGate(deps, uid);
+  if (g) return g;
+  const now = deps.now();
+  const cur = await yachtLoad(deps, uid);
+  if (cur && cur.data.gid && cur.data.done !== true && body?.restart !== true) return { ...yachtView(cur.data, now), resumed: true };
+  const me = await loadMyUser(deps.firestore, uid, body?.username);
+  if (me.error) return me.error;
+  const game = { gid: slotRandomHex(6), mode: "solo", turn: 1, roll: 1, dice: yachtRoll5(deps), card: Array(12).fill(-1), done: false, n: me.name, startedAt: now, updatedAt: now };
+  await deps.firestore.set(`yuslotYacht/${uid}`, game);
+  return yachtView(game, now);
+}
+async function yachtWrite(deps, uid, cur, fields) {
+  const fs = deps.firestore;
+  const enc = encodeFields(fields);
+  try {
+    await fs.commit([{ update: { name: fs.docName(`yuslotYacht/${uid}`), fields: enc }, updateMask: { fieldPaths: Object.keys(fields) }, currentDocument: { updateTime: cur.updateTime } }]);
+    return true;
+  } catch (error) { if (isRetryableCommitError(error)) return false; throw error; }
+}
+/* キープしない目を振り直す（1ターンに、最初の1回のあと2回まで） */
+async function yachtRoll(deps, uid, body) {
+  const g = await yachtGate(deps, uid);
+  if (g) return g;
+  const cur = await yachtLoad(deps, uid);
+  const d = cur?.data;
+  if (!d || !d.gid || d.done === true) return { status: 409, error: "no_game" };
+  if (body?.gid !== d.gid) return { status: 409, error: "stale" };
+  if (d.roll >= 3) return { status: 409, error: "no_rolls" };
+  const hold = body?.hold;
+  if (!Array.isArray(hold) || hold.length !== 5) return { status: 400, error: "bad_request" };
+  const keep = hold.map((x) => x === true || x === 1); keep.dice = d.dice;
+  const dice = yachtRoll5(deps, keep), now = deps.now();
+  if (!(await yachtWrite(deps, uid, cur, { dice, roll: d.roll + 1, updatedAt: now }))) return { status: 409, error: "busy" };
+  return yachtView({ ...d, dice, roll: d.roll + 1 }, now);
+}
+/* 役を選んで点数を記録する。12個そろったらゲーム終了（週のハイスコアに反映）。それ以外は次のターンの最初の目を振る */
+async function yachtScore(deps, uid, body) {
+  const g = await yachtGate(deps, uid);
+  if (g) return g;
+  const cur = await yachtLoad(deps, uid);
+  const d = cur?.data;
+  if (!d || !d.gid || d.done === true) return { status: 409, error: "no_game" };
+  if (body?.gid !== d.gid) return { status: 409, error: "stale" };
+  const cat = Number(body?.cat);
+  if (!Number.isInteger(cat) || cat < 0 || cat > 11 || d.card[cat] !== -1) return { status: 400, error: "bad_request" };
+  const now = deps.now(), pts = yachtCategoryScore(cat, d.dice);
+  const card = d.card.slice(); card[cat] = pts;
+  const finished = card.every((v) => v >= 0);
+  let fields, next;
+  if (finished) { const total = yachtTotals(card).total; fields = { card, done: true, total, finishedAt: now, updatedAt: now }; next = { ...d, card, done: true, total }; }
+  else { const dice = yachtRoll5(deps); fields = { card, turn: d.turn + 1, roll: 1, dice, updatedAt: now }; next = { ...d, card, turn: d.turn + 1, roll: 1, dice }; }
+  if (!(await yachtWrite(deps, uid, cur, fields))) return { status: 409, error: "busy" };
+  const out = { ...yachtView(next, now), gained: pts, cat };
+  if (finished) {
+    out.finished = true; out.total = fields.total;
+    try { out.week = await yachtWeekAdd(deps, uid, d.n || body?.username || "", fields.total, now); }
+    catch (error) { console.warn("yacht week update failed", String(error?.message || error).slice(0, 120)); }
+  }
+  return out;
+}
+
+/* ----- 週間ランキング（yuslotYacht/_week：{ weekStart, rows: [{ uid, name, score, at }], last }）。1人1件の週のハイスコア ----- */
+let yachtWeekCache = { at: 0, value: null };
+const yachtCmp = (a, b) => b.score - a.score || a.at - b.at || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+export async function yachtWeekEnsure(deps, { ttlMs = 0 } = {}) {
+  const ws = rankWeekStart(deps.now());
+  if (ttlMs > 0 && yachtWeekCache.value && deps.now() - yachtWeekCache.at < ttlMs && Number(yachtWeekCache.value.data.weekStart) >= ws) return yachtWeekCache.value;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const raw = await deps.firestore.getRaw(YACHT_WEEK);
+    if (!raw) { await deps.firestore.createIfAbsent(YACHT_WEEK, { weekStart: ws, rows: [], last: null }); continue; }
+    const cur = { data: decodeFields(raw.fields), updateTime: raw.updateTime };
+    if (Number(cur.data.weekStart) >= ws) { yachtWeekCache = { at: deps.now(), value: cur }; return cur; }
+    try { await yachtWeekSettle(deps, cur, ws); }
+    catch (error) { if (isRetryableCommitError(error)) continue; throw error; }
+  }
+  throw new Error("yacht week raced");
+}
+/* 先週の上位3人にコインを渡す。支払いと、書類の更新（先週の結果・今週の空の記録）は1回の commit。いない人・実在しない人の分は渡さない（繰り下げもしない） */
+async function yachtWeekSettle(deps, cur, ws) {
+  const fs = deps.firestore;
+  const rows = (cur.data.rows || []).map((r) => ({ uid: r.uid, name: r.name, score: r.score, at: r.at })).sort(yachtCmp);
+  const top = rows.slice(0, YACHT_PRIZES.length).map((r, i) => ({ rank: i + 1, uid: r.uid, name: r.name, score: r.score, prize: YACHT_PRIZES[i] }));
+  const found = await Promise.all(top.map((t) => transferFindUser(fs, t.uid, t.name)));
+  const writes = [];
+  top.forEach((t, i) => {
+    t.paid = !!found[i];
+    if (found[i]) writes.push({ update: { name: fs.docName(`users/${found[i].name}`), fields: {} }, updateMask: { fieldPaths: [] }, updateTransforms: [{ fieldPath: "coins", increment: restInt(t.prize) }], currentDocument: { exists: true } });
+  });
+  const fields = { weekStart: ws, rows: [], last: { weekStart: Number(cur.data.weekStart), endMs: ws, top, total: rows.length } };
+  writes.push({ update: { name: fs.docName(YACHT_WEEK), fields: encodeFields(fields) }, updateMask: { fieldPaths: Object.keys(fields) }, currentDocument: { updateTime: cur.updateTime } });
+  await fs.commit(writes);
+  yachtWeekCache = { at: 0, value: null };
+}
+/* 今週のハイスコアを更新する（自己ベストを超えたときだけ書き込む）。返すのは「今週の自己ベストと順位」 */
+export async function yachtWeekAdd(deps, uid, name, score, now) {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const cur = await yachtWeekEnsure(deps);
+    const rows = (cur.data.rows || []).map((r) => ({ ...r }));
+    const mine = rows.find((r) => r.uid === uid);
+    if (mine && mine.score >= score) { mine.name = name || mine.name; return yachtMeView(rows, uid, false); }
+    if (mine) { mine.score = score; mine.at = now; mine.name = name || mine.name; } else rows.push({ uid, name, score, at: now });
+    try {
+      await deps.firestore.commit([{ update: { name: deps.firestore.docName(YACHT_WEEK), fields: encodeFields({ rows }) }, updateMask: { fieldPaths: ["rows"] }, currentDocument: { updateTime: cur.updateTime } }]);
+      yachtWeekCache = { at: 0, value: null };
+      return yachtMeView(rows, uid, true);
+    } catch (error) { if (isRetryableCommitError(error)) continue; throw error; }
+  }
+  throw new Error("yacht week raced");
+}
+function yachtMeView(rows, uid, improved) {
+  const sorted = rows.slice().sort(yachtCmp);
+  const i = sorted.findIndex((r) => r.uid === uid);
+  return i < 0 ? { best: 0, rank: 0, improved } : { best: sorted[i].score, rank: i + 1, improved };
+}
+const yachtMd = (ms) => { const d = new Date(ms + KAKU_JST); return `${d.getUTCMonth() + 1}/${d.getUTCDate()}`; };
+async function yachtRanking(deps, uid) {
+  const g = await yachtGate(deps, uid);
+  if (g) return g;
+  const cur = await yachtWeekEnsure(deps, { ttlMs: 30000 });
+  const d = cur.data, sorted = (d.rows || []).slice().sort(yachtCmp);
+  const me = yachtMeView(sorted, uid, false);
+  const last = d.last && Array.isArray(d.last.top) ? { startMs: d.last.weekStart, endMs: d.last.endMs, total: d.last.total, top: d.last.top.map((t) => ({ rank: t.rank, name: t.name, score: t.score, prize: t.prize, mine: t.uid === uid })) } : null;
+  const startMs = rankWeekStart(deps.now());
+  return {
+    ok: true, serverNowMs: deps.now(), prizes: YACHT_PRIZES,
+    week: { startMs, endMs: startMs + RANK_WEEK_MS, rows: sorted.slice(0, YACHT_TOP).map((r, i) => ({ rank: i + 1, name: r.name, score: r.score, mine: r.uid === uid, prize: YACHT_PRIZES[i] || 0 })), total: sorted.length },
+    me, last
+  };
+}
+const yachtWeekTickDone = new Set();
+export function resetYachtWeekTickForTest() { yachtWeekTickDone.clear(); }
+/* 毎分の cron から。金曜 15:10〜15:19（日本時間）の間だけ動く（取りこぼしても、次に記録・ランキングを開いたときに追いつく） */
+export async function runYachtWeekTick(env = {}, scheduledTime = Date.now(), deps = null) {
+  if (!isWeekRollWindow(scheduledTime)) return { skipped: "outside" };
+  const key = String(rankWeekStart(scheduledTime));
+  if (yachtWeekTickDone.has(key)) return { skipped: "done" };
+  const d = { ...(deps || createDefaultDeps(env)), now: () => scheduledTime };
+  const cur = await yachtWeekEnsure(d);
+  yachtWeekTickDone.add(key);
+  return { weekStart: cur.data.weekStart };
+}
+
 
 /* =========================================================
    🛠 ゆう経済の1日1回の処理（株価の更新・利息・総資産ランキング）の見守り

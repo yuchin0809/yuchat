@@ -186,6 +186,11 @@ const TEST_CASES = [
   testCase("DENY", "yuslotBattle：ランキングの元データを直接読めない", userA, "get", "yuslotBattle/_board", { existing: { rows: [] } }),
   testCase("DENY", "yuslotBattle：自分のタイムを書き換える", userA, "update", "yuslotBattle/" + userA.uid, { data: { ms: 1 }, existing: { day: "2030-01-04", d: true, ms: 9000 } }),
   testCase("DENY", "yuslotBattle：最上位管理者でもブラウザから書けない", admin, "update", "yuslotBattle/_board", { data: { rows: [] }, existing: { rows: [] } }),
+  // 🎲 ヨット：途中経過（サイコロの目・点数）とランキングはサーバー（通知 Worker）だけ
+  testCase("DENY", "yuslotYacht：自分のゲームを直接読めない", userA, "get", "yuslotYacht/" + userA.uid, { existing: { gid: "g", dice: [1, 2, 3, 4, 5] } }),
+  testCase("DENY", "yuslotYacht：自分の点数を書き換える", userA, "update", "yuslotYacht/" + userA.uid, { data: { total: 999 }, existing: { gid: "g", done: true, total: 10 } }),
+  testCase("DENY", "yuslotYacht：ランキングを直接読めない", userA, "get", "yuslotYacht/_week", { existing: { rows: [] } }),
+  testCase("DENY", "yuslotYacht：最上位管理者でもブラウザから書けない", admin, "update", "yuslotYacht/_week", { data: { rows: [] }, existing: { rows: [] } }),
   testCase("DENY", "yuslotRank：最上位管理者でもブラウザから書けない", admin, "update", "yuslotRank/current", { data: { ranks: { x: 5 } }, existing: { weekStart: 1, ranks: {} } }),
   testCase("DENY", "lotteryRounds：最上位管理者でもブラウザから書けない", admin, "update", "lotteryRounds/2030-01-04", { data: { status: "done" }, existing: { round: "2030-01-04", status: "open" } }),
   // お知らせ（announcements）：読み取りはログイン済みなら誰でも・作成/編集/削除は管理者だけ
