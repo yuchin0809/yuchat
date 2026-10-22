@@ -14,7 +14,7 @@
 
 /* 🎟 ゆう宝くじ売り場の画面（別ファイル。Worker の lottery* アクションを呼んで表示するだけ） */
 import { renderLottery, stopLottery } from "./yulottery.js?v=20261021-lottery7";
-import { renderYacht, stopYacht } from "./yuyacht.js?v=20261023-yacht1";
+import { renderYacht, stopYacht } from "./yuyacht.js?v=20261023-yacht2";
 /* 🌈 確変台のパネル（台の一覧の上）。抽選・先着・通知設定。Worker の kaku* アクションを呼んで表示するだけ */
 import { kakuInit, kakuPanelHtml, kakuBind, kakuMachineInfo, startKaku, stopKaku, refreshKaku } from "./yukaku.js?v=20261023-kaku15";
 /* 🏅 会員ランクのカード（台の一覧の上）。ランクの判定・進みは Worker の rankStatus が返す */
@@ -125,7 +125,7 @@ function render() {
   if (state.screen === "loading") return renderMessage("読み込み中…", "");
   if (state.screen === "preparing") { renderMessage("🚧 現在準備中です", "このお店はまだ公開されていません。公開までもうしばらくお待ちください。"); rootEl.insertAdjacentHTML("beforeend", `<button type="button" class="yw-back" id="ywBackShop">← お店の一覧へ</button>`); $("#ywBackShop")?.addEventListener("click", () => { state.screen = "shop"; render(); }); return; }
   if (state.screen === "shop") return renderShop();
-  if (state.screen === "yacht") return renderYacht({ root: rootEl, api, esc, onBack: () => { state.screen = "shop"; render(); } });
+  if (state.screen === "yacht") return renderYacht({ root: rootEl, api, esc, openRooms: () => { if (typeof deps.openGame === "function") deps.openGame("yacht"); }, onBack: () => { state.screen = "shop"; render(); } });
   if (state.screen === "lobby") return renderLobby();
   if (state.screen === "game") return renderGame();
   if (state.screen === "lottery") return openLotteryScreen();

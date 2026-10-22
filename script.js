@@ -34,7 +34,8 @@ import {
 /* 🎡 ゆうワールド（ゆうスロなどのお店）。残高・抽選・公開・営業時間の判定はすべて Worker 任せ（Firebase には触らない） */
 import {
   initYuWorld, openYuWorldView, stopYuWorldView
-} from "./yuworld.js?v=20261023-yuworld37";
+} from "./yuworld.js?v=20261023-yuworld38";
+import { renderYachtRoom } from "./yuyacht.js?v=20261023-yacht2";
 
 /* 💸 コインの送金（申請は本人・OK/却下は管理者）。中身の確定は Worker */
 import { transferInit, transferOpenUser, transferOpenAdmin, transferReset } from "./yutransfer.js?v=20261020-transfer1";
@@ -7137,6 +7138,7 @@ function getGameTypeName(type) {
   if (type === "daifugo") return "大富豪";
   if (type === "othello") return "オセロ";
   if (type === "shogi") return "将棋";
+  if (type === "yacht") return "ヨット";
   return "ゲーム";
 }
 
@@ -7230,7 +7232,17 @@ gameTypeButtons.forEach((button) => {
 
 let latestGameRooms = [];
 
-/* ゆうワールドのお店（オセロ・将棋・大富豪）から、ゲームの画面を開く */
+/* ゆうワールド用の Worker（/yuslot）を呼ぶ。ヨットの2人用（振る・記録する・時間切れ）で使う */
+async function callYuslotApi(action, payload = {}) {
+  if (!currentUser || !username) throw Object.assign(new Error("not_logged_in"), { code: "not_logged_in" });
+  const token = await currentUser.getIdToken();
+  const res = await fetch(NOTIFY_ENDPOINT.replace(/\/notify$/, "/yuslot"), { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ action, username, ...payload }) });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || json.ok === false) throw Object.assign(new Error(json.error || `http_${res.status}`), { code: json.error || `http_${res.status}` });
+  return json;
+}
+
+/* ゆうワールドのお店（オセロ・将棋・大富豪・ヨット）から、ゲームの画面を開く */
 function openGameFromWorld(type) {
   document.querySelector(`.game-type[data-game="${type}"]`)?.click();
   switchView("games");
@@ -7450,7 +7462,7 @@ async function joinGameRoom(room) {
       const updateData = { members, memberUids, updatedAt: serverTimestamp() };
 
       /* オセロ・将棋は2人そろった時点で対戦開始（大富豪は開始ボタンで切り替えるので対象外） */
-      const isBoardGame = data.gameType === "othello" || data.gameType === "shogi";
+      const isBoardGame = data.gameType === "othello" || data.gameType === "shogi" || data.gameType === "yacht";
       if (isBoardGame && members.length >= maxPlayers) updateData.status = "playing";
 
       await updateDoc(roomRef, updateData);
@@ -7560,6 +7572,7 @@ function renderCurrentGame(room) {
   if (room.gameType === "othello") return renderOthelloBoard(boardEl, room);
   if (room.gameType === "shogi") return renderShogiBoard(boardEl, room);
   if (room.gameType === "daifugo") return renderDaifugoGame(boardEl, room);
+  if (room.gameType === "yacht") return renderYachtRoom(boardEl, room, { api: callYuslotApi, uid: currentUser?.uid, esc: escapeHTML });
 
   boardEl.innerHTML = `<div class="empty-state">ゲームを準備中です</div>`;
 }
@@ -7571,7 +7584,7 @@ function renderCurrentGame(room) {
    ・参加するときは既存の joinGameRoom() を使う
 ========================================================= */
 
-const INVITABLE_GAME_TYPES = ["othello", "shogi"];
+const INVITABLE_GAME_TYPES = ["othello", "shogi", "yacht"];
 
 function canInviteToGameRoom(room) {
   if (!room || !INVITABLE_GAME_TYPES.includes(room.gameType)) return false;

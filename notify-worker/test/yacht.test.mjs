@@ -233,3 +233,140 @@ test("結果発表の cron：金曜 15:10〜15:19 だけ動く（それ以外は
   assert.equal((await runYachtWeekTick({}, next + 60000, ctx.deps)).weekStart, next);
   assert.equal((await runYachtWeekTick({}, next + 120000, ctx.deps)).skipped, "done");
 });
+
+/* ===== 2人用（ゲームルームの yacht フィールド） ===== */
+const ROOM = "room1234567890abcd";
+function roomSetup(opts = {}) {
+  const ctx = setup(opts);
+  ctx.fs.put(`gameRooms/${ROOM}`, encF({ gameType: "yacht", ownerUid: "id1", owner: "u1", members: ["u1", "u2"], memberUids: ["id1", "id2"], status: "playing", createdAt: "x" }));
+  ctx.room = () => ctx.fs.plain(`gameRooms/${ROOM}`);
+  ctx.r = (i, action, body = {}) => ctx.act(i, { action, roomId: ROOM, ...body });
+  return ctx;
+}
+async function turnBest(ctx, y) {   // いまの番の人が、いちばん高い役に記録する
+  const who = y.order[y.cur] === "id1" ? 1 : 2;
+  const cat = y.opts.map((v, k) => [v, k]).filter(([v]) => v >= 0).sort((a, b) => b[0] - a[0])[0][1];
+  return (await ctx.r(who, "yachtRoomScore", { gid: y.gid, cat })).yacht;
+}
+
+test("2人用：ゲームを始める（どちらの画面から呼んでも同じゲーム）。最初は1番目の人の番・最初に1回振ってある", async () => {
+  const ctx = roomSetup();
+  const a = await ctx.r(1, "yachtRoomStart");
+  assert.equal(a.ok, true);
+  const y = a.yacht;
+  assert.deepEqual([y.order, y.names, y.round, y.cur, y.roll, y.done], [["id1", "id2"], ["u1", "u2"], 1, 0, 1, false]);
+  assert.equal(y.dice.length, 5); assert.equal(y.c0.length, 12); assert.ok(y.c0.every((v) => v === -1)); assert.equal(y.deadline - y.at, 60000);
+  assert.equal(y.opts.length, 12);
+  const b = await ctx.r(2, "yachtRoomStart");
+  assert.equal(b.yacht.gid, y.gid, "二重に始めない");
+  assert.equal(ctx.room().yacht.gid, y.gid); assert.equal(ctx.room().status, "playing", "ルームのほかの項目はそのまま");
+});
+
+test("2人用：自分の番だけ操作できる。振り直しは2回まで・キープは変わらない・同じ役には2回記録できない", async () => {
+  const ctx = roomSetup();
+  let y = (await ctx.r(1, "yachtRoomStart")).yacht;
+  assert.equal((await ctx.r(2, "yachtRoomRoll", { gid: y.gid, hold: [false, false, false, false, false] })).error, "not_your_turn");
+  assert.equal((await ctx.r(2, "yachtRoomScore", { gid: y.gid, cat: 0 })).error, "not_your_turn");
+  const d1 = y.dice;
+  y = (await ctx.r(1, "yachtRoomRoll", { gid: y.gid, hold: [true, true, true, false, false] })).yacht;
+  assert.equal(y.roll, 2); assert.deepEqual(y.dice.slice(0, 3), d1.slice(0, 3));
+  y = (await ctx.r(1, "yachtRoomRoll", { gid: y.gid, hold: [false, false, false, false, false] })).yacht;
+  assert.equal(y.roll, 3);
+  assert.equal((await ctx.r(1, "yachtRoomRoll", { gid: y.gid, hold: [true, true, true, true, true] })).error, "no_rolls");
+  assert.equal((await ctx.r(1, "yachtRoomRoll", { gid: "x", hold: [true, true, true, true, true] })).error, "stale");
+  const s1 = (await ctx.r(1, "yachtRoomScore", { gid: y.gid, cat: 6 })).yacht;
+  assert.equal(s1.cur, 1); assert.equal(s1.round, 1); assert.equal(s1.roll, 1); assert.equal(s1.c0[6], yachtCategoryScore(6, y.dice));
+  assert.equal(s1.opts.length, 12); assert.ok(s1.opts.every((v) => v >= 0), "2人目の番：2人目の表の点");
+  const s2 = (await ctx.r(2, "yachtRoomScore", { gid: y.gid, cat: 6 })).yacht;
+  assert.equal(s2.cur, 0); assert.equal(s2.round, 2, "2人とも終わったら次のターン");
+  assert.equal((await ctx.r(1, "yachtRoomScore", { gid: y.gid, cat: 6 })).error, "bad_request", "同じ役には2回記録できない");
+  assert.equal((await ctx.r(1, "yachtRoomScore", { gid: y.gid, cat: 12 })).error, "bad_request");
+});
+
+test("2人用：12ターン×2人で終了。点が高い人の勝ち（同点は引き分け）。終了後は操作できず、「もう一度」で新しいゲーム", async () => {
+  const ctx = roomSetup();
+  let y = (await ctx.r(1, "yachtRoomStart")).yacht;
+  const gid = y.gid;
+  for (let n = 0; n < 24; n++) y = await turnBest(ctx, y);
+  assert.equal(y.done, true); assert.equal(y.reason, "finished");
+  const t0 = yachtTotals(y.c0).total, t1 = yachtTotals(y.c1).total;
+  assert.equal(y.winner, t0 > t1 ? 0 : t1 > t0 ? 1 : 2);
+  assert.ok(y.c0.every((v) => v >= 0) && y.c1.every((v) => v >= 0));
+  assert.equal((await ctx.r(1, "yachtRoomRoll", { gid, hold: [true, true, true, true, true] })).error, "no_game");
+  assert.equal((await ctx.r(2, "yachtRoomStart")).yacht.done, true, "終わったあとは、そのまま結果を返す");
+  const again = (await ctx.r(2, "yachtRoomStart", { rematch: true })).yacht;
+  assert.notEqual(again.gid, gid); assert.equal(again.done, false); assert.equal(again.round, 1);
+  assert.equal(Object.keys(ctx.room()).includes("gameState"), false);
+});
+
+test("2人用：1ゲームの書き込みは、振る・記録する操作の回数だけ（読み取りはルーム1件ずつ）", async () => {
+  const ctx = roomSetup();
+  let y = (await ctx.r(1, "yachtRoomStart")).yacht;
+  const c0 = ctx.fs.counts.commit, g0 = ctx.fs.counts.getRaw;
+  for (let n = 0; n < 24; n++) y = await turnBest(ctx, y);
+  assert.equal(ctx.fs.counts.commit - c0, 24, "1操作＝1回の書き込み");
+  assert.ok(ctx.fs.counts.getRaw - g0 <= 24 + 2, "1操作＝ルーム1件の読み取り（準備中の確認は短時間メモリ）");
+});
+
+test("2人用：持ち時間（60秒）が過ぎると、いまの目でいちばん高い役に自動で記録して次の人へ。2回続けて放置した人は負け", async () => {
+  const ctx = roomSetup();
+  const y = (await ctx.r(1, "yachtRoomStart")).yacht;
+  const key = (yy) => ({ gid: yy.gid, round: yy.round, turn: yy.cur });
+  assert.equal((await ctx.r(2, "yachtRoomTimeout", key(y))).error, "too_early");
+  ctx.state.now += 63000;
+  assert.equal((await ctx.r(1, "yachtRoomRoll", { gid: y.gid, hold: [false, false, false, false, false] })).error, "timeout", "時間切れのあとは操作できない");
+  const t1 = (await ctx.r(2, "yachtRoomTimeout", key(y))).yacht;       // 相手の画面から呼んでもよい
+  const best = Math.max(...y.opts.filter((v) => v >= 0));
+  assert.equal(Math.max(...t1.c0), best); assert.equal(t1.cur, 1); assert.deepEqual(t1.miss, [1, 0]);
+  assert.equal((await ctx.r(1, "yachtRoomTimeout", key(y))).yacht.cur, 1, "同じ時間切れを二重に処理しない（もう次の番）");
+  const t2 = await ctx.r(2, "yachtRoomScore", { gid: y.gid, cat: 0 });  // 2人目は普通に記録 → 1人目の番へ
+  assert.equal(t2.yacht.cur, 0);
+  ctx.state.now += 63000;
+  const t3 = (await ctx.r(2, "yachtRoomTimeout", key(t2.yacht))).yacht;
+  assert.deepEqual(t3.miss, [2, 0]); assert.equal(t3.done, true); assert.equal(t3.winner, 1); assert.equal(t3.reason, "timeout", "続けて2回放置：負け");
+});
+
+test("2人用：自分で操作したら放置の回数は戻る（続けてでなければ負けにならない）", async () => {
+  const ctx = roomSetup();
+  let y = (await ctx.r(1, "yachtRoomStart")).yacht;
+  const key = (yy) => ({ gid: yy.gid, round: yy.round, turn: yy.cur });
+  ctx.state.now += 63000; y = (await ctx.r(2, "yachtRoomTimeout", key(y))).yacht;      // 1人目：放置1回
+  y = await turnBest(ctx, y);                                                            // 2人目
+  y = await turnBest(ctx, y);                                                            // 1人目：自分で記録 → 0に戻る
+  assert.deepEqual(y.miss, [0, 0]);
+  y = await turnBest(ctx, y);
+  ctx.state.now += 63000; y = (await ctx.r(1, "yachtRoomTimeout", key(y))).yacht;      // 1人目：また放置1回
+  assert.equal(y.done, false); assert.deepEqual(y.miss, [1, 0]);
+});
+
+test("2人用：ルームの参加者だけ。ルームの種類が違う・存在しない・形式が不正なものは断る", async () => {
+  const ctx = roomSetup();
+  assert.equal((await ctx.r(3, "yachtRoomStart")).error, "not_member");
+  assert.equal((await ctx.act(1, { action: "yachtRoomStart", roomId: "nope12345678" })).error, "no_room");
+  assert.equal((await ctx.act(1, { action: "yachtRoomStart", roomId: "../x" })).error, "bad_request");
+  ctx.fs.put("gameRooms/othello12345678", encF({ gameType: "othello", members: ["u1"], memberUids: ["id1"], status: "playing" }));
+  assert.equal((await ctx.act(1, { action: "yachtRoomStart", roomId: "othello12345678" })).error, "bad_request");
+  ctx.fs.put("gameRooms/wait1234567890", encF({ gameType: "yacht", members: ["u1"], memberUids: ["id1"], status: "waiting" }));
+  assert.equal((await ctx.act(1, { action: "yachtRoomStart", roomId: "wait1234567890" })).error, "not_ready", "2人そろうまで始まらない");
+});
+
+test("2人用：準備中は最上位管理者だけ。ただし最上位管理者が入っているルームなら、招待された友達も遊べる。公開後は誰でも", async () => {
+  const closed = roomSetup({ yacht: false });
+  assert.equal((await closed.r(1, "yachtRoomStart")).error, "not_published", "管理者のいない部屋は遊べない");
+  const withAdmin = setup({ yacht: false });
+  withAdmin.fs.put(`gameRooms/${ROOM}`, encF({ gameType: "yacht", ownerUid: ADMIN, owner: "admin", members: ["admin", "u2"], memberUids: [ADMIN, "id2"], status: "playing" }));
+  const adminStart = await handleYuslotAction(withAdmin.deps, ADMIN, { action: "yachtRoomStart", roomId: ROOM, username: "admin" });
+  assert.equal(adminStart.ok, true, "最上位管理者は遊べる");
+  const guest = await withAdmin.act(2, { action: "yachtRoomRoll", roomId: ROOM, gid: adminStart.yacht.gid, hold: [true, true, true, true, true] });
+  assert.equal(guest.error, "not_your_turn", "招待された友達は、部屋に入って操作できる（ここでは相手の番）");
+  const open = roomSetup({ yacht: true });
+  assert.equal((await open.r(1, "yachtRoomStart")).ok, true);
+});
+
+test("2人用：メンバーが入れ替わったら、新しいゲームを始める（前の人のゲームを引き継がない）", async () => {
+  const ctx = roomSetup();
+  const first = (await ctx.r(1, "yachtRoomStart")).yacht;
+  ctx.fs.put(`gameRooms/${ROOM}`, encF({ ...ctx.room(), members: ["u1", "u3"], memberUids: ["id1", "id3"], yacht: first }));
+  const next = (await ctx.act(1, { action: "yachtRoomStart", roomId: ROOM })).yacht;
+  assert.notEqual(next.gid, first.gid); assert.deepEqual(next.order, ["id1", "id3"]);
+});
