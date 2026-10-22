@@ -264,3 +264,17 @@ test("2人対戦：メンバーが入れ替わったら、新しいゲームを�
   const next = (await ctx.act(1, { action: "keshiRoomStart", roomId: ROOM })).keshi;
   assert.notEqual(next.gid, first.gid); assert.deepEqual(next.order, ["id1", "id3"]);
 });
+
+test("画面用の動きの数字（yukeshi-core.js）は、サーバーの数字と、全部の組み合わせで同じ", async () => {
+  const { keshiPhysView, keshiLaunchSpeedView, keshiStatsView } = await import("../../yukeshi-core.js");
+  const { KESHI_PARTS, KESHI_SLOTS } = await import("../worker.js");
+  const table = { slots: KESHI_SLOTS, parts: KESHI_PARTS, base: 50 };
+  let n = 0;
+  for (const body of ["plain", "sponge", "sand", "pro", "titan"]) for (const edge of ["paper", "plastic", "band", "metal", "crystal"]) for (const sole of ["bare", "tape", "wax", "teflon", "air"]) for (const weight of ["none", "coin", "bolt", "lead", "gold"]) {
+    const eq = { body, edge, sole, weight }, P = keshiPhys(keshiStats(eq));
+    assert.deepEqual(keshiPhysView(keshiStatsView(table, eq)), P);
+    for (const p of [0.1, 0.55, 1]) assert.equal(keshiLaunchSpeedView(P, p), keshiLaunchSpeed(P, p));
+    n++;
+  }
+  assert.equal(n, 625);
+});

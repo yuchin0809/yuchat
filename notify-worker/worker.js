@@ -2389,6 +2389,7 @@ export async function handleYuslotAction(deps, uid, body) {
       case "keshiState": return await keshiState(deps, uid, body);
       case "keshiBuy": return await keshiBuy(deps, uid, body);
       case "keshiEquip": return await keshiEquip(deps, uid, body);
+      case "keshiBuyMany": return await keshiBuyMany(deps, uid, body);
       case "keshiLeagueState": return await keshiLeagueState(deps, uid, body);
       case "keshiLeagueEntry": return await keshiLeagueEntry(deps, uid, body);
       case "yachtRoomStart": return await yachtRoomStart(deps, uid, body);
@@ -4592,6 +4593,35 @@ async function keshiBuy(deps, uid, body) {
   try { await deps.firestore.commit(writes); }
   catch (error) { if (isRetryableCommitError(error)) return { status: 409, error: "busy" }; throw error; }
   return { ...keshiView({ ...cur, owned, eq }, coins - part.price, deps.now()), bought: { slot, part: id, price: part.price } };
+}
+/* 何個かのパーツを、まとめて買って付ける（例：本体・ふち・そこ）。body.items：[{ slot, part }]（枠は重ならない）。
+   すでに持っている・無料のパーツは、買わずにそのまま付ける。買うものの合計がコインより多いときは、1個も買わない。
+   コインの引き落としと書類の更新は、1回の commit */
+async function keshiBuyMany(deps, uid, body) {
+  const g = await keshiGate(deps, uid);
+  if (g) return g;
+  const items = Array.isArray(body?.items) ? body.items : null;
+  if (!items || items.length < 1 || items.length > KESHI_SLOTS.length) return { status: 400, error: "bad_request" };
+  const picks = {};
+  for (const it of items) {
+    const slot = String(it?.slot || ""), id = String(it?.part || "");
+    if (!KESHI_PART_BY[slot]?.[id] || picks[slot] !== undefined) return { status: 400, error: "bad_request" };
+    picks[slot] = id;
+  }
+  const me = await loadMyUser(deps.firestore, uid, body?.username);
+  if (me.error) return me.error;
+  const cur = await keshiLoad(deps, uid);
+  const buy = Object.entries(picks).filter(([slot, id]) => !keshiIsFree(slot, id) && !cur.owned.includes(`${slot}:${id}`));
+  const total = buy.reduce((sum, [slot, id]) => sum + KESHI_PART_BY[slot][id].price, 0);
+  const coins = Number(decodeFields(me.raw.fields).coins || 0);
+  if (buy.length && coins < total) return { status: 409, error: "insufficient_coins" };
+  if (buy.length && (await lotterySeatedElsewhere(deps, uid, deps.now()))) return { status: 409, error: "seated" };   // ゆうスロの席に着いているあいだは、コインが動くので買えない
+  const owned = [...cur.owned, ...buy.map(([slot, id]) => `${slot}:${id}`)], eq = { ...cur.eq, ...picks };
+  const writes = keshiWrite(deps, uid, cur, { owned, eq, color: cur.color, n: me.name });
+  if (buy.length) writes.unshift({ update: { name: deps.firestore.docName(`users/${me.name}`), fields: { coins: restInt(coins - total) } }, updateMask: { fieldPaths: ["coins"] }, currentDocument: { updateTime: me.raw.updateTime } });
+  try { await deps.firestore.commit(writes); }
+  catch (error) { if (isRetryableCommitError(error)) return { status: 409, error: "busy" }; throw error; }
+  return { ...keshiView({ ...cur, owned, eq }, coins - total, deps.now()), bought: buy.map(([slot, id]) => ({ slot, part: id, price: KESHI_PART_BY[slot][id].price })), spent: total };
 }
 /* 付けるパーツと色を決める（持っているものだけ） */
 async function keshiEquip(deps, uid, body) {

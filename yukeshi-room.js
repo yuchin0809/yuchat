@@ -6,8 +6,8 @@
    ・3Dの机と消しゴムは three.js（ヨットと同じもの）。3D が使えない端末では、対戦できない（メッセージを出す）。
 ========================================================= */
 import { load3D, three } from "./yuyacht3d.js?v=20261023-3d1";
-import { eraserKit } from "./yukeshi3d.js?v=20261023-keshi6";
-import { keshiSimStepper, KESHI_DESK, KESHI_DT, eraserIcon } from "./yukeshi-core.js?v=20261023-keshi6";
+import { eraserKit } from "./yukeshi3d.js?v=20261023-keshi7";
+import { keshiSimStepper, KESHI_DESK, KESHI_DT, eraserIcon } from "./yukeshi-core.js?v=20261023-keshi7";
 
 const TOP_Y = -0.4;   // 机の上の面の高さ
 const START_YAW = [Math.PI / 2, -Math.PI / 2];   // はじめは、おたがいに向かい合う
@@ -19,7 +19,7 @@ const kr = { roomId: "", gid: "", y: null, offset: 0, tm: null, sentKey: "", sta
 /* ---------------------------------------------------------
    3Dの机と消しゴム
 --------------------------------------------------------- */
-async function createBattleStage(container, { me, eq, color }) {
+export async function createBattleStage(container, { me, eq, color }) {
   if (!(await load3D())) return null;
   const { T, RBG } = three();
   let renderer;
@@ -138,7 +138,7 @@ async function createBattleStage(container, { me, eq, color }) {
   const api = {
     hooks, container, pose: applyPose, aim: setAim, wake, ringOn(i) { items.forEach((it, k) => { it.ring.visible = k === i; }); dirty = true; wake(); },
     ringAt(i, x, z) { items[i].ring.position.set(x, TOP_Y + .01, z); dirty = true; wake(); },
-    pop(i) { pops.push({ i, t: 0 }); wake(); },
+    pop(i) { items[i].holder.scale.set(.01, .01, .01); pops.push({ i, t: 0 }); dirty = true; wake(); },
     setTicker(fn) { hooks.ticker = fn; wake(); },
     render() { dirty = true; wake(); },
     dispose() { alive = false; if (raf) cancelAnimationFrame(raf); items.forEach((it) => kit.disposeGroup(it.holder)); wood.dispose(); renderer.dispose(); canvas.remove(); if (kr.stage === api) kr.stage = null; }
