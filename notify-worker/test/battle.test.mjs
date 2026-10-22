@@ -551,7 +551,11 @@ test("キャンセルの予定：2026-10-22 だけ、通常の回のあとに追
   assert.equal(p.n, p.times.length);
   assert.deepEqual(p.times.slice(-2), [t0 + (13 * 60 + 20) * 60000, t0 + (14 * 60 + 10) * 60000]);
   assert.ok(p.times.slice(0, -2).every((t) => t < p.times.at(-2)) && p.n >= 3 && p.n <= 5);
-  assert.equal(kakuCancelPlan("2026-10-23").n, kakuCancelPlan("2026-10-23").times.length);
+  const q = kakuCancelPlan("2026-10-23"), u0 = kakuDayStart("2026-10-23");
+  assert.equal(q.n, q.times.length); assert.equal(q.n, 3, "通常の1回＋追加の2回");
+  assert.deepEqual(q.times.slice(-2), [u0 + (12 * 60 + 45) * 60000, u0 + (14 * 60 + 8) * 60000], "10/23 の追加は 12:45 と 14:08（授業中ではない時間）");
+  assert.ok(q.times[0] < q.times[1] && q.times[1] < q.times[2], "追加の回は、通常の回より後ろ");
+  assert.equal(kakuCancelPlan("2026-10-24").n, kakuCancelPlan("2026-10-24").times.length);
 });
 
 test("キャンセル：予定の時刻になるまで何も起きず、時刻になると NPC の枠が1つ空きになる（プレイヤーの枠・抽選前の枠は選ばれない）", async () => {
