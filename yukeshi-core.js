@@ -63,6 +63,6 @@ export function keshiSimStepper(P, pos, who, vx, vz) {
 const r4 = (x) => Math.round(x * 10000) / 10000;
 export function keshiPhysView(st) {
   const clamp = (x, lo, hi) => (x < lo ? lo : x > hi ? hi : x);
-  return { m: r4(st.m / 50), a: r4(6 * (1 - 0.55 * clamp((st.s - 50) / 60, -0.3, 1))), e: r4(clamp(0.5 + (st.b - 50) / 120, 0.3, 0.95)), r: r4(0.78 * (1 + (st.z - 50) / 300)) };
+  return { m: r4(st.m / 50), a: r4(8 * (1 - 0.55 * clamp((st.s - 50) / 60, -0.3, 1))), e: r4(clamp(0.5 + (st.b - 50) / 120, 0.3, 0.95)), r: r4(0.78 * (1 + (st.z - 50) / 300)) };
 }
-export const keshiLaunchSpeedView = (P, power) => 11.5 * power / Math.sqrt(Math.sqrt(P.m));
+export const keshiLaunchSpeedView = (P, power) => 12.5 * power / Math.sqrt(Math.sqrt(P.m));

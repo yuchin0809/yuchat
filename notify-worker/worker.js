@@ -4911,7 +4911,7 @@ export const KESHI_DESK = { hw: 3.6, hd: 5.6, startZ: 2.6, startX: 1.1 };   // �
 const KESHI_TURN_MS = 30000;
 const KESHI_MISS_LIMIT = 2;
 const KESHI_BOUT_FLICKS = 8;
-const KESHI_VMAX = 11.5;
+const KESHI_VMAX = 12.5;
 const KESHI_DT = 1 / 120;
 const KESHI_MAX_STEPS = 1200;
 const r3 = (x) => Math.round(x * 1000) / 1000;
@@ -4920,7 +4920,7 @@ const keshiStartPos = () => [[-KESHI_DESK.startX, KESHI_DESK.startZ], [KESHI_DES
 /* 強さ（重さ・すべり・反発・大きさ）から、動きの計算に使う数字へ。足し算・かけ算・割り算・平方根だけで作る（どの端末でも同じ答えになる） */
 export function keshiPhys(st) {
   const clamp = (x, lo, hi) => (x < lo ? lo : x > hi ? hi : x);
-  return { m: r4(st.m / 50), a: r4(6 * (1 - 0.55 * clamp((st.s - 50) / 60, -0.3, 1))), e: r4(clamp(0.5 + (st.b - 50) / 120, 0.3, 0.95)), r: r4(0.78 * (1 + (st.z - 50) / 300)) };
+  return { m: r4(st.m / 50), a: r4(8 * (1 - 0.55 * clamp((st.s - 50) / 60, -0.3, 1))), e: r4(clamp(0.5 + (st.b - 50) / 120, 0.3, 0.95)), r: r4(0.78 * (1 + (st.z - 50) / 300)) };
 }
 export const keshiLaunchSpeed = (P, power) => KESHI_VMAX * power / Math.sqrt(Math.sqrt(P.m));
 /* 机の上の動き。pos：[[x,z],[x,z]]、who：弾いた人（0/1）、(vx,vz)：弾いた速さ。
