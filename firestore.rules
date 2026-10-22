@@ -61,7 +61,7 @@ service cloud.firestore {
     //   gameInvites：送った人・送られた人だけ／fcmTokens：アプリからは読まない（通知サーバーだけが読む）
     //   gameRooms・gameRoomOwners：専用のルールで判定（gameRooms はロビー表示のため読み取りは今まで通り許可）
     function hasDedicatedReadRules(collection) {
-      return collection in ['messages', 'groups', 'fcmTokens', 'gameInvites', 'gameRooms', 'gameRoomOwners', 'yuslotSeats', 'lotteryEntries', 'lotteryRounds', 'yuslotKaku', 'yuslotPrefs', 'coinTransfers', 'yuslotRank', 'yuslotBattle', 'yuslotYacht', 'yuslotKeshi'];
+      return collection in ['messages', 'groups', 'fcmTokens', 'gameInvites', 'gameRooms', 'gameRoomOwners', 'yuslotSeats', 'lotteryEntries', 'lotteryRounds', 'yuslotKaku', 'yuslotPrefs', 'coinTransfers', 'yuslotRank', 'yuslotBattle', 'yuslotYacht', 'yuslotKeshi', 'yuslotKeshiLeague'];
     }
 
     // 下のコレクションは管理者だけが読める
@@ -95,7 +95,9 @@ service cloud.firestore {
         // 🎲 ヨット：1人ひとりのゲームの途中経過・点数と週間ランキング（yuslotYacht）は通知 Worker（サービスアカウント）だけが書く
         'yuslotYacht',
         // 🧽 消しバト：1人ひとりの消しゴム（買ったパーツ・付けているパーツ・色）は通知 Worker（サービスアカウント）だけが書く
-        'yuslotKeshi'];
+        'yuslotKeshi',
+        // 🏆 消しバトのリーグ戦：週の戦績（yuslotKeshiLeague）は通知 Worker（サービスアカウント）だけが書く
+        'yuslotKeshiLeague'];
     }
 
     // ===== もとのルール（管理者用・自動処理用・廃止したコレクション・専用ルールのあるコレクション以外は今まで通り） =====

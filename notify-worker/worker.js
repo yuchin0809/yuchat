@@ -70,6 +70,8 @@ export default {
     ctx.waitUntil(runBattleWeekTick(env, event.scheduledTime).catch((error) => console.error("battle week error", String(error?.message || error).slice(0, 300))));
     /* 🎲 ヨットの週間ランキング：毎週金曜 15:10（日本時間）に結果発表（1位500・2位300・3位100コイン。お知らせ・通知は出さない）。それ以外の分は Firestore に触れずにすぐ戻る */
     ctx.waitUntil(runYachtWeekTick(env, event.scheduledTime).catch((error) => console.error("yacht week error", String(error?.message || error).slice(0, 300))));
+    /* 🧽 消しバトのリーグ戦：月〜金の 10:30・12:40・15:00 に5試合ずつ自動で行い、金曜 15:10 に結果発表（1位1000・2位700・3位400コイン。お知らせは流さない）。それ以外の分は Firestore に触れずにすぐ戻る */
+    ctx.waitUntil(runKeshiLeagueTick(env, event.scheduledTime).catch((error) => console.error("keshi league error", String(error?.message || error).slice(0, 300))));
     /* 💸 コイン送金：3日たっても承認されない申請を、1日1回（日本時間 3:07）自動で却下して返金する。それ以外の分は Firestore に触れずにすぐ戻る */
     ctx.waitUntil(runTransferExpiryTick(env, event.scheduledTime).catch((error) => console.error("transfer expiry error", String(error?.message || error).slice(0, 300))));
   }
@@ -4536,14 +4538,17 @@ async function keshiGate(deps, uid) {
   const { keshi } = await slotGetConfig(deps);
   return keshi || slotIsTopAdmin(deps, uid) ? null : { status: 403, error: "not_published" };
 }
-async function keshiLoad(deps, uid) {
-  const raw = await deps.firestore.getRaw(`yuslotKeshi/${uid}`);
-  const d = raw ? decodeFields(raw.fields) : {};
+/* 消しゴムの書類（yuslotKeshi/{uid}）の中身を、安全な形にそろえる（持っていないパーツは付いていないことにする） */
+function keshiParse(d) {
   const owned = Array.isArray(d.owned) ? d.owned.filter((x) => typeof x === "string") : [];
   const eq = { ...KESHI_DEFAULT_EQ };
   KESHI_SLOTS.forEach((slot) => { const id = d.eq?.[slot]; if (typeof id === "string" && KESHI_PART_BY[slot][id] && (keshiIsFree(slot, id) || owned.includes(`${slot}:${id}`))) eq[slot] = id; });
   const color = Number.isInteger(d.color) && d.color >= 0 && d.color < KESHI_COLORS.length ? d.color : 0;
-  return { raw, owned, eq, color, league: d.league === true };
+  return { owned, eq, color, league: d.league === true };
+}
+async function keshiLoad(deps, uid) {
+  const raw = await deps.firestore.getRaw(`yuslotKeshi/${uid}`);
+  return { raw, ...keshiParse(raw ? decodeFields(raw.fields) : {}) };
 }
 function keshiView(cur, coins, now) {
   const have = {};
@@ -4608,33 +4613,196 @@ async function keshiEquip(deps, uid, body) {
   return keshiView({ ...cur, eq, color }, Number(decodeFields(me.raw.fields).coins || 0), deps.now());
 }
 
-/* ----- リーグ戦（エントリーだけ。試合・順位・賞金はこのあとの段階で追加する） -----
-   ・毎週：月曜〜金曜（金曜 15:10 の結果発表まで）。毎日 10:30・12:40・15:00 に5試合ずつ、自動で行う予定（まだ行わない）。第1回は 2026-10-26（月）から。
+/* ----- リーグ戦（最強決定戦） -----
+   ・毎週：月曜〜金曜（金曜 15:10 の結果発表まで）。毎日 10:30・12:40・15:00 に5試合ずつ（1日15試合）、自動で行う。第1回は 2026-10-26（月）から。
    ・エントリー：一度エントリーすると、毎週自動で参加扱い。やめるまで続く。1人1件（yuslotKeshi/{uid} の league）。参加者の人数は yuslotKeshi/_league の count。
-   ・上位3名への賞金：1位1000・2位700・3位400コイン（金曜 15:10・お知らせは流さない）。 */
+   ・上位3名への賞金：1位1000・2位700・3位400コイン（金曜 15:10・お知らせは流さない）。
+   ・Firestore：週の書類 yuslotKeshiLeague/{月曜の日付} に、全員の戦績をまとめて持つ（1セットにつき書き込み1回）。エントリー中の人は yuslotKeshi の league で探す。 */
 const KESHI_LEAGUE_FIRST_MS = Date.UTC(2026, 9, 26, 0, 0) - 9 * 3600000;   // 第1回の週の始まり：2026-10-26（月）0:00 JST
 const KESHI_LEAGUE_PRIZES = [1000, 700, 400];
 const KESHI_LEAGUE_SETS = [[10, 30], [12, 40], [15, 0]];
+const KESHI_LEAGUE_ROUNDS = 5;                                    // 1セット＝5試合
+const KESHI_DAY = 86400000, KESHI_LEAGUE_FRI_END = 4 * KESHI_DAY + 15 * 3600000 + 10 * 60000;
+function keshiLeagueWeekFrom(mon) {
+  return { startMs: mon, endMs: mon + KESHI_LEAGUE_FRI_END, days: [0, 1, 2, 3, 4].map((i) => mon + i * KESHI_DAY), setsMs: KESHI_LEAGUE_SETS.map(([h, m]) => mon + (h * 60 + m) * 60000),
+    allSetsMs: [0, 1, 2, 3, 4].flatMap((d) => KESHI_LEAGUE_SETS.map(([h, m]) => mon + d * KESHI_DAY + (h * 60 + m) * 60000)) };
+}
 /* いまのリーグの週（月曜 0:00 JST 〜 金曜 15:10）。金曜 15:10 を過ぎたら、次の週を返す。第1回より前は、第1回の週 */
 export function keshiLeagueWeek(now) {
-  const DAY = 86400000, FRI_END = 4 * DAY + 15 * 3600000 + 10 * 60000;
-  const day = Math.floor((now + 9 * 3600000) / DAY), dow = new Date(day * DAY).getUTCDay();
-  let mon = (day - ((dow + 6) % 7)) * DAY - 9 * 3600000;
+  const day = Math.floor((now + 9 * 3600000) / KESHI_DAY), dow = new Date(day * KESHI_DAY).getUTCDay();
+  let mon = (day - ((dow + 6) % 7)) * KESHI_DAY - 9 * 3600000;
   if (mon < KESHI_LEAGUE_FIRST_MS) mon = KESHI_LEAGUE_FIRST_MS;
-  else if (now >= mon + FRI_END) mon += 7 * DAY;
-  return { startMs: mon, endMs: mon + FRI_END, days: [0, 1, 2, 3, 4].map((i) => mon + i * DAY), setsMs: KESHI_LEAGUE_SETS.map(([h, m]) => mon + (h * 60 + m) * 60000) };
+  else if (now >= mon + KESHI_LEAGUE_FRI_END) mon += 7 * KESHI_DAY;
+  return keshiLeagueWeekFrom(mon);
 }
-async function keshiLeagueView(deps, cur, now) {
-  const week = keshiLeagueWeek(now);
+/* ----- 試合の計算（強さから確率で決める。強い消しゴムが有利だが、毎回勝つとは限らない） ----- */
+/* 1本：A が勝つ確率は、総合力の差が大きいほど高い（差12で約73%・差30で約92%） */
+export const keshiBoutWinProb = (ra, rb) => 1 / (1 + Math.exp(-(ra - rb) / 12));
+/* 1試合＝3本勝負（2本先取）。{ a: Aの取った本数, b: Bの取った本数 } */
+export function keshiMatchSim(rnd, ra, rb) {
+  let a = 0, b = 0;
+  const p = keshiBoutWinProb(ra, rb);
+  while (a < 2 && b < 2) { if (rnd() < p) a++; else b++; }
+  return { a, b };
+}
+/* ランキングの並び：勝ち数が多い順 → 負けが少ない順 → 総合力が高い順 → 名前 */
+const keshiLgCmp = (a, b) => b.w - a.w || a.l - b.l || b.r - a.r || (a.n < b.n ? -1 : a.n > b.n ? 1 : 0);
+const keshiLgRows = (p) => Object.entries(p).map(([uid, v]) => ({ uid, n: v.n, w: v.w, l: v.l, r: v.r })).sort(keshiLgCmp);
+/* 1回戦の組み合わせ：並び順（勝ち数順）で近い人どうしを、同じセットで当たった人を避けて組む。避けられない（人数が少ない）ときは、同じ相手とも当たる */
+function keshiPairRound(list, met, key) {
+  const n = list.length, used = Array(n).fill(false), pairs = []; let nodes = 0;
+  const dfs = () => {
+    const i = used.indexOf(false);
+    if (i < 0) return true;
+    if (++nodes > 5000) return false;
+    used[i] = true;
+    for (let t = i + 1; t < n; t++) if (!used[t] && !met.has(key(list[i].uid, list[t].uid))) { used[t] = true; pairs.push([i, t]); if (dfs()) return true; pairs.pop(); used[t] = false; }
+    used[i] = false;
+    return false;
+  };
+  if (dfs()) return pairs;
+  const out = [], taken = new Set();
+  for (let i = 0; i < n; i++) {
+    if (taken.has(i)) continue;
+    let j = -1;
+    for (let t = i + 1; t < n; t++) if (!taken.has(t) && !met.has(key(list[i].uid, list[t].uid))) { j = t; break; }
+    if (j < 0) for (let t = i + 1; t < n; t++) if (!taken.has(t)) { j = t; break; }
+    if (j >= 0) { taken.add(i); taken.add(j); out.push([i, j]); }
+  }
+  return out;
+}
+/* 1セット（5試合）を行う。p（uid → 戦績）を直接書き換える。
+   相手：その週の最初の1回戦はランダム、そのあとは勝ち数が近い人（同じセットの中では、できるだけ同じ相手を避ける）。人数が奇数のときは、1回戦ごとに1人が休み。
+   同じ週・同じセットなら、何回やっても同じ結果になる（決まった乱数）。 */
+export function keshiLeagueSimulateSet(p, entrants, wkId, k) {
+  const rnd = kakuSeeded(`keshiLeague:${wkId}:${k}`), day = Math.floor(k / 3);
+  const pl = entrants.map((e) => ({ uid: e.uid, n: e.n, r: e.r }));
+  pl.forEach((x) => {
+    if (!p[x.uid]) p[x.uid] = { n: x.n, w: 0, l: 0, r: x.r, d: Array(10).fill(0), k: Array(5).fill(0), m: [] };
+    p[x.uid].n = x.n; p[x.uid].r = x.r; p[x.uid].m = [];
+  });
+  const met = new Set(), byes = new Map(), key = (a, b) => (a < b ? `${a}|${b}` : `${b}|${a}`);
+  const record = (A, B, a, b) => {
+    const win = a > b, me = p[A.uid];
+    if (win) { me.w++; me.d[day * 2]++; } else { me.l++; me.d[day * 2 + 1]++; }
+    me.m.push(`${win ? 1 : 0}|${a}-${b}|${B.n}`);
+  };
+  for (let round = 0; round < KESHI_LEAGUE_ROUNDS; round++) {
+    const order = pl.map((x) => ({ x, t: rnd() })).sort((u, v) => u.t - v.t).map((u) => u.x).sort((u, v) => p[v.uid].w - p[u.uid].w);   // ランダムに並べてから、勝ち数順（同じ勝ち数はランダムのまま）
+    let list = order;
+    if (list.length % 2 === 1) {
+      const fewest = Math.min(...list.map((x) => byes.get(x.uid) || 0)), cand = list.filter((x) => (byes.get(x.uid) || 0) === fewest);
+      const bye = cand[Math.floor(rnd() * cand.length)];
+      byes.set(bye.uid, (byes.get(bye.uid) || 0) + 1); p[bye.uid].m.push("-");
+      list = list.filter((x) => x !== bye);
+    }
+    keshiPairRound(list, met, key).forEach(([i, j]) => {
+      const A = list[i], B = list[j], r = keshiMatchSim(rnd, A.r, B.r);
+      met.add(key(A.uid, B.uid)); record(A, B, r.a, r.b); record(B, A, r.b, r.a);
+    });
+  }
+  if (k % 3 === 2) keshiLgRows(p).forEach((row, i) => { p[row.uid].k[day] = i + 1; });   // その日の最後のセットのあとの順位を残す
+  return p;
+}
+/* ----- 週の書類（yuslotKeshiLeague/{月曜の日付}）：全員の戦績を1つにまとめる。1セットにつき書き込み1回 -----
+   { weekStart, setsDone（終わったセット数 0〜15）, p: { uid: { n 名前, w 勝ち, l 負け, r 総合力, d[月の勝,月の負,火の勝…]（10個）, k[各日の終わりの順位]（5個）, m[最新セットの5試合："勝ち(1/0)|取った本数-取られた本数|相手"、休みは "-"] } }, settled, top } */
+const KESHI_LEAGUE_DOC = (wkId) => `yuslotKeshiLeague/${wkId}`;
+async function keshiLeagueEntrants(deps) {
+  const rows = await deps.firestore.query("yuslotKeshi", [["league", "EQUAL", true]]);
+  return rows.filter((r) => r.data.league === true && !String(r.id).startsWith("_")).map((r) => ({ uid: r.id, n: String(r.data.n || "").slice(0, 40) || "名無し", r: keshiStats(keshiParse(r.data).eq).rating, at: Number(r.data.leagueAt) || 0 }));
+}
+async function keshiLeagueSettle(deps, wkId, raw, data, week) {
+  const fs = deps.firestore, rows = keshiLgRows(data.p || {}).filter((r) => r.w + r.l > 0);
+  const top = rows.slice(0, KESHI_LEAGUE_PRIZES.length).map((r, i) => ({ rank: i + 1, uid: r.uid, name: r.n, w: r.w, l: r.l, prize: KESHI_LEAGUE_PRIZES[i] }));
+  const found = await Promise.all(top.map((t) => transferFindUser(fs, t.uid, t.name)));
+  const writes = [];
+  top.forEach((t, i) => {
+    t.paid = !!found[i];
+    if (found[i]) writes.push({ update: { name: fs.docName(`users/${found[i].name}`), fields: {} }, updateMask: { fieldPaths: [] }, updateTransforms: [{ fieldPath: "coins", increment: restInt(t.prize) }], currentDocument: { exists: true } });
+  });
+  const fields = { settled: true, top, total: rows.length };
+  writes.push({ update: { name: fs.docName(KESHI_LEAGUE_DOC(wkId)), fields: encodeFields(fields) }, updateMask: { fieldPaths: Object.keys(fields) }, currentDocument: { updateTime: raw.updateTime } });
+  await fs.commit(writes);
+  return { ...data, ...fields };
+}
+/* 決まった時刻を過ぎたセットを、順番に行う（何回呼んでも、同じセットは1度だけ。更新時刻の条件つき）。金曜 15:10 を過ぎたら賞金を渡して締める。
+   cron が遅れても、リーグの画面を開いた人が追いつかせる。返すのは、いまの週と1つ前の週の書類（読み取りを使い回すため） */
+export async function keshiLeagueAdvance(deps, now) {
+  const fs = deps.firestore, cur = keshiLeagueWeek(now), out = {};
+  const weeks = [];
+  if (cur.startMs - 7 * KESHI_DAY >= KESHI_LEAGUE_FIRST_MS) weeks.push(keshiLeagueWeekFrom(cur.startMs - 7 * KESHI_DAY));
+  weeks.push(cur);
+  let entrants = null;
+  for (const week of weeks) {
+    const wkId = kakuDayId(week.startMs), due = week.allSetsMs.filter((t) => t <= now).length;
+    let raw = await fs.getRaw(KESHI_LEAGUE_DOC(wkId));
+    let data = raw ? decodeFields(raw.fields) : null;
+    for (let guard = 0; guard < 16 && due > 0 && (!data || Number(data.setsDone) < due); guard++) {
+      if (!entrants) entrants = await keshiLeagueEntrants(deps);
+      if (!data && !entrants.length) break;                                   // 誰もエントリーしていないあいだは、何も作らない
+      const done = data ? Number(data.setsDone) || 0 : 0;
+      const p = data && data.p ? data.p : {};
+      keshiLeagueSimulateSet(p, entrants.filter((e) => e.at <= week.allSetsMs[done]), wkId, done);   // そのセットの時刻までにエントリーした人だけが参加（途中から入った人は、次のセットから）
+      const fields = { weekStart: week.startMs, setsDone: done + 1, p };
+      try {
+        await fs.commit([{ update: { name: fs.docName(KESHI_LEAGUE_DOC(wkId)), fields: encodeFields(fields) }, updateMask: { fieldPaths: Object.keys(fields) }, currentDocument: raw ? { updateTime: raw.updateTime } : { exists: false } }]);
+      } catch (error) { if (isRetryableCommitError(error)) { raw = await fs.getRaw(KESHI_LEAGUE_DOC(wkId)); data = raw ? decodeFields(raw.fields) : null; continue; } throw error; }
+      raw = await fs.getRaw(KESHI_LEAGUE_DOC(wkId)); data = decodeFields(raw.fields);
+    }
+    if (data && data.settled !== true && now >= week.endMs && Number(data.setsDone) >= week.allSetsMs.length) {
+      try { data = await keshiLeagueSettle(deps, wkId, raw, data, week); }
+      catch (error) { if (!isRetryableCommitError(error)) throw error; raw = await fs.getRaw(KESHI_LEAGUE_DOC(wkId)); data = raw ? decodeFields(raw.fields) : data; }
+    }
+    out[wkId] = data;
+  }
+  return { cur, curId: kakuDayId(cur.startMs), prevId: weeks.length > 1 ? kakuDayId(weeks[0].startMs) : null, docs: out };
+}
+const keshiLeagueTickDone = new Set();
+export function resetKeshiLeagueTickForTest() { keshiLeagueTickDone.clear(); }
+/* 毎分の cron から。月〜金の 10:30・12:40・15:00 から30分間と、金曜 15:10〜15:19（結果発表）だけ動く（それ以外は Firestore に触れない） */
+export async function runKeshiLeagueTick(env = {}, scheduledTime = Date.now(), deps = null) {
+  if (scheduledTime < KESHI_LEAGUE_FIRST_MS) return { skipped: "outside" };
+  const j = new Date(scheduledTime + 9 * 3600000), dow = j.getUTCDay(), min = j.getUTCHours() * 60 + j.getUTCMinutes();
+  const inSet = dow >= 1 && dow <= 5 && KESHI_LEAGUE_SETS.some(([h, m]) => min >= h * 60 + m && min < h * 60 + m + 30);
+  const inSettle = dow === 5 && min >= 15 * 60 + 10 && min < 15 * 60 + 20;
+  if (!inSet && !inSettle) return { skipped: "outside" };
+  const key = `${kakuDayId(scheduledTime)}:${inSettle ? "settle" : Math.floor(min / 10)}`;
+  if (keshiLeagueTickDone.has(key)) return { skipped: "done" };
+  const d = { ...(deps || createDefaultDeps(env)), now: () => scheduledTime };
+  const r = await keshiLeagueAdvance(d, scheduledTime);
+  keshiLeagueTickDone.add(key);
+  return { week: r.curId };
+}
+/* ----- リーグの画面用のデータ ----- */
+function keshiLeagueMe(data, uid) {
+  const v = data && data.p ? data.p[uid] : null;
+  if (!v) return null;
+  const rows = keshiLgRows(data.p), rank = rows.findIndex((x) => x.uid === uid) + 1;
+  const days = [0, 1, 2, 3, 4].map((i) => ({ w: v.d[i * 2] || 0, l: v.d[i * 2 + 1] || 0, rank: v.k[i] || 0 }));
+  const recent = (v.m || []).map((x) => { if (x === "-") return { rest: true }; const [win, score, opp] = String(x).split("|"); return { win: win === "1", score, opp }; });
+  return { rank, w: v.w, l: v.l, days, recent };
+}
+async function keshiLeagueView(deps, cur, uid, now) {
+  const adv = await keshiLeagueAdvance(deps, now);
   const raw = await deps.firestore.getRaw("yuslotKeshi/_league");
   const count = Math.max(0, Number(raw ? decodeFields(raw.fields).count : 0) || 0);
-  return { ok: true, entered: cur.league, count, week, started: now >= week.setsMs[0], prizes: KESHI_LEAGUE_PRIZES, sets: KESHI_LEAGUE_SETS, serverNowMs: now };
+  const week = adv.cur, data = adv.docs[adv.curId] || null, prev = adv.prevId ? adv.docs[adv.prevId] : null;
+  const rows = data && data.p ? keshiLgRows(data.p).filter((r) => r.w + r.l > 0) : [];
+  const last = prev && prev.settled === true && Array.isArray(prev.top) ? { startMs: Number(prev.weekStart) || 0, total: prev.total || 0, top: prev.top.map((t) => ({ rank: t.rank, name: t.name, w: t.w, l: t.l, prize: t.prize, mine: t.uid === uid })), me: keshiLeagueMe(prev, uid) } : null;
+  return {
+    ok: true, entered: cur.league, count, week: { startMs: week.startMs, endMs: week.endMs, days: week.days, setsMs: week.setsMs, no: Math.round((week.startMs - KESHI_LEAGUE_FIRST_MS) / (7 * KESHI_DAY)) + 1 }, started: now >= week.setsMs[0],
+    prizes: KESHI_LEAGUE_PRIZES, sets: KESHI_LEAGUE_SETS, serverNowMs: now,
+    setsDone: data ? Number(data.setsDone) || 0 : 0, lastSetMs: data && Number(data.setsDone) > 0 ? week.allSetsMs[Number(data.setsDone) - 1] : 0,
+    me: keshiLeagueMe(data, uid), total: rows.length,
+    top: rows.slice(0, 20).map((r, i) => ({ rank: i + 1, name: r.n, w: r.w, l: r.l, mine: r.uid === uid })),
+    last
+  };
 }
 async function keshiLeagueState(deps, uid) {
   const g = await keshiGate(deps, uid);
   if (g) return g;
   const cur = await keshiLoad(deps, uid);
-  return keshiLeagueView(deps, cur, deps.now());
+  return keshiLeagueView(deps, cur, uid, deps.now());
 }
 /* エントリーする／やめる（すでにその状態なら何もしない）。自分の書類と人数の書類は、1回の commit */
 async function keshiLeagueEntry(deps, uid, body) {
@@ -4654,7 +4822,7 @@ async function keshiLeagueEntry(deps, uid, body) {
     } catch (error) { if (isRetryableCommitError(error)) return { status: 409, error: "busy" }; throw error; }
     cur.league = body.enter;
   }
-  return keshiLeagueView(deps, cur, now);
+  return keshiLeagueView(deps, cur, uid, now);
 }
 
 /* =========================================================

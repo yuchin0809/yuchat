@@ -4,8 +4,8 @@
      このファイルは、画面（3Dの消しゴム・強さ・パーツの一覧）を描いて、「買う」「付ける」を頼むだけ。
    ・ゆうワールド（yuworld.js）から renderKeshi({ root, api, esc, onBack }) で開く。
 ========================================================= */
-import { keshiStatsView } from "./yukeshi-core.js?v=20261023-keshi3";
-import { createEraserStage, SLEEVE_COLORS } from "./yukeshi3d.js?v=20261023-keshi3";
+import { keshiStatsView } from "./yukeshi-core.js?v=20261023-keshi4";
+import { createEraserStage, SLEEVE_COLORS } from "./yukeshi3d.js?v=20261023-keshi4";
 
 const SLOT_NAMES = { body: "本体", edge: "ふち", sole: "そこ", weight: "おもり" };
 const STAT_NAMES = [["m", "重さ"], ["s", "すべり"], ["b", "反発"], ["z", "大きさ"]];
@@ -143,37 +143,49 @@ function sheet(title, html) {
   ctx.root.appendChild(el);
 }
 function drawLeague() {
-  const w = L.week, pr = L.prizes;
+  const w = L.week, pr = L.prizes, me = L.me;
   const first = L.sets.map(([h, m]) => hmJa(h, m)).join("・");
-  const days = DAY_LABELS.map((d, i) => `<div class="yl2-day"><span>${d}</span><b>—</b></div>`).join("");
-  const matches = [1, 2, 3, 4, 5].map((n) => `<div class="yl2-match"><span>第${n}戦</span><em>—</em></div>`).join("");
-  const rows = DAY_LABELS.map((d, i) => `<div class="yl2-row"><span>${mdJa(w.days[i]).replace("月", "/").replace("日", "")}（${d}）</span><span>—</span><span>—</span></div>`).join("");
+  const num = (v) => (v ? String(v) : "—");
+  const days = DAY_LABELS.map((d, i) => `<div class="yl2-day"><span>${d}</span><b>${me ? num(me.days[i].rank) : "—"}</b></div>`).join("");
+  const recent = me ? me.recent : [];
+  const matches = [0, 1, 2, 3, 4].map((i) => { const m = recent[i]; return `<div class="yl2-match${m && !m.rest ? (m.win ? " win" : " lose") : ""}"><span>第${i + 1}戦</span>${m ? (m.rest ? `<em>休み</em>` : `<em>${m.win ? "勝利" : "敗北"}</em><i>${ctx.esc(m.score)}</i><small>${ctx.esc(m.opp)}</small>`) : `<em>—</em>`}</div>`; }).join("");
+  const rows = DAY_LABELS.map((d, i) => { const x = me && me.days[i]; const has = x && x.w + x.l > 0; return `<div class="yl2-row"><span>${mdJa(w.days[i]).replace("月", "/").replace("日", "")}（${d}）</span><span>${has ? `${x.w}勝 ${x.l}敗` : "—"}</span><span>${x && x.rank ? x.rank + "位" : "—"}</span></div>`; }).join("");
+  const lastSet = L.lastSetMs ? `${mdJa(L.lastSetMs)}（${"日月火水木金土"[new Date(L.lastSetMs + 9 * 3600000).getUTCDay()]}）${hmJa(new Date(L.lastSetMs + 9 * 3600000).getUTCHours(), new Date(L.lastSetMs + 9 * 3600000).getUTCMinutes())}` : "";
+  const soon = L.started
+    ? `第${w.no}回 開催中！毎日 ${first} に5試合ずつ、自動で対戦します。${lastSet ? `最新の試合：<b>${lastSet}</b>` : ""}${me ? "" : "<br>まだ試合をしていません（エントリーすると、次のセットから参加します）。"}`
+    : `第${w.no}回は <b>${mdJa(w.setsMs[0])}（月）${hmJa(...L.sets[0])}</b> からスタート！試合は自動で行われ、勝敗だけが表示されます。`;
+  const lastCard = L.last
+    ? `<div class="yl2-last"><b>先週（第${Math.max(1, w.no - 1)}回）の結果発表</b>${L.last.top.map((t) => `<div class="${t.mine ? "mine" : ""}"><span>${["🥇", "🥈", "🥉"][t.rank - 1]} ${ctx.esc(t.name)}</span><span>${t.w}勝${t.l}敗</span><em>${t.prize.toLocaleString("ja-JP")}コイン</em></div>`).join("")}${L.last.me ? `<p>あなたは <b>${L.last.me.rank}位</b>（${L.last.me.w}勝${L.last.me.l}敗）でした。</p>` : ""}</div>`
+    : "";
   const entry = L.entered
     ? `<div class="yl2-entry on"><div class="st">✅ エントリー済み</div><p>毎週、自動で参加扱いになります。参加者：${L.count}人</p><button type="button" class="yl2-quit" id="ylQuit">エントリーをやめる</button></div>`
     : `<div class="yl2-entry"><div class="st">リーグ戦にエントリーしよう！</div><p>一度エントリーすると、毎週自動で参加扱いになります（いつでもやめられます）。参加者：${L.count}人</p><button type="button" class="yw-btn yk2-go yl2-join" id="ylJoin">エントリーする</button></div>`;
   ctx.root.innerHTML = `<div class="yk2-head"><button type="button" class="yw-back" id="ylBack">← 消しゴムの改造へ</button></div>
     <div class="yl2-banner"><div class="yl2-title">最強決定戦<small>〜消しバトリーグ〜</small></div>
       <div class="yl2-btns"><button type="button" id="ylHelp">説明</button><button type="button" id="ylPrize">報酬</button></div>
-      <div class="yl2-rank">現在の順位 <b>—</b> 位</div></div>
+      <div class="yl2-rank">現在の順位 <b>${me ? me.rank : "—"}</b> 位</div></div>
     <div class="yl2-period">開催期間：${mdJa(w.startMs)}〜${mdJa(w.days[4])}</div>
     <div class="yl2-days">${days}</div>
-    <div class="yl2-soon">${L.started ? "試合の結果は、ここに表示されます。" : `第1回は <b>${mdJa(w.setsMs[0])}（月）${hmJa(...L.sets[0])}</b> からスタート！試合は自動で行われ、勝敗だけが表示されます。`}</div>
-    ${entry}
+    <div class="yl2-soon">${soon}</div>
+    ${lastCard}${entry}
     <div class="yl2-actions"><button type="button" id="ylPrize2">🏅 報酬</button><button type="button" id="ylRanking">👑 ランキング</button><button type="button" id="ylOrder">🧽 消しゴム変更</button></div>
-    <div class="yl2-sec">最新試合結果</div><div class="yl2-matches">${matches}</div>
-    <div class="yl2-sec">通算戦績<span>0勝 0敗</span></div><div class="yl2-table"><div class="yl2-row head"><span>日付</span><span>勝敗</span><span>順位</span></div>${rows}</div>`;
+    <div class="yl2-sec">最新試合結果<span>${lastSet && me ? lastSet : ""}</span></div><div class="yl2-matches">${matches}</div>
+    <div class="yl2-sec">通算戦績<span>${me ? `${me.w}勝 ${me.l}敗` : "0勝 0敗"}</span></div><div class="yl2-table"><div class="yl2-row head"><span>日付</span><span>勝敗</span><span>順位</span></div>${rows}</div>`;
   const help = () => sheet("最強決定戦のルール", `<ol class="yl2-rules"><li>自分の消しゴム1個で戦います。パーツを買って組み合わせて、最強の消しゴムを作ろう。</li>
     <li>一度エントリーすると、毎週自動で参加扱いになります。</li>
     <li>月曜〜金曜の毎日、${first} に5試合ずつ（1日15試合）、自動で対戦します。</li>
     <li>1試合は3本勝負（2本先取）。結果だけが表示されます。強い消しゴムが有利ですが、毎回勝てるとは限りません。</li>
     <li>対戦相手は、最初はランダム。そのあとは、勝ち負けの数が近い人になります。</li>
-    <li>月〜金の勝敗でランキングが決まり、金曜 15:10 に結果発表。</li></ol>`);
+    <li>月〜金の勝ち数でランキングが決まり、金曜 15:10 に結果発表。</li></ol>`);
   const prize = () => sheet("報酬", `<p>金曜 15:10 の結果発表で、ランキングの上位3名にゆうコインをお渡しします。</p><div class="yl2-prizes"><div>🥇 1位<b>${pr[0].toLocaleString("ja-JP")}</b>コイン</div><div>🥈 2位<b>${pr[1].toLocaleString("ja-JP")}</b>コイン</div><div>🥉 3位<b>${pr[2].toLocaleString("ja-JP")}</b>コイン</div></div>`);
+  const ranking = () => sheet("ランキング", L.top.length
+    ? `<p>今週の勝ち数の順位です（参加 ${L.total} 人）。</p><div class="yl2-rk">${L.top.map((t) => `<div class="${t.mine ? "mine" : ""}"><span>${t.rank <= 3 ? ["🥇", "🥈", "🥉"][t.rank - 1] : t.rank + "位"}</span><span class="n">${ctx.esc(t.name)}</span><b>${t.w}勝${t.l}敗</b></div>`).join("")}</div>`
+    : `<p>ランキングは、試合が始まってから表示されます。${L.started ? "" : `（第${w.no}回：${mdJa(w.setsMs[0])}（月）から）`}</p><p>いまのエントリー：${L.count}人</p>`);
   $("#ylBack")?.addEventListener("click", () => renderKeshi(ctx));
   $("#ylOrder")?.addEventListener("click", () => renderKeshi(ctx));
   $("#ylHelp")?.addEventListener("click", help);
   $("#ylPrize")?.addEventListener("click", prize); $("#ylPrize2")?.addEventListener("click", prize);
-  $("#ylRanking")?.addEventListener("click", () => sheet("ランキング", `<p>ランキングは、試合が始まってから表示されます。${L.started ? "" : `（第1回：${mdJa(w.setsMs[0])}（月）から）`}</p><p>いまのエントリー：${L.count}人</p>`));
+  $("#ylRanking")?.addEventListener("click", ranking);
   $("#ylJoin")?.addEventListener("click", () => setEntry(true));
   $("#ylQuit")?.addEventListener("click", () => { if (confirm("エントリーをやめますか？（あとでまたエントリーできます）")) setEntry(false); });
 }
@@ -223,6 +235,9 @@ function injectStyles() {
   .yl2-sec { display: flex; justify-content: space-between; background: #14122e; color: #f3e9c7; font-weight: 800; font-size: 13px; padding: 6px 12px; border-radius: 8px 8px 0 0; } .yl2-sec span { font-weight: 600; color: #ffe08a; }
   .yl2-matches { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; background: #1c1938; padding: 8px; border-radius: 0 0 10px 10px; } .yl2-match { background: #0e0c22; border-radius: 8px; padding: 6px 2px; text-align: center; color: #cfc8ee; font-size: 11px; } .yl2-match em { display: block; font-style: normal; font-size: 18px; color: #6e68a0; margin-top: 4px; }
   .yl2-table { background: #fff; border-radius: 0 0 10px 10px; overflow: hidden; margin-bottom: 14px; } .yl2-row { display: grid; grid-template-columns: 1.4fr 1fr 1fr; padding: 8px 12px; font-size: 13px; border-bottom: 1px solid #eee; color: #333; } .yl2-row.head { background: #ece7da; font-weight: 800; font-size: 12px; } .yl2-row span:nth-child(n+2) { text-align: right; color: #888; }
+  .yl2-match.win { box-shadow: inset 0 0 0 2px #ffd166; } .yl2-match.win em { color: #ffd166; } .yl2-match.lose em { color: #8f95c8; } .yl2-match i { display: block; font-style: normal; font-size: 15px; font-weight: 800; color: #fff; margin-top: 2px; } .yl2-match small { display: block; font-size: 9px; color: #8f95c8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .yl2-last { background: linear-gradient(135deg, #fff6d8, #ffe9a8); border-radius: 14px; padding: 12px 14px; margin: 10px 0; font-size: 13px; } .yl2-last > b { display: block; margin-bottom: 6px; } .yl2-last div { display: flex; gap: 8px; padding: 4px 0; align-items: center; } .yl2-last div span:first-child { flex: 1; font-weight: 700; } .yl2-last div.mine { background: rgba(255,255,255,.7); border-radius: 8px; padding: 4px 6px; } .yl2-last em { font-style: normal; color: #b45309; font-weight: 800; } .yl2-last p { margin: 6px 0 0; }
+  .yl2-rk { display: grid; gap: 2px; } .yl2-rk div { display: flex; align-items: center; gap: 8px; padding: 6px 4px; border-bottom: 1px solid #f0f0f0; font-size: 14px; } .yl2-rk .n { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .yl2-rk div.mine { background: #fff8e1; border-radius: 8px; }
   .yl2-sheet { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 18px; } .yl2-sheet-box { background: #fff; border-radius: 16px; padding: 16px; max-width: 420px; width: 100%; max-height: 80vh; overflow: auto; } .yl2-sheet-box h3 { margin: 0 0 10px; }
   .yl2-rules { margin: 0; padding-left: 20px; font-size: 13px; line-height: 1.8; color: #444; } .yl2-sheet-body p { font-size: 13px; line-height: 1.8; color: #444; }
   .yl2-prizes { display: grid; gap: 8px; margin: 10px 0 14px; } .yl2-prizes div { background: #fff8e8; border-radius: 10px; padding: 10px 14px; font-weight: 800; display: flex; justify-content: space-between; align-items: center; } .yl2-prizes b { font-size: 20px; color: #b45309; margin-left: auto; margin-right: 4px; }
