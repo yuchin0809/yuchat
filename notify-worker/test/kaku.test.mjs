@@ -5,7 +5,7 @@ import { simulate } from "../yuslot-kaku-sim.mjs";
 import assert from "node:assert/strict";
 import {
   KAKU_EPOCH, KAKU_MACHINE_NAMES, kakuDayId, kakuDayStart, kakuNextDay, kakuTimes, kakuMachineFor, kakuSameKinds, kakuInitialSlots, kakuNpcName,
-  kakuCurrentHolder, kakuIsWeekend, kakuPoolFor, kakuPickWinners, kakuStanding, kakuRunDraw, kakuRunEvent, kakuSeatRight, kakuSpinGate, kakuResultDataFor, runKakuTick, resetKakuCacheForTest,
+  kakuCurrentHolder, kakuIsWeekend, kakuPoolFor, kakuPickWinners, kakuStanding, kakuRunDraw, kakuRunEvent, slotSeatStale, kakuSeatRight, kakuSpinGate, kakuResultDataFor, runKakuTick, resetKakuCacheForTest,
   handleAdminAction, handleYuslotAction, kakuQuick, resetYuslotCacheForTest, slotApplySpin, slotRates, SLOT_MACHINES, SLOT_KAKU_RATE, SLOT_KAKU_SPECIAL_BOOST
 } from "../worker.js";
 
@@ -533,4 +533,67 @@ test("台のカード用：いまの枠を使っているのは「NPC／ほか�
   assert.ok(!JSON.stringify(st.today.cur).match(/id0|id1|u0|u1/));
   env.state.now = at(7, 0); resetKakuCacheForTest();
   assert.equal((await env.act("id0", "u0", { action: "kakuStatus" })).today.cur, null, "8:00前は null");
+});
+
+test("枠が終わった人の席は、画面を閉じたまま・開いたままでも、次の人が自分の時間になったら座れる（前の人の席は空く）", async () => {
+  const { act, state, fs, deps } = setup({ now: TT.preOpen + M, random: rngOf(5) });
+  const machine = kakuMachineFor(D), other = Object.keys(SLOT_MACHINES).find((m) => m !== machine);
+  await act("id0", "u0", { action: "kakuApply", which: "pre" });
+  state.now = TT.preClose; await kakuRunDraw(deps, D, 1);
+  const doc = fs.plain(`yuslotKaku/${D}`);
+  const slots = doc.slots.map((x) => ({ ...x, uid: "", name: "", npc: false }));
+  const at = (h, m = 0) => TT.dayStart + (h * 60 + m) * M;
+  const byStart = (h, m) => slots.find((x) => x.s === at(h, m));
+  Object.assign(byStart(9, 0), { uid: "id0", name: "u0" }); Object.assign(byStart(9, 30), { uid: "id0", name: "u0" });   // u0：9:00〜10:00
+  Object.assign(byStart(10, 0), { uid: "id1", name: "u1" });                                                          // u1：10:00〜10:30
+  fs.put(`yuslotKaku/${D}`, encF({ ...doc, slots })); resetKakuCacheForTest();
+  state.now = at(9, 10);
+  const a = await act("id0", "u0", { action: "seat", machine });
+  assert.equal(a.ok, true); assert.equal(fs.plain(`yuslotSeats/${machine}`).kakuEnd, at(10, 0), "席に、枠の終わりを記録する");
+  // 枠のあいだは、ほかの人から見て「使用中」
+  state.now = at(9, 59, 30);
+  await act("id0", "u0", { action: "flush", session: a.session });                           // 画面を開いたまま：席の猶予が 10:01 まで延びる
+  assert.equal((await act("id2", "u2", { action: "lobby" })).seats[machine].occupied, true);
+  // 10:00 になったら、u0 が画面を閉じていなくても（猶予が残っていても）席は空き、u1 が座れる
+  state.now = at(10, 0, 5);
+  assert.equal(Number(fs.plain(`yuslotSeats/${machine}`).graceUntilMs) > state.now, true, "前の人の猶予はまだ残っている");
+  assert.equal((await act("id2", "u2", { action: "lobby" })).seats[machine].occupied, false, "ロビーでも空き");
+  const b = await act("id1", "u1", { action: "seat", machine });
+  assert.equal(b.ok, true, "次の人が自分の時間に始められる"); assert.equal(b.kaku, true); assert.equal(b.kakuEnd, at(10, 30));
+  assert.equal(fs.plain(`yuslotSeats/${machine}`).uid, "id1");
+  // 前の人の席はなくなっている：続きは反映されず（席を失った）、精算しても二重には反映されない
+  const f = await act("id0", "u0", { action: "flush", session: a.session });
+  assert.equal(f.error, "seat_lost");
+  const st = await act("id0", "u0", { action: "settle", session: a.session });
+  assert.equal(st.ok, true); assert.equal(st.applied, 0);
+  assert.equal(fs.plain(`yuslotSeats/${machine}`).uid, "id1", "次の人の席は、そのまま");
+  // ほかの台は、これまでどおり（猶予が残っていれば、ほかの人は座れない）
+  state.now = at(10, 1);
+  const c = await act("id3", "u3", { action: "seat", machine: other });
+  assert.equal(c.ok, true);
+  assert.equal((await act("id4", "u4", { action: "seat", machine: other })).error, "seat_taken");
+});
+
+test("確変の時間帯に入ったとき、通常の席のまま残っていた人の席は、枠の持ち主が座れる／枠の終わりを過ぎた席の判定", async () => {
+  const { act, state, fs, deps } = setup({ now: TT.preOpen + M, random: rngOf(6) });
+  const machine = kakuMachineFor(D);
+  await act("id0", "u0", { action: "kakuApply", which: "pre" });
+  state.now = TT.preClose; await kakuRunDraw(deps, D, 1);
+  const doc = fs.plain(`yuslotKaku/${D}`);
+  const slots = doc.slots.map((x) => ({ ...x, uid: "", name: "", npc: false }));
+  const at = (h, m = 0) => TT.dayStart + (h * 60 + m) * M;
+  Object.assign(slots.find((x) => x.s === at(8, 0)), { uid: "id1", name: "u1" });
+  fs.put(`yuslotKaku/${D}`, encF({ ...doc, slots })); resetKakuCacheForTest();
+  state.now = at(7, 55);
+  const n = await act("id2", "u2", { action: "seat", machine });            // 8:00前の通常の着席
+  assert.equal(n.ok, true);
+  await act("id2", "u2", { action: "flush", session: n.session });
+  state.now = at(8, 0, 10);
+  assert.equal((await act("id1", "u1", { action: "seat", machine })).ok, true, "8:00 から枠の持ち主が座れる（通常の席の人は外れる）");
+  // 判定の関数
+  assert.equal(slotSeatStale({ kakuEnd: at(10, 0) }, machine, at(9, 59)), false);
+  assert.equal(slotSeatStale({ kakuEnd: at(10, 0) }, machine, at(10, 0)), true);
+  assert.equal(slotSeatStale({}, machine, at(9, 0)), true, "確変の時間帯に、確変でない席は使えない");
+  assert.equal(slotSeatStale({}, machine, at(7, 0)), false, "時間帯の外は、これまでどおり");
+  assert.equal(slotSeatStale({ kakuEnd: at(15, 20) }, machine, at(15, 20)), true);
 });
