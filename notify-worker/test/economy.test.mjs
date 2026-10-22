@@ -334,6 +334,25 @@ test("精算：結果をもとにサーバーが払い戻しを計算し、当�
   assert.equal(me(firestore).coins, expected, "二重に払わない");
 });
 
+test("精算：発走から演出が終わる頃（80秒）までは、結果があってもコインを配らない。過ぎたら配る", async () => {
+  const raceId = "2026-10-20-1130";
+  const order = [5, 3, 9, 1, 2, 4, 6, 7, 8, 10];
+  const created = new Date(Date.parse("2026-10-20T02:00:00Z"));
+  const race = Date.parse("2026-10-20T02:30:00Z");
+  const { firestore, deps } = setup({ coins: 0, now: race + 79000, docs: {
+    [`races/${raceId}`]: { raceId, resultOrder: order, generatedBy: "worker" },
+    "raceBets/b1": { raceId, uid: "uT", username: "たろう", settled: false, win: null, payout: null, createdAt: created, placedBy: "worker", type: "win", horses: [5], amount: 100 }
+  } });
+  const early = await call(deps, { action: "settleMyBets", raceId });
+  assert.equal(early.error, "settle_not_ready");
+  assert.equal(me(firestore).coins, 0);
+  assert.equal(bets(firestore)[0].settled, false);
+  deps.now = () => race + 80500;
+  const later = await call(deps, { action: "settleMyBets", raceId });
+  assert.equal(later.settled.length, 1);
+  assert.ok(me(firestore).coins > 0);
+});
+
 test("精算（山分け方式・固定オッズより前のレース）：そのレースの全馬券から払い戻しを計算し、当たった人で賭け金に応じて分ける", async () => {
   const raceId = "2026-10-08"; /* 固定オッズより前 */
   const order = [5, 3, 9, 1, 2, 4, 6, 7, 8, 10];

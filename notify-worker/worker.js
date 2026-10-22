@@ -1384,6 +1384,8 @@ const DERBY_FIXED_ODDS_FROM = "2026-10-09";
 const DERBY_BET_TYPES = ["win", "place", "quinella", "trio", "trifecta"];
 const DERBY_BET_COUNT = { win: 1, place: 1, quinella: 2, trio: 3, trifecta: 3 };
 const DERBY_FIXED_PAYOUT_RULE = "fixed-v1";
+/* 発走から、演出の最長（60＋14＋3秒）を少し過ぎるまでは、払い戻しをしない（derby-show.js の RACE_SHOW_MAX_SECONDS ＋ 余裕。derby-runner と script.js も同じ値） */
+const DERBY_SETTLE_DELAY_MS = 80000;
 const DERBY_V1 = Object.freeze({
   horses: Object.freeze([
     { number: 1, power: 6, fan: 0.5 }, { number: 2, power: 7, fan: 0.4 }, { number: 3, power: 8, fan: 0.5 },
@@ -2057,6 +2059,7 @@ async function econSettleMyBets(deps, uid, name, raceId) {
   const [schedule, race] = await Promise.all([loadRaceSchedule(fs, raceId), fs.get(`races/${raceId}`)]);
   if (fixed && !schedule) return econError(409, "invalid_race");
   if (!race || !isTrustedRaceResult(raceId, race)) return econError(409, "no_result");
+  if (schedule && deps.now() < schedule.raceMs + DERBY_SETTLE_DELAY_MS) return econError(409, "settle_not_ready");   // レース演出が終わって結果が出るまで、コインは配らない
   const me = await loadMyUser(fs, uid, name);
   if (me.error) return me.error;
   const bets = await fs.query("raceBets", [["raceId", "EQUAL", raceId], ["uid", "EQUAL", uid], ["settled", "EQUAL", false]]);
