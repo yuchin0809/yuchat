@@ -14,7 +14,7 @@
 
 /* 🎟 ゆう宝くじ売り場の画面（別ファイル。Worker の lottery* アクションを呼んで表示するだけ） */
 import { renderLottery, stopLottery } from "./yulottery.js?v=20261021-lottery7";
-import { renderYacht, stopYacht } from "./yuyacht.js?v=20261023-yacht2";
+import { renderYacht, stopYacht } from "./yuyacht.js?v=20261023-yacht3";
 /* 🌈 確変台のパネル（台の一覧の上）。抽選・先着・通知設定。Worker の kaku* アクションを呼んで表示するだけ */
 import { kakuInit, kakuPanelHtml, kakuBind, kakuMachineInfo, startKaku, stopKaku, refreshKaku } from "./yukaku.js?v=20261023-kaku15";
 /* 🏅 会員ランクのカード（台の一覧の上）。ランクの判定・進みは Worker の rankStatus が返す */
@@ -150,7 +150,7 @@ function openLotteryScreen() {
 /* ゲーム（オセロ・将棋・大富豪）のお店。soon＝少し暗くして「準備中」と出す。開くと script.js のゲーム画面（今までの「ゲーム」タブと同じ）に移る */
 const GAME_SHOPS = [
   { id: "othello", icon: "⚫", name: "オセロ", cls: "yw-othello-banner", desc: "友達とオセロで対戦。ルームを作って招待しよう。" },
-  { id: "shogi", icon: "♟️", name: "将棋", cls: "yw-shogi-banner", desc: "友達と将棋で対戦。ルームを作って招待しよう。" },
+  { id: "shogi", icon: '<svg class="yw-shogi-svg" viewBox="0 0 64 72" aria-hidden="true"><polygon points="32,3 57,17 62,69 2,69 7,17" fill="#f0cf8c" stroke="#5e3a12" stroke-width="3" stroke-linejoin="round"/><polygon points="32,9 52,20 56,63 8,63 12,20" fill="none" stroke="#b98a45" stroke-width="1.5" stroke-linejoin="round"/><text x="32" y="50" text-anchor="middle" font-size="33" font-weight="900" font-family="serif" fill="#2b1a08">王</text></svg>', name: "将棋", cls: "yw-shogi-banner", desc: "友達と将棋で対戦。ルームを作って招待しよう。" },
   { id: "daifugo", icon: "🃏", name: "大富豪", cls: "yw-daifugo-banner", soon: true, desc: "みんなで大富豪。ただいまメンテナンス中です。" }
 ];
 function renderShop() {
@@ -847,6 +847,7 @@ function injectStyles() {
   .yw-shop-body { padding: 12px 14px 16px; }
   .yw-shop-name { font-weight: 800; font-size: 16px; margin-bottom: 4px; }
   .yw-shop-desc { color: #666; font-size: 12.5px; line-height: 1.6; }
+  .yw-shogi-svg { width: 58px; height: 66px; filter: drop-shadow(0 3px 3px rgba(0,0,0,.35)); }
   .yw-othello-banner { background: linear-gradient(135deg, #1b7a43, #0f5a30); }
   .yw-shogi-banner { background: linear-gradient(135deg, #c8964b, #8a5a1f); }
   .yw-daifugo-banner { background: linear-gradient(135deg, #2d6cdf, #1b2f7a); }
