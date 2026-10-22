@@ -73,6 +73,7 @@ const $ = (sel) => rootEl && rootEl.querySelector(sel);
 /* ---------- 起動・画面切り替え（script.js から呼ぶ） ---------- */
 export function initYuWorld(options) {
   deps = options; rootEl = document.getElementById("yuworldRoot"); injectStyles();
+  if (rootEl) { rootEl.addEventListener("gesturestart", (e) => e.preventDefault()); rootEl.addEventListener("dblclick", (e) => e.preventDefault()); }   // iOS Safari：2本指の拡大・ダブルクリックの拡大も止める
   kakuInit({ api, esc, machines: MACHINE_BY_ID, onChange: () => { if (state.screen === "lobby") renderLobby(); } });
   rankInit({ api, esc, onChange: () => { if (state.screen === "lobby") renderLobby(); } });
 }
@@ -775,6 +776,9 @@ function toggleSound() {
 function injectStyles() {
   if (stylesInjected) return; stylesInjected = true;
   const css = `
+  /* ボタンを連打（ダブルタップ）しても、画面が拡大されない。連打で文字や絵が選択されてしまうのも防ぐ */
+  #yuworldRoot, #yuworldRoot * { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+  #yuworldRoot .yw-game { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
   .yuworld-root { padding: 12px 14px 28px; max-width: 760px; margin: 0 auto; }
   .yw-head h2 { margin: 6px 0 4px; font-size: 20px; }
   .yw-head p { margin: 0 0 10px; color: #666; font-size: 13px; }
