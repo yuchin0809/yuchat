@@ -4,6 +4,8 @@
      このファイルは、画面（点数表・サイコロ・ランキング）を描いて、「どれをキープするか」「どの役に記録するか」を送るだけ。
    ・ゆうワールド（yuworld.js）から renderYacht({ root, api, esc, onBack }) で開く。
 ========================================================= */
+import { load3D, DiceStage } from "./yuyacht3d.js?v=20261023-3d1";
+
 const CATS = [
   { name: "エース", mark: "⚀" }, { name: "デュース", mark: "⚁" }, { name: "トレイ", mark: "⚂" },
   { name: "フォー", mark: "⚃" }, { name: "ファイブ", mark: "⚄" }, { name: "シックス", mark: "⚅" },
@@ -27,6 +29,18 @@ function cubeHtml(v, extra = "") {
 /* サイコロのトレイ：上の段＝キープしたサイコロ、赤いフェルト＝転がった目、右下のカップ（振るときはカップに集めて振り、そこから転がす）
    o.phase：idle（止まっている）／in（カップへ戻る）／shake（カップを振っている）／pour（カップから転がり出る）  o.shown：いまの目を見せてよいか
    o.tumble：その場で転がして見せる（相手の番で目が変わったとき）  o.canHold：キープの切り替えができるか  o.canRoll：カップを押して振れるか */
+/* 3D 表示用のトレイ：サイコロそのものは canvas（yuyacht3d.js）が描く。ここは、マスの位置・タップする当たり判定・目の数字・カップだけ */
+function trayGlHtml(dice, hold, o, hl) {
+  const seeDice = o.phase === "pour" || o.phase === "in" || (o.phase === "idle" && o.shown);
+  const rack = Array.from({ length: 5 }, (_, i) => `<div class="yy-slot${hold[i] && hl[i] ? " hit" : ""}">${hold[i] ? `<button type="button" class="yy-hitbox" data-hold="${i}" ${o.canHold ? "" : "disabled"} aria-label="キープをはずす"></button><span class="yy-num">${dice[i]}</span>` : ""}</div>`).join("");
+  const spots = [0, 1, 2, 3, 4].map((i) => {
+    if (hold[i] || !seeDice) return `<div class="yy-spot"></div>`;
+    return `<div class="yy-spot${hl[i] && o.phase === "idle" ? " hit" : ""}"><button type="button" class="yy-hitbox" data-hold="${i}" ${o.canHold ? "" : "disabled"} aria-label="キープする"></button>${o.phase === "idle" ? `<span class="yy-num">${dice[i]}</span>` : ""}</div>`;
+  }).join("");
+  const cupCls = o.phase === "shake" ? "shake" : o.phase === "pour" ? "pour" : o.canRoll && !o.shown ? "ready" : "";
+  const cup = `<div class="yy-spot yy-cupspot"><button type="button" class="yy-cup ${cupCls}" id="yyCup" aria-label="カップを振る" ${o.canRoll ? "" : "disabled"}><span class="yy-cup-rim"></span><span class="yy-cup-body"></span></button></div>`;
+  return `<div class="yy-tray yy-gl-on"><div class="yy-rack">${rack}</div><div class="yy-floor">${spots}${cup}</div></div>`;
+}
 /* 選んだ役に「当たっている」サイコロ（その役の点になっている目）。見やすくするための表示だけ：点数の計算は Worker */
 function hitDice(cat, dice) {
   const no = [false, false, false, false, false];
@@ -47,6 +61,7 @@ function hitDice(cat, dice) {
 }
 function trayHtml(dice, hold, o) {
   const hl = o.hl || [false, false, false, false, false];
+  if (glOn) return trayGlHtml(dice, hold, o, hl);
   const rack = Array.from({ length: 5 }, (_, i) => `<div class="yy-slot${hold[i] && hl[i] ? " hit" : ""}">${hold[i] ? `<button type="button" class="yy-dbtn" data-hold="${i}" ${o.canHold ? "" : "disabled"}>${cubeHtml(dice[i])}</button><span class="yy-num">${dice[i]}</span>` : ""}</div>`).join("");
   const seeDice = o.phase === "pour" || o.phase === "in" || (o.phase === "idle" && o.shown);
   const spots = [0, 1, 2, 3, 4].map((i) => {
@@ -59,10 +74,28 @@ function trayHtml(dice, hold, o) {
   const cup = `<div class="yy-spot yy-cupspot"><button type="button" class="yy-cup ${cupCls}" id="yyCup" aria-label="カップを振る" ${o.canRoll ? "" : "disabled"}><span class="yy-cup-rim"></span><span class="yy-cup-body"></span></button></div>`;
   return `<div class="yy-tray"><div class="yy-rack">${rack}</div><div class="yy-floor">${spots}${cup}</div></div>`;
 }
+/* 3D サイコロ（three.js）。読み込めない・WebGL が使えない端末では、CSS の立体サイコロのまま */
+let stage = null, glOn = false, glTried = false;
+function initGL() {
+  if (glTried) return; glTried = true;
+  load3D().then((ok) => {
+    if (!ok) return;
+    try { stage = new DiceStage(); glOn = true; } catch (_) { stage = null; glOn = false; return; }
+    if (active && g && !g.done && phase === "idle") drawGame();
+    else if (rm.y && rm.boardEl && document.body.contains(rm.boardEl) && rm.phase === "idle") drawRoom();
+  });
+}
+function syncGL(rootEl, o) {
+  if (!glOn || !stage) return;
+  const tray = rootEl.querySelector(".yy-tray");
+  if (!tray) return;
+  try { stage.mount(tray); stage.sync(o); } catch (_) { /* 描けなかったときは、そのまま（DOM の表示は残る） */ }
+}
 const md = (ms) => { const d = new Date(ms + 9 * 3600000); return `${d.getUTCMonth() + 1}/${d.getUTCDate()}`; };
 const mdhm = (ms) => { const d = new Date(ms + 9 * 3600000); return `${d.getUTCMonth() + 1}/${d.getUTCDate()} ${d.getUTCHours()}:${String(d.getUTCMinutes()).padStart(2, "0")}`; };
 
 export function renderYacht(c) {
+  initGL();
   ctx = c; active = true; g = null; sel = -1; busy = false; phase = "idle"; shownKey = ""; ranking = null;
   injectStyles();
   head("読み込み中…");
@@ -171,6 +204,7 @@ function drawGame() {
           <button type="button" class="yw-btn yy-roll" id="yyRoll" ${canRoll ? "" : "disabled"}>${!shown ? "🥤 カップを振る" : left > 0 ? `🥤 振り直す（あと${left}回）` : "もう振れません"}</button>
           <button type="button" class="yw-btn yy-rec" id="yyRec" ${sel >= 0 && idle && shown ? "" : "disabled"}>${sel >= 0 ? `記録する（${g.opts[sel]}点）` : "役を選んで記録"}</button>
         </div></div></div>`;
+  syncGL(ctx.root, { dice: g.dice, hold: held, phase, shown, hl: shown ? hitDice(sel, g.dice) : null, anim: phase === "pour" ? "pour" : phase === "in" ? "in" : "", animKey: `${gKey()}:${phase}` });
   $("#yyBack")?.addEventListener("click", () => { loadStart(); });
   ctx.root.querySelectorAll("[data-hold]").forEach((b) => b.addEventListener("click", () => { if (!canHold) return; const i = Number(b.dataset.hold); held[i] = !held[i]; drawGame(); }));
   ctx.root.querySelectorAll(".yy-cell.cand").forEach((td) => td.addEventListener("click", () => { if (!idle || !shown) return; sel = Number(td.dataset.cat); drawGame(); }));
@@ -243,6 +277,7 @@ const rm = { roomId: "", gid: "", key: "", held: [false, false, false, false, fa
 const roomKey = (y) => `${y.gid}:${y.round}:${y.cur}:${y.roll}`;
 
 export function renderYachtRoom(boardEl, room, c) {
+  initGL();
   injectStyles();
   rm.api = c.api; rm.uid = c.uid; rm.esc = c.esc; rm.boardEl = boardEl; rm.room = room;
   if (rm.roomId !== room.id) { Object.assign(rm, { roomId: room.id, gid: "", key: "", held: [false, false, false, false, false], sel: -1, phase: "idle", shownKey: "", lastDice: "", busy: false, y: null, started: "", sentKey: "", error: "" }); }
@@ -343,6 +378,7 @@ function drawRoom() {
       ${mineTurn ? `<div class="yy-btns"><button type="button" class="yw-btn yy-roll" id="yrRoll" ${canRoll ? "" : "disabled"}>${!shown ? "🥤 カップを振る" : left > 0 ? `🥤 振り直す（あと${left}回）` : "もう振れません"}</button>
         <button type="button" class="yw-btn yy-rec" id="yrRec" ${rm.sel >= 0 && idle && shown ? "" : "disabled"}>${rm.sel >= 0 ? `記録する（${y.opts[rm.sel]}点）` : "役を選んで記録"}</button></div>` : ""}</div>`;
   el.innerHTML = `${status}<div class="yy-game yy-room"><div class="yy-left-pane">${roomSheetHtml(y, me)}</div>${play}</div>`;
+  if (!y.done) syncGL(el, { dice: y.dice, hold: mineTurn ? rm.held : [false, false, false, false, false], phase: mineTurn ? rm.phase : "idle", shown, hl: mineTurn && shown ? hitDice(rm.sel, y.dice) : null, anim: mineTurn ? (rm.phase === "pour" ? "pour" : rm.phase === "in" ? "in" : "") : (tumble ? "pour" : ""), animKey: `${dk}:${mineTurn ? rm.phase : "idle"}:${tumble ? 1 : 0}` });
   el.querySelectorAll("[data-hold]").forEach((b) => b.addEventListener("click", () => { if (!canHold) return; const i = Number(b.dataset.hold); rm.held[i] = !rm.held[i]; drawRoom(); }));
   el.querySelectorAll(".yy-cell.cand[data-cat]").forEach((td) => td.addEventListener("click", () => { if (!idle || !shown) return; rm.sel = Number(td.dataset.cat); drawRoom(); }));
   el.querySelector("#yrRoll")?.addEventListener("click", roomRoll);
@@ -459,6 +495,14 @@ function injectStyles() {
   .yy-slot.hit { box-shadow: 0 0 0 2px #ffd400 inset; }
   .yy-room .yy-3d { --s: 29px; } .yy-room .yy-slot .yy-3d { --s: 18px; }
   @media (min-width: 720px) { .yy-3d, .yy-room .yy-3d { --s: 84px; } .yy-slot .yy-3d, .yy-room .yy-slot .yy-3d { --s: 52px; } .yy-sheet { font-size: 14px; } .yy-sheet td { width: 64px; } .yy-floor { min-height: 330px; } .yy-spot, .yy-room .yy-spot { height: 150px; } .yy-num { font-size: 15px; } .yy-play { max-width: 560px; } .yy-slot .yy-num { font-size: 13px; } }
+  .yy-tray { position: relative; }
+  .yy-gl { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 1; }
+  .yy-hitbox { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; border: none; background: none; cursor: pointer; z-index: 2; } .yy-hitbox:disabled { cursor: default; }
+  .yy-gl-on .yy-spot .yy-num, .yy-gl-on .yy-slot .yy-num { position: absolute; left: 50%; bottom: 2px; right: auto; top: auto; transform: translateX(-50%); margin: 0; z-index: 2; }
+  .yy-gl-on .yy-slot .yy-num { bottom: -3px; }
+  .yy-gl-on .yy-spot.hit .yy-num, .yy-gl-on .yy-slot.hit .yy-num { background: #ffd400; color: #3a2a00; box-shadow: 0 0 8px #ffd400; }
+  .yy-gl-on .yy-slot.hit { box-shadow: 0 0 0 2px #ffd400 inset; }
+  .yy-cupspot { z-index: 3; }
   .yy-3d::before { content: ""; position: absolute; left: 6%; right: -8%; bottom: -10%; height: 26%; border-radius: 50%; background: radial-gradient(ellipse at center, rgba(0,0,0,.55), rgba(0,0,0,0) 70%); filter: blur(1.5px); }
   .yy-cube { position: relative; display: block; width: 100%; height: 100%; transform-style: preserve-3d; transform: rotateX(-16deg) rotateY(-20deg) rotateZ(var(--rz, 0deg)) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg)); }
   .yy-face { position: absolute; inset: 0; display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); box-sizing: border-box; padding: 11%; border-radius: 18%;
