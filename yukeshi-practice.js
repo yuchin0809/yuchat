@@ -13,7 +13,7 @@ const yawOf = (dx, dz) => Math.atan2(-dz, dx);
 const r3 = (x) => Math.round(x * 1000) / 1000;
 const DEFAULT_EQ = { body: "plain", edge: "paper", sole: "bare", weight: "none" };
 const DUMMY_COLOR = 6;   // 置いてあるだけの消しゴムは、黒いカバー
-const MINE_AT = [0, 4.0], CENTER = [0, 0];   // 自分は、真ん中の消しゴムから少し離れた手前に置く
+const MINE_AT = [0, 4.0], CENTER = [0, 0];   // 自分は、真ん中の消しゴムから少し離れた手前に置く（落ちたときは、ここにもどる）
 let stylesDone = false, run = 0, stage = null;
 
 export function stopPractice() { run++; if (stage) { try { stage.dispose(); } catch (_) {} stage = null; } }
@@ -29,7 +29,7 @@ export function renderPractice(c) {
     <div class="kp-gear">${eraserIcon("ker-inline")} 試している消しゴム <b>総合力 ${stats.rating}</b>${c.title ? `<span>${esc(c.title)}</span>` : ""}</div>
     <div class="kp-stage" id="kpStage"><div class="kp-loading">${eraserIcon("kp-ico")}<span>机を準備しています…</span></div><div class="kp-power" id="kpPower"><i></i></div></div>
     <div class="kp-score"><div><small>ふっとび距離</small><b id="kpDist">—</b></div><div><small>落とした回数</small><b id="kpDrops">0</b></div><div><small>弾いた回数</small><b id="kpShots">0</b></div></div>
-    <p class="kp-hint" id="kpHint">画面を指で後ろに引っ張って、はなして弾こう（弱く引くと弱く、強く引くと強く弾く）</p>
+    <p class="kp-hint" id="kpHint">画面を指で後ろに引っ張って、はなして弾こう（弱く引くと弱く、強く引くと強く弾く）。自分の消しゴムは、机から落ちるまで、止まった場所から続けて弾けます。</p>
     <button type="button" class="yw-btn kp-reset" id="kpReset">もとの位置にもどす</button>`;
   c.root.querySelector("#kpBack")?.addEventListener("click", () => { stopPractice(); c.onBack(); });
   const q = (s) => c.root.querySelector(s);
@@ -79,9 +79,10 @@ export function renderPractice(c) {
       const hit = dummyMoved > 0.02;
       if (s.out[1]) { S.drops++; q("#kpDrops").textContent = String(S.drops); q("#kpDist").textContent = "落とした！"; say("机から落としました！ 真ん中に新しい消しゴムが出てきます。"); home(1); }
       else if (hit) { q("#kpDist").textContent = dummyMoved.toFixed(1); say("当たりました。ふっとび距離は、机の幅を 7.2 としたときの長さです。"); }
-      else { q("#kpDist").textContent = "当たらず"; say(s.out[0] ? "自分が机から落ちてしまいました。弾く強さを少し弱めてみよう。" : "当たりませんでした。もう少し強く、まっすぐ引いてみよう。"); }
-      home(0);   // 自分の消しゴムは、毎回スタートの位置にもどる
-      const pops = s.out[1] ? [0, 1] : [0];   // 新しく出てくる消しゴムだけ、ぽんと出す
+      else { q("#kpDist").textContent = "当たらず"; say(s.out[0] ? "自分が机から落ちてしまいました。スタートの位置にもどします。弾く強さを少し弱めてみよう。" : "当たりませんでした。向きと強さを変えて、もう一度。"); }
+      S.poses[0] = { ...S.poses[0], x: s.x[0], z: s.z[0] };   // 自分の消しゴムは、止まった場所のまま（机から落ちたときだけ、スタートの位置にもどる）
+      if (s.out[0]) home(0);
+      const pops = [...(s.out[0] ? [0] : []), ...(s.out[1] ? [1] : [])];   // 新しく出てくる消しゴムだけ、ぽんと出す
       setTimeout(() => { if (my !== run) return; place(pops); S.busy = false; }, 900);
     }
     q("#kpReset")?.addEventListener("click", () => { if (S.busy) return; home(0); home(1); place([0, 1]); say("もとの位置にもどしました。"); });

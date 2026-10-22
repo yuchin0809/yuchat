@@ -23,7 +23,7 @@ export const eraserIcon = (cls = "ker-svg") => `<svg class="${cls}" viewBox="0 0
    ・勝ち負け・最後の位置を決めるのはサーバー。ここは、サーバーが決めた動きを、画面で1コマずつ再生するためだけに使う。
    ・足し算・かけ算・割り算・平方根だけで作ってあるので、どの端末でも同じ答えになる。同じ答えになることは、notify-worker/test/keshi-room.test.mjs が確かめる。
 ========================================================= */
-export const KESHI_DESK = { hw: 3.6, hd: 5.6, startZ: 2.6 };
+export const KESHI_DESK = { hw: 3.6, hd: 5.6, startZ: 2.6, startX: 1.1 };
 export const KESHI_DT = 1 / 120;
 const KESHI_MAX_STEPS = 1200;
 /* 1コマずつ進める。pos：[[x,z],[x,z]]、who：弾いた人、(vx,vz)：弾いた速さ。
@@ -63,6 +63,6 @@ export function keshiSimStepper(P, pos, who, vx, vz) {
 const r4 = (x) => Math.round(x * 10000) / 10000;
 export function keshiPhysView(st) {
   const clamp = (x, lo, hi) => (x < lo ? lo : x > hi ? hi : x);
-  return { m: r4(st.m / 50), a: r4(5 * (1 - 0.55 * clamp((st.s - 50) / 60, -0.3, 1))), e: r4(clamp(0.5 + (st.b - 50) / 120, 0.3, 0.95)), r: r4(1.15 * (1 + (st.z - 50) / 300)) };
+  return { m: r4(st.m / 50), a: r4(6 * (1 - 0.55 * clamp((st.s - 50) / 60, -0.3, 1))), e: r4(clamp(0.5 + (st.b - 50) / 120, 0.3, 0.95)), r: r4(0.78 * (1 + (st.z - 50) / 300)) };
 }
 export const keshiLaunchSpeedView = (P, power) => 11.5 * power / Math.sqrt(Math.sqrt(P.m));

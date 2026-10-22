@@ -73,6 +73,8 @@ export default {
     /* 🧽 消しバトのリーグ戦：月〜金の 10:30・12:40・15:00 に5試合ずつ自動で行い、金曜 15:10 に結果発表（1位1000・2位700・3位400コイン。お知らせは流さない）。それ以外の分は Firestore に触れずにすぐ戻る */
     ctx.waitUntil(runKeshiLeagueTick(env, event.scheduledTime).catch((error) => console.error("keshi league error", String(error?.message || error).slice(0, 300))));
     /* 💸 コイン送金：3日たっても承認されない申請を、1日1回（日本時間 3:07）自動で却下して返金する。それ以外の分は Firestore に触れずにすぐ戻る */
+    /* 🗓 予約公開：決まった時刻に、ヨット・消しバトの公開スイッチを入れる（1回だけ）。それ以外の分は Firestore に触れずにすぐ戻る */
+    ctx.waitUntil(runScheduledPublishTick(env, event.scheduledTime).catch((error) => console.error("scheduled publish error", String(error?.message || error).slice(0, 300))));
     ctx.waitUntil(runTransferExpiryTick(env, event.scheduledTime).catch((error) => console.error("transfer expiry error", String(error?.message || error).slice(0, 300))));
   }
 };
@@ -2426,6 +2428,37 @@ async function yuslotSetConfig(deps, uid, body) {
   await deps.firestore.commit([{ update: { name: deps.firestore.docName("worldConfig/yuslot"), fields }, updateMask: { fieldPaths: mask } }]);
   slotConfigCache = { value: published, yacht, keshi, at: deps.now() };
   return { ok: true, published, yachtPublished: yacht, keshiPublished: keshi };
+}
+
+/* ----- 🗓 予約公開 -----
+   ・決まった時刻（その時刻から30分の間の cron）に、worldConfig/yuslot の公開スイッチ（ヨット・消しバト）を入れる。
+   ・1回だけ：実行した印（scheduledPublish.{id}）を同じ書類に残すので、そのあと管理者が非公開に戻しても、入れ直さない。何回呼んでも、同じ予約は1度だけ。
+   ・予約の時刻の前後30分以外は Firestore に触れない。 */
+const SCHEDULED_PUBLISH = [
+  { id: "20261023-1000", atMs: Date.UTC(2026, 9, 23, 10, 0) - 9 * 3600000, flags: ["yachtPublished", "keshiPublished"] }   // 2026-10-23（金）10:00 JST：ヨット・消しバトを公開
+];
+const scheduledPublishDone = new Set();
+export function resetScheduledPublishForTest() { scheduledPublishDone.clear(); }
+export async function runScheduledPublishTick(env = {}, scheduledTime = Date.now(), deps = null) {
+  const due = SCHEDULED_PUBLISH.filter((x) => scheduledTime >= x.atMs && scheduledTime < x.atMs + 30 * 60000 && !scheduledPublishDone.has(x.id));
+  if (!due.length) return { skipped: "outside" };
+  const d = deps || createDefaultDeps(env), fs = d.firestore, ran = [];
+  for (let attempt = 0; attempt < 4 && due.some((x) => !scheduledPublishDone.has(x.id)); attempt++) {
+    const raw = await fs.getRaw("worldConfig/yuslot");
+    const data = raw ? decodeFields(raw.fields) : {};
+    const mark = data.scheduledPublish && typeof data.scheduledPublish === "object" ? { ...data.scheduledPublish } : {};
+    const todo = due.filter((x) => !scheduledPublishDone.has(x.id) && mark[x.id] !== true);
+    due.forEach((x) => { if (mark[x.id] === true) scheduledPublishDone.add(x.id); });
+    if (!todo.length) break;
+    const fields = {}; todo.forEach((x) => { x.flags.forEach((f) => { fields[f] = true; }); mark[x.id] = true; });
+    fields.scheduledPublish = mark;
+    try {
+      await fs.commit([{ update: { name: fs.docName("worldConfig/yuslot"), fields: encodeFields(fields) }, updateMask: { fieldPaths: Object.keys(fields) }, currentDocument: raw ? { updateTime: raw.updateTime } : { exists: false } }]);
+    } catch (error) { if (isRetryableCommitError(error)) continue; throw error; }
+    todo.forEach((x) => { scheduledPublishDone.add(x.id); ran.push(x.id); });
+    slotConfigCache = { value: null, yacht: false, keshi: false, at: 0 };   // 公開の状態を、すぐ読み直す
+  }
+  return { ran };
 }
 
 /* ロビーの席の一覧。6台を1台ずつ読まず、yuslotSeats を1回の問い合わせで読む（読み取り＝席に座っている台の数だけ）。
@@ -4874,7 +4907,7 @@ async function keshiLeagueEntry(deps, uid, body) {
      動きの絵は、ブラウザが同じ計算で再生する（最後の位置は Worker の結果に合わせる）。そのため、ルームの書類には最後の位置と弾いた速さだけを書く。
    ・1回の操作で、ルームの書類を1回読んで1回書く。はじめの1回だけ、2人の消しゴムの書類も読む。
    ・準備中のあいだは最上位管理者だけ。ただし、最上位管理者の入っているルームなら、招待された友達も遊べる（動作確認のため）。 */
-export const KESHI_DESK = { hw: 3.6, hd: 5.6, startZ: 2.6 };
+export const KESHI_DESK = { hw: 3.6, hd: 5.6, startZ: 2.6, startX: 1.1 };   // はじめは、たがいに少しずれた位置（まっすぐ弾いても当たらない。狙って弾く）
 const KESHI_TURN_MS = 30000;
 const KESHI_MISS_LIMIT = 2;
 const KESHI_BOUT_FLICKS = 8;
@@ -4883,11 +4916,11 @@ const KESHI_DT = 1 / 120;
 const KESHI_MAX_STEPS = 1200;
 const r3 = (x) => Math.round(x * 1000) / 1000;
 const r4 = (x) => Math.round(x * 10000) / 10000;
-const keshiStartPos = () => [[0, KESHI_DESK.startZ], [0, -KESHI_DESK.startZ]];
+const keshiStartPos = () => [[-KESHI_DESK.startX, KESHI_DESK.startZ], [KESHI_DESK.startX, -KESHI_DESK.startZ]];
 /* 強さ（重さ・すべり・反発・大きさ）から、動きの計算に使う数字へ。足し算・かけ算・割り算・平方根だけで作る（どの端末でも同じ答えになる） */
 export function keshiPhys(st) {
   const clamp = (x, lo, hi) => (x < lo ? lo : x > hi ? hi : x);
-  return { m: r4(st.m / 50), a: r4(5 * (1 - 0.55 * clamp((st.s - 50) / 60, -0.3, 1))), e: r4(clamp(0.5 + (st.b - 50) / 120, 0.3, 0.95)), r: r4(1.15 * (1 + (st.z - 50) / 300)) };
+  return { m: r4(st.m / 50), a: r4(6 * (1 - 0.55 * clamp((st.s - 50) / 60, -0.3, 1))), e: r4(clamp(0.5 + (st.b - 50) / 120, 0.3, 0.95)), r: r4(0.78 * (1 + (st.z - 50) / 300)) };
 }
 export const keshiLaunchSpeed = (P, power) => KESHI_VMAX * power / Math.sqrt(Math.sqrt(P.m));
 /* 机の上の動き。pos：[[x,z],[x,z]]、who：弾いた人（0/1）、(vx,vz)：弾いた速さ。
