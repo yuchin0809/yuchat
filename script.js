@@ -7361,13 +7361,22 @@ function renderGameRooms(allRooms) {
   });
 }
 
+/* 自分が作成者の、同じゲームのルーム */
+function isMyOwnRoom(room, type) {
+  if (!room || room.gameType !== type || !currentUser) return false;
+  return room.ownerUid ? room.ownerUid === currentUser.uid : room.owner === username;
+}
+function isInGameRoom(room) {
+  return (Array.isArray(room.memberUids) && room.memberUids.includes(currentUser?.uid)) ||
+    (Array.isArray(room.members) && room.members.includes(username));
+}
 /* 自分が作成者で、まだ自分が参加している同じゲームのルーム（あれば新しく作れない） */
 function isMyOpenRoom(room, type) {
-  if (!room || room.gameType !== type || !currentUser) return false;
-  const mine = room.ownerUid ? room.ownerUid === currentUser.uid : room.owner === username;
-  const stillIn = (Array.isArray(room.memberUids) && room.memberUids.includes(currentUser.uid)) ||
-    (Array.isArray(room.members) && room.members.includes(username));
-  return mine && stillIn;
+  return isMyOwnRoom(room, type) && isInGameRoom(room);
+}
+/* 自分が作成者なのに、自分はもう抜けているルーム（以前の「ルームを閉じる」で、ほかの人が残って消えなかったもの）。新しく作るときに片づける */
+function isMyOrphanRoom(room, type) {
+  return isMyOwnRoom(room, type) && !isInGameRoom(room);
 }
 
 /* ルームの作成は「自分が作成者の同じゲームのルームは1個まで」。
@@ -7379,6 +7388,8 @@ createGameRoomButton?.addEventListener("click", async () => {
   const type = currentGameType || "daifugo";
   if (isGameUnderMaintenance(type)) return alert(GAME_MAINTENANCE_ALERT);
   const gameName = getGameTypeName(type);
+  /* 自分はもう抜けているのに残っている、自分が作ったルームは、先に閉じる（作成者が抜けたルームは、本来は残らない） */
+  await Promise.all(latestGameRooms.filter((room) => isMyOrphanRoom(room, type)).map((room) => deleteDoc(doc(db, "gameRooms", room.id)).catch((error) => console.error("残っていたルームの片づけエラー:", error))));
   const existing = latestGameRooms.find((room) => isMyOpenRoom(room, type));
   if (existing) {
     if (confirm(`作成した${gameName}のルームがすでにあります。\n${gameName}のルームは1人1個までです（そのルームを閉じると新しく作れます）。\n\nそのルームを開きますか？`)) {
@@ -7397,8 +7408,10 @@ createGameRoomButton?.addEventListener("click", async () => {
       const previousRoomId = lockSnap.exists() ? lockSnap.data().roomId : null;
       if (previousRoomId) {
         const previousRoom = await transaction.get(doc(db, "gameRooms", previousRoomId));
-        if (previousRoom.exists() && isMyOpenRoom({ id: previousRoom.id, ...previousRoom.data() }, type)) {
-          throw Object.assign(new Error("ROOM_LIMIT"), { roomId: previousRoomId });
+        if (previousRoom.exists()) {
+          const previous = { id: previousRoom.id, ...previousRoom.data() };
+          if (isMyOpenRoom(previous, type)) throw Object.assign(new Error("ROOM_LIMIT"), { roomId: previousRoomId });
+          if (isMyOrphanRoom(previous, type)) transaction.delete(previousRoom.ref);   // 自分はもう抜けている古いルームは、ここで片づける
         }
       }
       transaction.set(roomRef, {
@@ -7516,7 +7529,12 @@ function listenSelectedGame(roomId) {
   unsubscribeCurrentGame = onSnapshot(
     doc(db, "gameRooms", roomId),
     (snapshot) => {
-      if (!snapshot.exists()) { closeGameArea(); return; }
+      if (!snapshot.exists()) {
+        const byMe = leavingGameRoomId === roomId;
+        closeGameArea();
+        if (!byMe) showAppToast("🎮 ルーム", "作成者がルームを閉じました");   // 自分で閉じたときは出さない
+        return;
+      }
       const data = snapshot.data();
       renderCurrentGame({ id: snapshot.id, ...data, gameState: gameStateFromFirestore(data.gameType, data.gameState) });
     },
@@ -7524,8 +7542,13 @@ function listenSelectedGame(roomId) {
   );
 }
 
+/* 「ルームを閉じる」
+   ・作成者：ルームそのものを削除する（ほかの参加者がいても閉じる。残すと、作成者のいないルームが一覧に残り、「1人1個」も崩れる）
+   ・作成者でない人：自分だけが抜ける（残った人はそのまま待てる）。最後の1人だったときは削除する */
+let leavingGameRoomId = null;
 async function leaveGameRoom(roomId) {
   if (!currentUser || !roomId) return;
+  leavingGameRoomId = roomId;
 
   try {
     const roomRef = doc(db, "gameRooms", roomId);
@@ -7533,10 +7556,15 @@ async function leaveGameRoom(roomId) {
     if (!snapshot.exists()) { closeGameArea(); return; }
 
     const data = snapshot.data();
-    const members = (data.members || []).filter((name) => name !== username);
-    const memberUids = (data.memberUids || []).filter((uid) => uid !== currentUser.uid);
+    const names = Array.isArray(data.members) ? data.members : [];
+    const uids = Array.isArray(data.memberUids) ? data.memberUids : [];
+    /* members と memberUids は同じ順で並んでいる。名前を変えた人でも抜けられるよう、まず UID の位置で外す */
+    const at = uids.indexOf(currentUser.uid);
+    const members = at >= 0 && names.length === uids.length ? names.filter((_, i) => i !== at) : names.filter((name) => name !== username);
+    const memberUids = uids.filter((uid) => uid !== currentUser.uid);
+    const iAmOwner = data.ownerUid ? data.ownerUid === currentUser.uid : data.owner === username;
 
-    if (members.length === 0) {
+    if (iAmOwner || members.length === 0 || memberUids.length === 0) {
       await deleteDoc(roomRef);
     } else {
       await updateDoc(roomRef, { members, memberUids, status: "waiting", updatedAt: serverTimestamp() });
@@ -7545,6 +7573,9 @@ async function leaveGameRoom(roomId) {
     closeGameArea();
   } catch (error) {
     console.error("ゲームルーム退出エラー:", error);
+    alert("ルームを閉じられませんでした。通信環境をご確認のうえ、もう一度お試しください。");
+  } finally {
+    leavingGameRoomId = null;
   }
 }
 
