@@ -366,8 +366,8 @@ async function playOn(ctx, i, { slotNo = 0, wait = 0 } = {}) {
   ctx.state.now += t[6] + wait;
   return ctx.act(uid, name, { action: "battleFinish", att: s.att, slot: idx[slotNo], ans: s.plan.puzzle.answer, ord: ordOf(s.plan), card: String(s.card), t });
 }
-const WEEK0 = rankWeekStart(TT.quickOpen);               // 2026-10-19（月）7:00 JST
-const MON = WEEK0 + 7 * 86400000;                         // 次の月曜 7:00
+const WEEK0 = rankWeekStart(TT.quickOpen);               // 2026-10-16（金）15:10 JST（週の区切りは毎週金曜 15:10）
+const MON = WEEK0 + 7 * 86400000;                         // 次の金曜 15:10（変数名は昔のまま）
 
 test("練習：問題だけ返して、何も保存しない（いつでも何回でも・記録やランキングには関係しない）", async () => {
   const ctx = setup({ now: TT.quickOpen - 5 * H });
@@ -403,7 +403,7 @@ test("週間ランキング：記録は今週の自己ベストにも入る。�
   assert.ok(!JSON.stringify(late).includes("id1"), "uid は返さない");
 });
 
-test("結果発表：月曜7:00に、先週の上位3人へ500・250・100コイン（二重には払わない）・お知らせと通知・ランキングは空に", async () => {
+test("結果発表：金曜15:10に、先週の上位3人へ500・250・100コイン（二重には払わない）・お知らせは流さない・ランキングは空に", async () => {
   const ctx = setup({ n: 6 });
   // 水・木・金に、タイムの違う5人が記録（1日の先着の枠は2つ。1回きりで取れた人も、取れなかった人もタイムは載る）
   ctx.state.now = TT.quickOpen;
@@ -438,9 +438,8 @@ test("結果発表：月曜7:00に、先週の上位3人へ500・250・100コイ
   assert.deepEqual(topRows.map((t) => Number(t.uid.slice(2))), expect.slice(0, 3), "タイムの速い順");
   const rest = [1, 2, 3, 4, 5].filter((i) => !topRows.some((t) => t.uid === `id${i}`));
   rest.forEach((i) => assert.equal(ctx.fs.plain(`users/u${i}`).coins, coinsBefore[i], "4位以下には渡さない"));
-  // お知らせ（全員）が1件だけ
-  const ann = ctx.fs.plain(`announcements/battle-${WEEK0}`);
-  assert.ok(ann && ann.title.includes("週間ランキング")); assert.ok(ann.body.includes("500 コイン") && ann.body.includes("250 コイン") && ann.body.includes("100 コイン"));
+  // 結果発表のお知らせ・プッシュは流さない（コインだけ渡す）
+  assert.equal(ctx.fs.plain(`announcements/battle-${WEEK0}`), null);
   assert.equal(week.last.announced, true);
   // 二重払いなし：もう一度動かしても、再読み込みしても増えない
   resetBattleWeekTickForTest();
@@ -457,7 +456,7 @@ test("結果発表：月曜7:00に、先週の上位3人へ500・250・100コイ
   assert.equal(view.rows.length >= 4, true, "通算のランキングは残る（先週までの記録）");
 });
 
-test("結果発表：月曜の cron が動かなくても、次に記録・ランキングを開いた人が追いつかせる。参加者が少なくても、いない人の賞金は出さない", async () => {
+test("結果発表：金曜の cron が動かなくても、次に記録・ランキングを開いた人が追いつかせる。参加者が少なくても、いない人の賞金は出さない", async () => {
   const ctx = setup({ n: 4 });
   ctx.state.now = TT.quickOpen;
   const r1 = await playOn(ctx, 1);
@@ -469,7 +468,7 @@ test("結果発表：月曜の cron が動かなくても、次に記録・ラ�
   assert.equal(ctx.fs.plain("users/u1").coins, c1 + 500); assert.equal(ctx.fs.plain("users/u2").coins, c2 + 250);
   const week = ctx.fs.plain("yuslotBattle/_week");
   assert.equal(week.last.top.length, 2, "参加者は2人だけ");
-  assert.ok(ctx.fs.plain(`announcements/battle-${WEEK0}`));
+  assert.equal(ctx.fs.plain(`announcements/battle-${WEEK0}`), null, "お知らせは流さない");
 });
 
 test("結果発表：参加者がいない週は何も払わず、お知らせも出さない。実在しない人の賞金は出さない", async () => {
@@ -489,7 +488,7 @@ test("結果発表：参加者がいない週は何も払わず、お知らせ�
   assert.equal(c2.fs.plain("users/u1").coins, 5000 + 250);
 });
 
-test("結果発表の cron：月曜 7:00〜7:09 だけ動く（それ以外は何も読まない）", async () => {
+test("結果発表の cron：金曜 15:10〜15:19 だけ動く（それ以外は何も読まない）", async () => {
   const ctx = setup();
   const reads = () => ctx.fs.counts ? 0 : 0;
   void reads;

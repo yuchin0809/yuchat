@@ -164,7 +164,7 @@ function rankingHtml(esc) {
         `<div class="yt-last-row ${t.me ? "me" : ""}"><span>${MEDAL[t.rank - 1]} ${esc(t.name)}</span><span>${sec(t.ms)}秒</span><b>${t.prize}コイン</b></div>`).join("")}
         ${r.last.me && r.last.me.prize ? `<div class="yt-me">🎁 おめでとう！ 先週は${r.last.me.rank}位で、${r.last.me.prize}コインをお渡ししました</div>` : ""}</div>`;
     }
-    h += `<div class="yt-prize">毎週月曜 7:00 に結果発表！ ${MEDAL.map((m, i) => `${m} ${w.prizes[i]}コイン`).join("　")}</div>
+    h += `<div class="yt-prize">毎週金曜 15:10 に結果発表！ ${MEDAL.map((m, i) => `${m} ${w.prizes[i]}コイン`).join("　")}</div>
       <div class="yt-sub">今週（次の結果発表：${mdms(w.endMs)}（月）7:00）の自己ベストです。</div>`;
     if (!w.rows.length) h += `<div class="yt-sub">まだ記録がありません。</div>`;
     else {

@@ -60,13 +60,13 @@ export default {
     ctx.waitUntil(runLotteryTick(env, event.scheduledTime).catch((error) => console.error("lottery tick error", String(error?.message || error).slice(0, 300))));
     /* 🌈 ゆうスロ確変台：前日12:00の公開・21:00の抽選・当日7:00/7:50/10:45。予定の時刻の直後以外は Firestore に触れずにすぐ戻る */
     ctx.waitUntil(runKakuTick(env, event.scheduledTime).catch((error) => console.error("kaku tick error", String(error?.message || error).slice(0, 300))));
-    /* 🏅 ゆうスロの会員ランク：毎週月曜 7:00（日本時間）に、先週の使ったコインでランクを決める。それ以外の分は Firestore に触れずにすぐ戻る */
+    /* 🏅 ゆうスロの会員ランク：毎週金曜 15:10（日本時間）に、先週の使ったコインでランクを決める。それ以外の分は Firestore に触れずにすぐ戻る */
     ctx.waitUntil(runRankTick(env, event.scheduledTime).catch((error) => console.error("rank tick error", String(error?.message || error).slice(0, 300))));
     /* 🤖 NPC 枠のキャンセル：1日1〜3回、10:00〜14:30 のランダムな時刻（日付から決まる）。予定の時刻から30分の間以外は Firestore に触れずにすぐ戻る */
     ctx.waitUntil(runKakuCancelTick(env, event.scheduledTime).catch((error) => console.error("kaku cancel error", String(error?.message || error).slice(0, 300))));
     /* 🛠 ゆう経済の1日1回の処理（株価・利息など）の見守り：GitHub Actions の定期実行が来なかった日の保険。決まった数回の分だけ動く */
     ctx.waitUntil(runDailyWatchdogTick(env, event.scheduledTime).catch((error) => console.error("daily watchdog error", String(error?.message || error).slice(0, 300))));
-    /* 🎫 先着ゲームの週間ランキング：毎週月曜 7:00（日本時間）に結果発表（1位500・2位250・3位100コイン）。それ以外の分は Firestore に触れずにすぐ戻る */
+    /* 🎫 先着ゲームの週間ランキング：毎週金曜 15:10（日本時間）に結果発表（1位500・2位250・3位100コイン）。それ以外の分は Firestore に触れずにすぐ戻る */
     ctx.waitUntil(runBattleWeekTick(env, event.scheduledTime).catch((error) => console.error("battle week error", String(error?.message || error).slice(0, 300))));
     /* 💸 コイン送金：3日たっても承認されない申請を、1日1回（日本時間 3:07）自動で却下して返金する。それ以外の分は Firestore に触れずにすぐ戻る */
     ctx.waitUntil(runTransferExpiryTick(env, event.scheduledTime).catch((error) => console.error("transfer expiry error", String(error?.message || error).slice(0, 300))));
@@ -3297,7 +3297,7 @@ export async function kakuQuick(deps, uid, body) {
    ・タイムは、スタートを押してから最後に「チケットを取る」を押すまで（サーバーが測る）。売り切れてやり直しても時計は止まらない。
    ・枠の割り当ては、サーバーに届いた順（kakuQuick の原子的な書き込み）。ランキングは通算の自己ベスト（当日分は12:00に反映）。
    ・練習：サーバーが問題を作って返すだけ（Firestore には何も書かない）。練習のタイムは、サーバーには送らない＝ランキングには載らない。
-   ・週間ランキング：毎週月曜 7:00（会員ランクと同じ週）に結果発表。1位500・2位250・3位100コインを、結果発表と同時にお渡しする（コインの支払いと、書類の更新は1回の commit＝二重払いなし）。
+   ・週間ランキング：毎週金曜 15:10（会員ランク・ヨットと同じ週）に結果発表。1位500・2位250・3位100コインを、結果発表と同時にお渡しする（コインの支払いと、書類の更新は1回の commit＝二重払いなし）。
    ・Firebase：1人あたり、スタートで1回・やり直しごとに1回・おしまいで3回の書き込み。ランキング（通算・今週）は書類2つを30秒だけメモリに置く。
 ========================================================= */
 const BATTLE_WAIT_MS = 15 * KAKU_MIN;           // 待機画面に入れるのは 11:30 から
@@ -3305,6 +3305,7 @@ const BATTLE_TOP = 20;                           // ランキングに出す人�
 const BATTLE_REVEAL_MS = 12 * 3600000;           // 当日の記録がランキングに載る時刻（0:00 からの経過）
 const BATTLE_BOARD = "yuslotBattle/_board";
 const BATTLE_WEEK = "yuslotBattle/_week";           // 今週のランキング：{ weekStart, rows, last }。last＝先週の結果発表
+const BATTLE_WEEK_ANNOUNCE = false;                    // 結果発表のお知らせ・プッシュ（いまは流さない。コインだけ渡す）
 const BATTLE_PRIZES = [500, 250, 100];                // 週間ランキングの賞金（1位・2位・3位のコイン）
 const BATTLE_CONN_MAX = 10;                      // 1回のゲームでの接続画面（リロード）の合計の上限
 /* お題の絵文字：同じなかまから、お題1つ＋まぎらわしい3つを出す */
@@ -3530,7 +3531,7 @@ async function battleRanking(deps, uid) {
   return out;
 }
 
-/* ----- 週間ランキング（yuslotBattle/_week）。毎週月曜 7:00 に先週の上位3人へコインを渡し、結果発表（お知らせ・通知）を出す ----- */
+/* ----- 週間ランキング（yuslotBattle/_week）。毎週金曜 15:10 に先週の上位3人へコインを渡す（お知らせ・通知は出さない） ----- */
 let battleWeekCache = { at: 0, value: null };
 export function resetBattleWeekCacheForTest() { battleWeekCache = { at: 0, value: null }; }
 export async function battleWeekAdd(deps, uid, name, day, ms) {
@@ -3571,7 +3572,7 @@ async function battleWeekSettle(deps, cur, ws) {
     t.paid = !!found[i];
     if (found[i]) writes.push({ update: { name: fs.docName(`users/${found[i].name}`), fields: {} }, updateMask: { fieldPaths: [] }, updateTransforms: [{ fieldPath: "coins", increment: restInt(t.prize) }], currentDocument: { exists: true } });
   });
-  const fields = { weekStart: ws, rows: [], last: { weekStart: Number(cur.data.weekStart), endMs: ws, top, total: rows.length, announced: top.length === 0 } };
+  const fields = { weekStart: ws, rows: [], last: { weekStart: Number(cur.data.weekStart), endMs: ws, top, total: rows.length, announced: top.length === 0 || !BATTLE_WEEK_ANNOUNCE } };
   writes.push({ update: { name: fs.docName(BATTLE_WEEK), fields: encodeFields(fields) }, updateMask: { fieldPaths: Object.keys(fields) }, currentDocument: { updateTime: cur.updateTime } });
   await fs.commit(writes);
   battleWeekCache = { at: 0, value: null };
@@ -3598,10 +3599,9 @@ export async function battleWeekAnnounce(deps) {
 }
 const battleWeekTickDone = new Set();
 export function resetBattleWeekTickForTest() { battleWeekTickDone.clear(); }
-/* 毎分の cron から。月曜 7:00〜7:09（日本時間）の間だけ動く（取りこぼしても、次に記録・ランキングを開いたときに追いつく） */
+/* 毎分の cron から。金曜 15:10〜15:19（日本時間）の間だけ動く（取りこぼしても、次に記録・ランキングを開いたときに追いつく） */
 export async function runBattleWeekTick(env = {}, scheduledTime = Date.now(), deps = null) {
-  const j = new Date(scheduledTime + 9 * 3600000);
-  if (j.getUTCDay() !== 1 || j.getUTCHours() !== 7 || j.getUTCMinutes() > 9) return { skipped: "outside" };
+  if (!isWeekRollWindow(scheduledTime)) return { skipped: "outside" };
   const key = String(rankWeekStart(scheduledTime));
   if (battleWeekTickDone.has(key)) return { skipped: "done" };
   const d = { ...(deps || createDefaultDeps(env)), now: () => scheduledTime };
@@ -4026,7 +4026,7 @@ async function adminKakuWinners(deps, body) {
 /* =========================================================
    🏅 ゆうスロの会員ランク
    ・ランクは、ゆうスロで「1週間に使ったコイン」（有料の回転数 × 台の料金。確変中の分も数える。無料スピンは数えない）で決まる。
-   ・毎週月曜 7:00（日本時間）に更新：先週の使ったコインで、今週のランクが決まる（下がることもある）。
+   ・毎週金曜 15:10（日本時間）に更新：先週の使ったコインで、今週のランクが決まる（下がることもある）。
    ・ランクが高いほど、確変台の抽選に当たりやすい（最高ランクで約3倍。倍率は画面には出さない）。
    ・ランクの条件（使ったコイン）は画面に見せる。回転数・使ったコインは users の slotSpins / slotWagered（精算のたびに Worker が足す）。
    ・Firestore：yuslotRank/current（サーバー専用）の1件だけ。週の始まりの累計（base）・今週のランク（ranks）・先週の分（lastWeek）を入れる。
@@ -4046,14 +4046,16 @@ export function rankLevelFor(wagered) {
   return level;
 }
 const RANK_WEEK_MS = 7 * 86400000;
-const RANK_EPOCH_MS = Date.UTC(2026, 9, 18, 22, 0, 0); // 最初の週の始まり：2026-10-19（月）7:00 JST（記録は 10/20 から始まった）
-/* いまを含む週の始まり（月曜 7:00 JST）のミリ秒 */
+const RANK_EPOCH_MS = Date.UTC(2026, 9, 18, 22, 0, 0); // 最初の週の始まり：2026-10-19（月）7:00 JST（記録は 10/20 から始まった）。2026-10-23（金）15:10 の区切りから、毎週金曜 15:10 に変わった
+/* いまを含む週の始まり（金曜 15:10 JST）のミリ秒。会員ランク・先着ゲーム・ヨットの週間ランキングは、すべてこの区切り */
 export function rankWeekStart(nowMs) {
-  const DAY = 86400000, shift = 2 * 3600000; // JST の月曜 7:00 を、月曜 0:00 に見立てるためのずらし（+9時間 −7時間）
-  const j = nowMs + shift, day = Math.floor(j / DAY);
-  const sinceMonday = (new Date(day * DAY).getUTCDay() + 6) % 7;
-  return (day - sinceMonday) * DAY - shift;
+  const DAY = 86400000, shift = 6 * 3600000 + 10 * 60000; // JST の金曜 15:10（＝UTC 6:10）を、金曜 0:00 に見立てるためのずらし
+  const j = nowMs - shift, day = Math.floor(j / DAY);
+  const sinceFriday = (new Date(day * DAY).getUTCDay() + 2) % 7;
+  return (day - sinceFriday) * DAY + shift;
 }
+/* 週の区切りの時刻（金曜 15:10〜15:19 の間だけ cron が動く）か */
+const isWeekRollWindow = (ms) => { const j = new Date(ms + 9 * 3600000); return j.getUTCDay() === 5 && j.getUTCHours() === 15 && j.getUTCMinutes() >= 10 && j.getUTCMinutes() <= 19; };
 const rankCache = { at: 0, value: null };
 export function resetRankCacheForTest() { rankCache.at = 0; rankCache.value = null; rankTickDone.clear(); }
 async function rankGet(deps, ttlMs) {
@@ -4102,10 +4104,9 @@ export async function rankEnsureCurrent(deps, { ttlMs = 0 } = {}) {
   return cur;
 }
 const rankTickDone = new Set();
-/* 毎分の cron から。月曜 7:00〜7:09（日本時間）の間だけ動く（取りこぼしても、次の抽選・表示のときに追いつく） */
+/* 毎分の cron から。金曜 15:10〜15:19（日本時間）の間だけ動く（取りこぼしても、次の抽選・表示のときに追いつく） */
 export async function runRankTick(env = {}, scheduledTime = Date.now(), deps = null) {
-  const j = new Date(scheduledTime + 9 * 3600000);
-  if (j.getUTCDay() !== 1 || j.getUTCHours() !== 7 || j.getUTCMinutes() > 9) return { skipped: "outside" };
+  if (!isWeekRollWindow(scheduledTime)) return { skipped: "outside" };
   const key = String(rankWeekStart(scheduledTime));
   if (rankTickDone.has(key)) return { skipped: "done" };
   const d = deps || createDefaultDeps(env);
@@ -4131,7 +4132,7 @@ async function rankStatus(deps, uid, body) {
     projected, projectedName: RANK_LEVELS[projected].name,
     next: next ? { name: next.name, min: next.min } : null,
     levels: RANK_LEVELS.map((r) => ({ name: r.name, min: r.min })),
-    weekStartMs: Number(d.weekStart) || rankWeekStart(deps.now()), nextRollMs: (Number(d.weekStart) || rankWeekStart(deps.now())) + RANK_WEEK_MS
+    weekStartMs: Number(d.weekStart) || rankWeekStart(deps.now()), nextRollMs: rankWeekStart(deps.now()) + RANK_WEEK_MS
   };
 }
 
