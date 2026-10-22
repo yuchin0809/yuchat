@@ -3647,7 +3647,8 @@ async function battlePractice(deps, uid) {
 
 /* =========================================================
    🤖 NPC 枠のキャンセル（確変台）
-   ・1日に1〜3枠、10:00 以降の完全にランダムな時刻に、NPC が持っている枠（まだ始まっていないもの）が1つキャンセルされる。
+   ・1日に1〜3枠、10:00〜14:30 のランダムな時刻に、NPC が持っている枠（まだ始まっていないもの）が1つキャンセルされる。
+     2026-10-23 からは、平日（月〜金）は授業中（Ⅰ〜Ⅶ時限）をさけて、休み時間・礼拝・昼休みの時間だけから選ぶ（土日は今まで通り）。
      いつ・どの枠かは、日付から決まる（cron が少し遅れても、取りこぼさない）。
    ・キャンセルされた枠は「空き」になり、取りたい人は先着と同じミニゲーム（全工程）で取る。
    ・最初の1人がスタートしてから決まった時間内に誰も取れなかったら、別の NPC が取る（この時間・決まりは、画面にもお知らせにも出さない）。
@@ -3657,13 +3658,20 @@ async function battlePractice(deps, uid) {
    ・Firestore：yuslotKaku/{日付} の枠に cx（キャンセル中）・cxAt・cxStart を足すだけ（cxDone＝実行済みの回数）。1人あたりの記録は yuslotBattle/c_{uid}。
 ========================================================= */
 const CANCEL_FROM_MIN = 600, CANCEL_UNTIL_MIN = 870;     // 10:00〜14:30 の間のランダムな時刻
+/* 平日の授業時間割（授業時間帯の表）のうち、10:00〜14:30 で授業（Ⅰ〜Ⅶ時限）でない時間：10:10〜10:55（休み時間・礼拝・アッセンブリー）、11:40〜11:50、12:35〜13:20（昼休み）、14:05〜14:15。0:00 からの分 */
+const CANCEL_FREE_FROM_DAY = "2026-10-23";
+const CANCEL_FREE_WINDOWS = [[610, 655], [700, 710], [755, 800], [845, 855]];
 const CANCEL_WINDOW_MS = 18500;                           // ※内緒：最初の1人のスタートから、この時間で取れなければ NPC が取る
 /* その日だけ追加で出すキャンセル（日本時間の "時:分"）。※その日の通常の時刻より後ろにすること（実行済みの回数 cxDone の数え方がずれないように） */
 const CANCEL_EXTRA = { "2026-10-22": ["13:20", "14:10"] };
 export function kakuCancelPlan(dayId) {
   const r = kakuSeeded("cancel:" + dayId), t0 = kakuDayStart(dayId);
   const n = 1 + Math.floor(r() * 3);
-  const times = Array.from({ length: n }, () => t0 + CANCEL_FROM_MIN * KAKU_MIN + Math.floor(r() * (CANCEL_UNTIL_MIN - CANCEL_FROM_MIN) * KAKU_MIN)).sort((a, b) => a - b);
+  const dow = new Date(`${dayId}T00:00:00Z`).getUTCDay(), schoolDay = dayId >= CANCEL_FREE_FROM_DAY && dow >= 1 && dow <= 5;
+  const freeTotal = CANCEL_FREE_WINDOWS.reduce((a, [from, to]) => a + (to - from), 0);
+  /* 平日は、授業でない時間だけをつなげた中から、ランダムに選ぶ */
+  const pickFree = (x) => { let left = Math.floor(x * freeTotal * KAKU_MIN); for (const [from, to] of CANCEL_FREE_WINDOWS) { const len = (to - from) * KAKU_MIN; if (left < len) return t0 + from * KAKU_MIN + left; left -= len; } return t0 + CANCEL_FREE_WINDOWS[0][0] * KAKU_MIN; };
+  const times = Array.from({ length: n }, () => { const x = r(); return schoolDay ? pickFree(x) : t0 + CANCEL_FROM_MIN * KAKU_MIN + Math.floor(x * (CANCEL_UNTIL_MIN - CANCEL_FROM_MIN) * KAKU_MIN); }).sort((a, b) => a - b);
   for (const hm of CANCEL_EXTRA[dayId] || []) { const [h, m] = hm.split(":").map(Number); times.push(t0 + (h * 60 + m) * KAKU_MIN); }
   return { n: times.length, times };
 }
