@@ -205,3 +205,73 @@ test("画面用の強さの計算（yukeshi-core.js）は、サーバーの計�
   }
   assert.equal(n, 625);
 });
+
+/* ===== リーグ戦（エントリーだけ） ===== */
+import { keshiLeagueWeek } from "../worker.js";
+const FRI_1510 = (d) => JST(2026, 10, d, 15, 10);
+
+test("リーグの週：月曜 0:00〜金曜 15:10。第1回は 10/26（月）。金曜 15:10 を過ぎたら次の週。第1回より前は第1回の週", () => {
+  const first = keshiLeagueWeek(JST(2026, 10, 22, 17));
+  assert.equal(first.startMs, JST(2026, 10, 26, 0)); assert.equal(first.endMs, FRI_1510(30));
+  assert.deepEqual(first.days, [26, 27, 28, 29, 30].map((d) => JST(2026, 10, d, 0)));
+  assert.deepEqual(first.setsMs, [JST(2026, 10, 26, 10, 30), JST(2026, 10, 26, 12, 40), JST(2026, 10, 26, 15, 0)]);
+  assert.equal(keshiLeagueWeek(JST(2026, 10, 25, 23, 59)).startMs, JST(2026, 10, 26, 0), "前の日曜でも、次は第1回");
+  assert.equal(keshiLeagueWeek(JST(2026, 10, 28, 9)).startMs, JST(2026, 10, 26, 0), "週の途中は、その週");
+  assert.equal(keshiLeagueWeek(FRI_1510(30) - 1).startMs, JST(2026, 10, 26, 0), "金曜 15:09 まで");
+  assert.equal(keshiLeagueWeek(FRI_1510(30)).startMs, JST(2026, 11, 2, 0), "金曜 15:10 から次の週");
+  assert.equal(keshiLeagueWeek(JST(2026, 11, 1, 12)).startMs, JST(2026, 11, 2, 0), "土日は次の週");
+  assert.equal(keshiLeagueWeek(JST(2026, 11, 3, 12)).startMs, JST(2026, 11, 2, 0));
+});
+
+test("リーグ戦：エントリーしていない状態・まだ始まっていない・人数は0", async () => {
+  const ctx = setup({ now: JST(2026, 10, 22, 17) });
+  const st = await ctx.act(1, { action: "keshiLeagueState" });
+  assert.deepEqual([st.ok, st.entered, st.count, st.started], [true, false, 0, false]);
+  assert.deepEqual(st.prizes, [1000, 700, 400]); assert.deepEqual(st.sets, [[10, 30], [12, 40], [15, 0]]);
+  assert.equal(st.week.startMs, JST(2026, 10, 26, 0));
+  assert.equal(ctx.fs.plain("yuslotKeshi/_league"), null, "開くだけでは何も書かない");
+  const closed = setup({ keshi: false });
+  assert.equal((await closed.act(1, { action: "keshiLeagueState" })).error, "not_published");
+  assert.equal((await closed.act(1, { action: "keshiLeagueEntry", enter: true })).error, "not_published");
+});
+
+test("リーグ戦：エントリー・やめる。同じ操作を繰り返しても人数は増えない。ほかの人の分は別", async () => {
+  const ctx = setup({ now: JST(2026, 10, 22, 17) });
+  const a = await ctx.act(1, { action: "keshiLeagueEntry", enter: true });
+  assert.deepEqual([a.entered, a.count], [true, 1]);
+  assert.equal(ctx.fs.plain("yuslotKeshi/id1").league, true);
+  const again = await ctx.act(1, { action: "keshiLeagueEntry", enter: true });
+  assert.deepEqual([again.entered, again.count], [true, 1], "二重にエントリーしても1人");
+  const b = await ctx.act(2, { action: "keshiLeagueEntry", enter: true });
+  assert.equal(b.count, 2);
+  assert.equal((await ctx.act(1, { action: "keshiLeagueState" })).entered, true);
+  assert.equal((await ctx.act(0, { action: "keshiLeagueState" })).entered, false);
+  const out = await ctx.act(1, { action: "keshiLeagueEntry", enter: false });
+  assert.deepEqual([out.entered, out.count], [false, 1]);
+  assert.deepEqual([(await ctx.act(1, { action: "keshiLeagueEntry", enter: false })).count], [1], "やめるのを繰り返しても減りすぎない");
+  assert.equal((await ctx.act(1, { action: "keshiLeagueEntry", enter: "yes" })).error, "bad_request");
+});
+
+test("リーグ戦：エントリーしても、買ったパーツ・付けているパーツ・色は変わらない（逆も同じ）", async () => {
+  const ctx = setup({ coins: 3000, now: JST(2026, 10, 22, 17) });
+  await ctx.act(1, { action: "keshiBuy", slot: "body", part: "pro" });
+  await ctx.act(1, { action: "keshiEquip", color: 4 });
+  await ctx.act(1, { action: "keshiLeagueEntry", enter: true });
+  let d = ctx.fs.plain("yuslotKeshi/id1");
+  assert.deepEqual([d.owned, d.eq.body, d.color, d.league], [["body:pro"], "pro", 4, true]);
+  await ctx.act(1, { action: "keshiBuy", slot: "weight", part: "coin" });
+  await ctx.act(1, { action: "keshiEquip", eq: { body: "plain" } });
+  d = ctx.fs.plain("yuslotKeshi/id1");
+  assert.equal(d.league, true, "買い物をしても、エントリーは残る");
+  assert.deepEqual([d.owned, d.eq.body], [["body:pro", "weight:coin"], "plain"]);
+});
+
+test("リーグ戦：週の途中・金曜 15:10 以降でも、エントリーの状態と人数は返す", async () => {
+  const ctx = setup({ now: JST(2026, 10, 28, 12) });
+  await ctx.act(1, { action: "keshiLeagueEntry", enter: true });
+  const mid = await ctx.act(1, { action: "keshiLeagueState" });
+  assert.deepEqual([mid.started, mid.week.startMs, mid.entered], [true, JST(2026, 10, 26, 0), true]);
+  ctx.state.now = FRI_1510(30) + 60000;
+  const next = await ctx.act(1, { action: "keshiLeagueState" });
+  assert.deepEqual([next.started, next.week.startMs, next.entered, next.count], [false, JST(2026, 11, 2, 0), true, 1], "次の週は、まだ始まっていない・エントリーは続く");
+});

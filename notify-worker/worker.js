@@ -2387,6 +2387,8 @@ export async function handleYuslotAction(deps, uid, body) {
       case "keshiState": return await keshiState(deps, uid, body);
       case "keshiBuy": return await keshiBuy(deps, uid, body);
       case "keshiEquip": return await keshiEquip(deps, uid, body);
+      case "keshiLeagueState": return await keshiLeagueState(deps, uid, body);
+      case "keshiLeagueEntry": return await keshiLeagueEntry(deps, uid, body);
       case "yachtRoomStart": return await yachtRoomStart(deps, uid, body);
       case "yachtRoomRoll": return await yachtRoomRoll(deps, uid, body);
       case "yachtRoomScore": return await yachtRoomScore(deps, uid, body);
@@ -4541,7 +4543,7 @@ async function keshiLoad(deps, uid) {
   const eq = { ...KESHI_DEFAULT_EQ };
   KESHI_SLOTS.forEach((slot) => { const id = d.eq?.[slot]; if (typeof id === "string" && KESHI_PART_BY[slot][id] && (keshiIsFree(slot, id) || owned.includes(`${slot}:${id}`))) eq[slot] = id; });
   const color = Number.isInteger(d.color) && d.color >= 0 && d.color < KESHI_COLORS.length ? d.color : 0;
-  return { raw, owned, eq, color };
+  return { raw, owned, eq, color, league: d.league === true };
 }
 function keshiView(cur, coins, now) {
   const have = {};
@@ -4604,6 +4606,55 @@ async function keshiEquip(deps, uid, body) {
   try { await deps.firestore.commit(writes); }
   catch (error) { if (isRetryableCommitError(error)) return { status: 409, error: "busy" }; throw error; }
   return keshiView({ ...cur, eq, color }, Number(decodeFields(me.raw.fields).coins || 0), deps.now());
+}
+
+/* ----- リーグ戦（エントリーだけ。試合・順位・賞金はこのあとの段階で追加する） -----
+   ・毎週：月曜〜金曜（金曜 15:10 の結果発表まで）。毎日 10:30・12:40・15:00 に5試合ずつ、自動で行う予定（まだ行わない）。第1回は 2026-10-26（月）から。
+   ・エントリー：一度エントリーすると、毎週自動で参加扱い。やめるまで続く。1人1件（yuslotKeshi/{uid} の league）。参加者の人数は yuslotKeshi/_league の count。
+   ・上位3名への賞金：1位1000・2位700・3位400コイン（金曜 15:10・お知らせは流さない）。 */
+const KESHI_LEAGUE_FIRST_MS = Date.UTC(2026, 9, 26, 0, 0) - 9 * 3600000;   // 第1回の週の始まり：2026-10-26（月）0:00 JST
+const KESHI_LEAGUE_PRIZES = [1000, 700, 400];
+const KESHI_LEAGUE_SETS = [[10, 30], [12, 40], [15, 0]];
+/* いまのリーグの週（月曜 0:00 JST 〜 金曜 15:10）。金曜 15:10 を過ぎたら、次の週を返す。第1回より前は、第1回の週 */
+export function keshiLeagueWeek(now) {
+  const DAY = 86400000, FRI_END = 4 * DAY + 15 * 3600000 + 10 * 60000;
+  const day = Math.floor((now + 9 * 3600000) / DAY), dow = new Date(day * DAY).getUTCDay();
+  let mon = (day - ((dow + 6) % 7)) * DAY - 9 * 3600000;
+  if (mon < KESHI_LEAGUE_FIRST_MS) mon = KESHI_LEAGUE_FIRST_MS;
+  else if (now >= mon + FRI_END) mon += 7 * DAY;
+  return { startMs: mon, endMs: mon + FRI_END, days: [0, 1, 2, 3, 4].map((i) => mon + i * DAY), setsMs: KESHI_LEAGUE_SETS.map(([h, m]) => mon + (h * 60 + m) * 60000) };
+}
+async function keshiLeagueView(deps, cur, now) {
+  const week = keshiLeagueWeek(now);
+  const raw = await deps.firestore.getRaw("yuslotKeshi/_league");
+  const count = Math.max(0, Number(raw ? decodeFields(raw.fields).count : 0) || 0);
+  return { ok: true, entered: cur.league, count, week, started: now >= week.setsMs[0], prizes: KESHI_LEAGUE_PRIZES, sets: KESHI_LEAGUE_SETS, serverNowMs: now };
+}
+async function keshiLeagueState(deps, uid) {
+  const g = await keshiGate(deps, uid);
+  if (g) return g;
+  const cur = await keshiLoad(deps, uid);
+  return keshiLeagueView(deps, cur, deps.now());
+}
+/* エントリーする／やめる（すでにその状態なら何もしない）。自分の書類と人数の書類は、1回の commit */
+async function keshiLeagueEntry(deps, uid, body) {
+  const g = await keshiGate(deps, uid);
+  if (g) return g;
+  if (typeof body?.enter !== "boolean") return { status: 400, error: "bad_request" };
+  const me = await loadMyUser(deps.firestore, uid, body?.username);
+  if (me.error) return me.error;
+  const cur = await keshiLoad(deps, uid), now = deps.now();
+  if (cur.league !== body.enter) {
+    const fs = deps.firestore, fields = { league: body.enter, leagueAt: now, n: me.name };
+    try {
+      await fs.commit([
+        { update: { name: fs.docName(`yuslotKeshi/${uid}`), fields: encodeFields(fields) }, updateMask: { fieldPaths: Object.keys(fields) }, currentDocument: cur.raw ? { updateTime: cur.raw.updateTime } : { exists: false } },
+        { update: { name: fs.docName("yuslotKeshi/_league"), fields: {} }, updateMask: { fieldPaths: [] }, updateTransforms: [{ fieldPath: "count", increment: restInt(body.enter ? 1 : -1) }] }
+      ]);
+    } catch (error) { if (isRetryableCommitError(error)) return { status: 409, error: "busy" }; throw error; }
+    cur.league = body.enter;
+  }
+  return keshiLeagueView(deps, cur, now);
 }
 
 /* =========================================================
