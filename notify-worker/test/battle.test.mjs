@@ -6,7 +6,7 @@ import {
   kakuTimes, kakuDayId, kakuDayStart, resetKakuCacheForTest, resetYuslotCacheForTest, resetBattleCacheForTest, handleYuslotAction,
   battleCard, battlePlan, battleProofOk, battleBoardMerge, battleOpenSlots, battleClosedList,
   resetBattleWeekCacheForTest, resetBattleWeekTickForTest, runBattleWeekTick, battleWeekEnsure, battleWeekAnnounce, rankWeekStart,
-  kakuCancelPlan, kakuCancelRun, kakuCancelExpire, runKakuCancelTick, resetKakuCancelTickForTest
+  kakuCancelPlan, kakuCancelRun, kakuCancelExpire, runKakuCancelTick, resetKakuCancelTickForTest, SLOT_ASSET_MIN, kakuMachineFor, KAKU_EPOCH, kakuNextDay
 } from "../worker.js";
 
 console.warn = () => {};
@@ -733,4 +733,69 @@ test("確変の抽選・通常の先着は、キャンセルの仕組みの影�
   assert.equal((await ctx.act("id1", "u1", { action: "claimStart", slot: q0 })).error, "gone");
   const r = await playOn(ctx, 1);
   assert.equal(r.got, true);
+});
+
+/* ===== 高い台は、総資産がある人だけ ===== */
+const setUser = (ctx, i, over) => ctx.fs.put(`users/u${i}`, encF({ uid: `id${i}`, name: `u${i}`, coins: 0, ...over }));
+const seatOn = (ctx, i, machine) => ctx.act(`id${i}`, `u${i}`, { action: "seat", machine });
+const leave = async (ctx, i, r) => { await ctx.act(`id${i}`, `u${i}`, { action: "settle", session: r.session }); ctx.fs.docs.delete(`yuslotSeats/${r.machine}`); };
+const OFF_HOURS_NOW = kakuDayStart("2026-10-19") + 9 * H;   // 確変の日より前（月曜の朝）：確変台の制限は関係ない
+
+test("高い台：9コインの台は総資産1000以上・7コインは800以上・5コインは600以上。それ以外の台は条件なし", async () => {
+  assert.deepEqual(SLOT_ASSET_MIN, { yujackpot: 1000, yurainbow: 800, yutreasure: 600 });
+  const ctx = setup({ now: OFF_HOURS_NOW, n: 3 });
+  const cases = [["yujackpot", 1000], ["yurainbow", 800], ["yutreasure", 600]];
+  for (const [machine, need] of cases) {
+    setUser(ctx, 1, { coins: need - 1 });
+    const low = await seatOn(ctx, 1, machine);
+    assert.equal(low.error, "assets_low", machine); assert.equal(low.status, 409); assert.equal(low.need, need); assert.equal(low.total, need - 1);
+    assert.equal(ctx.fs.plain(`yuslotSeats/${machine}`), null, "着席していない");
+    setUser(ctx, 1, { coins: need });
+    const ok = await seatOn(ctx, 1, machine);
+    assert.equal(ok.ok, true, `${machine} は ${need} でちょうど遊べる`); await leave(ctx, 1, ok);
+  }
+  // 条件のない台（1〜3コイン）は、コインが少なくても遊べる
+  setUser(ctx, 2, { coins: 1 });
+  for (const machine of ["yubasic", "yurush", "yuchance"]) { const r = await seatOn(ctx, 2, machine); assert.equal(r.ok, true, machine); await leave(ctx, 2, r); }
+});
+
+test("高い台：総資産＝手持ちコイン＋預金＋株の評価額−借入（株価は market/current）", async () => {
+  const ctx = setup({ now: OFF_HOURS_NOW, n: 3 });
+  ctx.fs.put("market/current", encF({ companies: { YGM: { price: 200 }, YMT: { price: 240 } } }));
+  // コイン300＋預金400＋株（YGM 2株×200）＝1100 → ジャックポット可
+  setUser(ctx, 1, { coins: 300, bank: { deposit: 400, interestBase: 400, loan: 0 }, stocks: { YGM: { qty: 2, cost: 360 } } });
+  const a = await seatOn(ctx, 1, "yujackpot"); assert.equal(a.ok, true); await leave(ctx, 1, a);
+  // 借入があると引かれる：1100−200＝900 → ジャックポットは不可、レインボー（800）は可
+  setUser(ctx, 1, { coins: 300, bank: { deposit: 400, interestBase: 400, loan: 200 }, stocks: { YGM: { qty: 2, cost: 360 } } });
+  const b = await seatOn(ctx, 1, "yujackpot"); assert.equal(b.error, "assets_low"); assert.equal(b.total, 900);
+  const c = await seatOn(ctx, 1, "yurainbow"); assert.equal(c.ok, true); await leave(ctx, 1, c);
+  // 手持ちコイン＋預金−借入だけで足りていれば、株価は読まない（読み取りを減らす）
+  setUser(ctx, 2, { coins: 1500 });
+  const reads = ctx.fs.counts.get;
+  const d = await seatOn(ctx, 2, "yujackpot"); assert.equal(d.ok, true);
+  assert.equal(ctx.fs.counts.get, reads, "market/current を読んでいない");
+});
+
+test("高い台：確変の枠の持ち主は、総資産に関係なく遊べる（枠の持ち主でなければ、これまでどおり遊べない）", async () => {
+  // 確変台が高い台になる日と、その枠の時間を探す
+  let day = KAKU_EPOCH, machine = null;
+  for (let i = 0; i < 40; i++) { const m = kakuMachineFor(day); if (SLOT_ASSET_MIN[m]) { machine = m; break; } day = kakuNextDay(day); }
+  assert.ok(machine, "高い台が確変台になる日がある");
+  const t = kakuTimes(day);
+  const ctx = setup({ now: t.playStart + 5 * M, n: 3 });
+  await ctx.act("id0", "u0", { action: "kakuStatus" });
+  const doc = ctx.fs.plain(`yuslotKaku/${day}`);
+  const slots = doc.slots.map((x) => ({ ...x, uid: "", name: "", npc: false }));
+  const first = slots.find((x) => x.s <= ctx.state.now && ctx.state.now < x.e);
+  Object.assign(first, { uid: "id1", name: "u1" });
+  ctx.fs.put(`yuslotKaku/${day}`, encF({ ...doc, slots })); resetKakuCacheForTest();
+  setUser(ctx, 1, { coins: 5 });            // 総資産は足りない
+  setUser(ctx, 2, { coins: 5 });
+  const mine = await seatOn(ctx, 1, machine);
+  assert.equal(mine.ok, true, "枠の持ち主は、総資産が足りなくても遊べる"); assert.equal(mine.kaku, true);
+  assert.equal((await seatOn(ctx, 2, machine)).error, "kaku_locked", "枠の持ち主でない人は、これまでどおり遊べない");
+  await leave(ctx, 1, mine);
+  // 同じ人でも、確変の枠のない時間や、確変台でない高い台では、条件がかかる
+  const other = Object.keys(SLOT_ASSET_MIN).find((m) => m !== machine);
+  assert.equal((await seatOn(ctx, 1, other)).error, "assets_low");
 });

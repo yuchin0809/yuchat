@@ -19,14 +19,14 @@ import { kakuInit, kakuPanelHtml, kakuBind, kakuMachineInfo, startKaku, stopKaku
 /* 🏅 会員ランクのカード（台の一覧の上）。ランクの判定・進みは Worker の rankStatus が返す */
 import { rankInit, rankPanelHtml, rankRefresh } from "./yurank.js?v=20261020-rank1";
 
-/* 6台（料金・特別役は worker.js の SLOT_MACHINES と同じ。表示用の名前・説明・絵文字・豪華さ(tier)を足す） */
+/* 6台（料金・特別役は worker.js の SLOT_MACHINES と同じ。表示用の名前・説明・絵文字・豪華さ(tier)を足す）。assetMin＝遊ぶのに必要な総資産（worker.js の SLOT_ASSET_MIN と同じ。確かめるのはサーバー） */
 const MACHINES = [
   { id: "yubasic",    name: "ゆうベーシック",     price: 1, special: "orig",    emoji: "🔰", tag: "入門",   tier: 1, desc: "いちばん遊びやすい入門台。オリジナル絵柄が揃うと大当たり＆FEVER！" },
   { id: "yurush",     name: "ゆうラッシュ",       price: 2, special: "orig",    emoji: "💨", tag: "軽快",   tier: 2, desc: "テンポよく回せる金色の台。オリジナル絵柄が揃うと大当たり＆FEVER！" },
   { id: "yuchance",   name: "ゆうチャンス",       price: 3, special: "triple7", emoji: "🎯", tag: "777",    tier: 3, desc: "強い発光と粒子が華やかな台。777が揃えば大当たり＆FEVER！" },
-  { id: "yutreasure", name: "ゆうトレジャー",     price: 5, special: "triple7", emoji: "🧰", tier: 4, tag: "宝箱", desc: "宝箱と金貨がうれしい中級台。7も狙える。" },
-  { id: "yurainbow",  name: "ゆうレインボー",     price: 7, special: "triple7", emoji: "🌈", tier: 5, tag: "虹",   desc: "虹色ときらめきが爽快な上級台。7とFEVER！" },
-  { id: "yujackpot",  name: "ゆうジャックポット", price: 9, special: "triple7", emoji: "👑", tier: 6, tag: "最高額", desc: "最も豪華な台。金・虹の光と特別大当たり演出。7で大当たり＆FEVER！" }
+  { id: "yutreasure", name: "ゆうトレジャー",     price: 5, assetMin: 600, special: "triple7", emoji: "🧰", tier: 4, tag: "宝箱", desc: "宝箱と金貨がうれしい中級台。7も狙える。" },
+  { id: "yurainbow",  name: "ゆうレインボー",     price: 7, assetMin: 800, special: "triple7", emoji: "🌈", tier: 5, tag: "虹",   desc: "虹色ときらめきが爽快な上級台。7とFEVER！" },
+  { id: "yujackpot",  name: "ゆうジャックポット", price: 9, assetMin: 1000, special: "triple7", emoji: "👑", tier: 6, tag: "最高額", desc: "最も豪華な台。金・虹の光と特別大当たり演出。7で大当たり＆FEVER！" }
 ];
 const MACHINE_BY_ID = Object.fromEntries(MACHINES.map((m) => [m.id, m]));
 const specialSymOf = (m) => (m.special === "orig" ? "orig" : "triple7");
@@ -199,6 +199,7 @@ function renderLobby() {
         <div class="yw-machine-top"><span class="yw-machine-emoji">${m.emoji}</span><span class="yw-machine-tag">${esc(m.tag)}</span></div>
         <div class="yw-machine-name">${esc(m.name)}</div>
         <div class="yw-machine-price">1回 ${m.price} コイン</div>
+        ${m.assetMin ? `<div class="yw-machine-need">💰 総資産 ${m.assetMin.toLocaleString()} コイン以上で遊べます${kk ? "（確変の枠をとった人は、条件なし）" : ""}</div>` : ""}
         <div class="yw-machine-desc">${esc(m.desc)}</div>
         <div class="yw-machine-seat ${busy || kakuLockedLabel ? "busy" : s.mine ? "mine" : "free"}">${label}</div>${kakuNote}
         <button type="button" class="yw-btn ${canSit ? "" : "yw-btn-disabled"}" data-sit="${m.id}" ${canSit ? "" : "disabled"}>${s.mine ? "続きから遊ぶ" : "この台で遊ぶ"}</button>
@@ -240,6 +241,7 @@ async function seat(machineId) {
     state.screen = "game"; render(); startFlushTimer();
   } catch (e) {
     if (e.code === "kaku_locked") { alert("この確変台は、いま枠をとった人だけが遊べます。"); refreshKaku(); }
+    else if (e.code === "assets_low") alert(`この台は、総資産が ${Number(e.detail?.need || 0).toLocaleString()} コイン以上の人だけ遊べます。\n（いまの総資産：${Number(e.detail?.total || 0).toLocaleString()} コイン）\n総資産は、手持ちコイン＋預金＋株の評価額−借入です。`);
     else if (e.code === "seat_taken") alert("ほかの人が先に着席しました。別の台をお選びください。");
     else if (e.code === "not_published") { state.published = false; state.screen = "preparing"; render(); }
     else if (e.code === "closed") { state.open = false; alert("ただいま営業時間外です（7:00〜23:00）。"); refreshLobby(); }
@@ -781,6 +783,7 @@ function injectStyles() {
   #yuworldRoot .yw-game { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
   .yuworld-root { padding: 12px 14px 28px; max-width: 760px; margin: 0 auto; }
   .yw-head h2 { margin: 6px 0 4px; font-size: 20px; }
+  .yw-machine-need { margin: 4px 0; font-size: 12px; font-weight: 800; color: #b45309; }
   .yw-head p { margin: 0 0 10px; color: #666; font-size: 13px; }
   .yw-back { background: none; border: none; color: #4a7; font-size: 14px; cursor: pointer; padding: 4px 0; }
   .yw-notice { background: #fff; border-radius: 14px; padding: 28px 18px; text-align: center; box-shadow: 0 6px 24px rgba(0,0,0,.06); }
