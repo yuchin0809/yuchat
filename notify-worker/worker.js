@@ -2411,6 +2411,16 @@ async function yuslotLobby(deps, uid) {
   return { ok: true, seats, open: slotBusinessOpen(now), serverNowMs: now };
 }
 
+/* 台ごとの、遊ぶのに必要な総資産（総資産＝手持ちコイン＋預金＋株の評価額−借入）。ここにない台は、条件なし */
+export const SLOT_ASSET_MIN = { yujackpot: 1000, yurainbow: 800, yutreasure: 600 };
+/* 総資産。手持ちコイン＋預金−借入だけで足りていれば、株価（market/current）は読まない（読み取りを減らす） */
+async function slotTotalAssets(deps, data, need) {
+  const bank = data?.bank && typeof data.bank === "object" ? data.bank : {};
+  const base = (Number(data?.coins) || 0) + assetInt(bank.deposit) - assetInt(bank.loan);
+  if (base >= need) return base;
+  const market = await deps.firestore.get("market/current");
+  return assetBreakdown(data, marketPricesOf(market)).total;
+}
 async function yuslotSeat(deps, uid, body) {
   const machine = typeof body?.machine === "string" ? body.machine : "";
   if (!SLOT_MACHINES[machine]) return { status: 400, error: "unknown_machine" };
@@ -2425,7 +2435,15 @@ async function yuslotSeat(deps, uid, body) {
 
   const me = await loadMyUser(deps.firestore, uid, body?.username);
   if (me.error) return me.error;
-  const startCoins = Number(decodeFields(me.raw.fields).coins || 0);
+  const meData = decodeFields(me.raw.fields);
+  const startCoins = Number(meData.coins || 0);
+
+  // 💰 高い台は、総資産がある人だけ（着席のときに確かめる。確変の枠の持ち主は、総資産に関係なく遊べる）
+  const need = SLOT_ASSET_MIN[machine] || 0;
+  if (need > 0 && !(kakuRight && kakuRight.end)) {
+    const total = await slotTotalAssets(deps, meData, need);
+    if (total < need) return { status: 409, error: "assets_low", need, total };
+  }
 
   const seatPath = `yuslotSeats/${machine}`;
   const raw = await deps.firestore.getRaw(seatPath);
