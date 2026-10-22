@@ -2,10 +2,10 @@
    消しバト（ゆうワールドのお店）：消しゴムの改造（第1段階）
    ・パーツの種類・値段・強さの計算・コインの引き落としは、すべて Worker（keshiState / keshiBuy / keshiEquip）が行う。
      このファイルは、画面（3Dの消しゴム・強さ・パーツの一覧）を描いて、「買う」「付ける」を頼むだけ。
-   ・ゆうワールド（yuworld.js）から renderKeshi({ root, api, esc, onBack }) で開く。
+   ・ゆうワールド（yuworld.js）から renderKeshi({ root, api, esc, openRooms, onBack }) で開く。
 ========================================================= */
-import { keshiStatsView, eraserIcon } from "./yukeshi-core.js?v=20261023-keshi5";
-import { createEraserStage, SLEEVE_COLORS } from "./yukeshi3d.js?v=20261023-keshi5";
+import { keshiStatsView, eraserIcon } from "./yukeshi-core.js?v=20261023-keshi6";
+import { createEraserStage, SLEEVE_COLORS } from "./yukeshi3d.js?v=20261023-keshi6";
 
 const SLOT_NAMES = { body: "本体", edge: "ふち", sole: "そこ", weight: "おもり" };
 const STAT_NAMES = [["m", "重さ"], ["s", "すべり"], ["b", "反発"], ["z", "大きさ"]];
@@ -46,13 +46,15 @@ function drawShell() {
   const my = token;
   ctx.root.innerHTML = `<div class="yk2-head"><button type="button" class="yw-back" id="ykBack">← お店の一覧</button><h2>${eraserIcon("ker-inline")} 消しバト</h2><div class="yk2-coins" id="ykCoins"></div></div>
     <button type="button" class="yk2-league-btn" id="ykLeague"><span>🏆</span><b>最強決定戦（リーグ戦）</b><em>エントリー受付中</em></button>
-    <p class="yk2-note">2人対戦は、このあと追加します。まずは、自分だけの最強の消しゴムを作ろう！</p>
+    <button type="button" class="yk2-league-btn yk2-vs-btn" id="ykVs"><span>🥊</span><b>2人対戦</b><em>友達と1対1</em></button>
+    <p class="yk2-note">パーツを買って、自分だけの最強の消しゴムを作ろう！</p>
     <div class="yk2-stagebox"><div class="yk2-stage" id="ykStage"><div class="yk2-fallback">${eraserIcon("ker-big")}</div></div><div class="yk2-rating" id="ykRating"></div></div>
     <div class="yk2-card"><div class="yk2-stats" id="ykStats"></div></div>
     <div class="yk2-tabs" id="ykTabs"></div>
     <div class="yk2-card"><div class="yk2-parts" id="ykParts"></div><div id="ykAct"></div></div>`;
   $("#ykBack")?.addEventListener("click", back);
   $("#ykLeague")?.addEventListener("click", openLeague);
+  $("#ykVs")?.addEventListener("click", () => { if (typeof ctx.openRooms === "function") { stopKeshi(); ctx.openRooms(); } });
   draw();
   createEraserStage($("#ykStage")).then((s) => {
     if (!s) return;
@@ -219,6 +221,7 @@ function injectStyles() {
   .yk2-desc { font-size: 12.5px; color: #555; line-height: 1.7; margin: 10px 0 8px; } .yk2-go { display: block; width: 100%; padding: 12px; font-size: 15px; } .yk2-buy { background: #e0902f; } .yw-btn:disabled { opacity: .5; cursor: default; }
   .yk2-colors { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; } .yk2-color { height: 54px; border: 3px solid transparent; border-radius: 12px; color: #fff; font-weight: 800; font-size: 11px; text-shadow: 0 1px 2px rgba(0,0,0,.6); cursor: pointer; } .yk2-color.on { border-color: #222; box-shadow: 0 0 0 2px #fff inset; }
   .yk2-league-btn { display: flex; align-items: center; gap: 10px; width: 100%; margin: 10px 0 2px; padding: 12px 14px; border: none; border-radius: 14px; cursor: pointer; text-align: left; color: #ffe9a8; background: linear-gradient(135deg, #1b2347, #3b2a6b); box-shadow: 0 4px 14px rgba(40,20,90,.35); }
+  .yk2-vs-btn { margin-top: 8px; background: linear-gradient(135deg, #14507a, #2a8fc9); box-shadow: 0 4px 14px rgba(20,80,122,.35); } .yk2-vs-btn em { background: #2fa85a; }
   .yk2-league-btn span { font-size: 24px; } .yk2-league-btn b { flex: 1; font-size: 15px; } .yk2-league-btn em { font-style: normal; font-size: 11px; background: #e0902f; color: #fff; border-radius: 999px; padding: 2px 8px; }
   .yl2-banner { position: relative; border-radius: 14px; padding: 14px 14px 12px; color: #fff; background: radial-gradient(circle at 20% 10%, #4a3a8c, #1b1840 70%); box-shadow: inset 0 0 0 2px #d4a93a, 0 4px 14px rgba(20,10,60,.4); }
   .yl2-title { font-size: 26px; font-weight: 900; letter-spacing: 2px; color: #ffe08a; text-shadow: 0 2px 0 #7a4b00, 0 0 12px rgba(255,200,80,.5); } .yl2-title small { display: block; font-size: 12px; letter-spacing: 1px; color: #f4e7c0; text-shadow: none; margin-top: 2px; }

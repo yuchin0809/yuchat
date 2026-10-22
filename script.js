@@ -36,6 +36,7 @@ import {
   initYuWorld, openYuWorldView, stopYuWorldView
 } from "./yuworld.js?v=20261023-yuworld46";
 import { renderYachtRoom } from "./yuyacht.js?v=20261023-yacht5";
+import { renderKeshiRoom } from "./yukeshi-room.js?v=20261023-keshi6";
 
 /* 💸 コインの送金（申請は本人・OK/却下は管理者）。中身の確定は Worker */
 import { transferInit, transferOpenUser, transferOpenAdmin, transferReset } from "./yutransfer.js?v=20261020-transfer1";
@@ -7139,6 +7140,7 @@ function getGameTypeName(type) {
   if (type === "othello") return "オセロ";
   if (type === "shogi") return "将棋";
   if (type === "yacht") return "ヨット";
+  if (type === "keshi") return "消しバト";
   return "ゲーム";
 }
 
@@ -7242,7 +7244,7 @@ async function callYuslotApi(action, payload = {}) {
   return json;
 }
 
-/* ゆうワールドのお店（オセロ・将棋・大富豪・ヨット）から、ゲームの画面を開く */
+/* ゆうワールドのお店（オセロ・将棋・大富豪・ヨット・消しバト）から、ゲームの画面を開く */
 function openGameFromWorld(type) {
   document.querySelector(`.game-type[data-game="${type}"]`)?.click();
   switchView("games");
@@ -7259,8 +7261,20 @@ function stopGameRoomsSubscription() {
    どちらも単一項目の並び替え・条件だけなので、複合インデックスは不要 */
 const GAME_ROOM_LIST_LIMIT = 50;
 
+/* 対戦中（自分が参加していて、プレイ中のルーム）は、ルーム一覧の監視を止める。
+   ・ルームが1手動くたびに、開いているルームの監視のほかに、この一覧の2つの監視にも同じ書類が届いて、読み取りが3回ずつ数えられてしまうため。
+   ・止めているあいだ、一覧は最後に読んだ状態のまま（対戦中は新しいルームを探さない）。ルームを閉じる・プレイ中でなくなる・画面を開き直すと、また最新の一覧を読み直す。 */
+let gameRoomsPausedForMatch = false;
+function pauseGameRoomsForMatch(paused) {
+  if (paused === gameRoomsPausedForMatch) return;
+  gameRoomsPausedForMatch = paused;
+  if (paused) stopGameRoomsSubscription();
+  else if (gamesView?.classList.contains("active")) loadGameRooms();
+}
+
 function loadGameRooms() {
   if (!gameRoomsEl) return;
+  gameRoomsPausedForMatch = false;
   if (unsubscribeGameRooms) { unsubscribeGameRooms(); unsubscribeGameRooms = null; }
   if (!currentUser) return;
 
@@ -7462,7 +7476,7 @@ async function joinGameRoom(room) {
       const updateData = { members, memberUids, updatedAt: serverTimestamp() };
 
       /* オセロ・将棋は2人そろった時点で対戦開始（大富豪は開始ボタンで切り替えるので対象外） */
-      const isBoardGame = data.gameType === "othello" || data.gameType === "shogi" || data.gameType === "yacht";
+      const isBoardGame = data.gameType === "othello" || data.gameType === "shogi" || data.gameType === "yacht" || data.gameType === "keshi";
       if (isBoardGame && members.length >= maxPlayers) updateData.status = "playing";
 
       await updateDoc(roomRef, updateData);
@@ -7539,6 +7553,7 @@ function closeGameArea() {
   selectedGameRoomId = null;
   selectedShogiPiece = null;
   selectedDaifugoCards = [];
+  pauseGameRoomsForMatch(false);
 
   if (gameAreaEl) {
     gameAreaEl.innerHTML = `<div class="empty-state">ゲームを選択してください</div>`;
@@ -7559,6 +7574,8 @@ function renderCurrentGame(room) {
     statusEl.textContent = `参加者 ${members.length}/${getMaxGamePlayers(room.gameType)}人`;
   }
 
+  pauseGameRoomsForMatch(room.status === "playing" && Array.isArray(room.memberUids) && room.memberUids.includes(currentUser?.uid));
+
   if (isGameUnderMaintenance(room.gameType)) {
     const inviteEl = document.getElementById("currentGameInvite");
     if (inviteEl) inviteEl.innerHTML = "";
@@ -7573,6 +7590,7 @@ function renderCurrentGame(room) {
   if (room.gameType === "shogi") return renderShogiBoard(boardEl, room);
   if (room.gameType === "daifugo") return renderDaifugoGame(boardEl, room);
   if (room.gameType === "yacht") return renderYachtRoom(boardEl, room, { api: callYuslotApi, uid: currentUser?.uid, esc: escapeHTML });
+  if (room.gameType === "keshi") return renderKeshiRoom(boardEl, room, { api: callYuslotApi, uid: currentUser?.uid, esc: escapeHTML });
 
   boardEl.innerHTML = `<div class="empty-state">ゲームを準備中です</div>`;
 }
@@ -7584,7 +7602,7 @@ function renderCurrentGame(room) {
    ・参加するときは既存の joinGameRoom() を使う
 ========================================================= */
 
-const INVITABLE_GAME_TYPES = ["othello", "shogi", "yacht"];
+const INVITABLE_GAME_TYPES = ["othello", "shogi", "yacht", "keshi"];
 
 function canInviteToGameRoom(room) {
   if (!room || !INVITABLE_GAME_TYPES.includes(room.gameType)) return false;

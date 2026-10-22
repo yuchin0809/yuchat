@@ -5,31 +5,11 @@ import { load3D, three } from "./yuyacht3d.js?v=20261023-3d1";
 
 export const SLEEVE_COLORS = ["#2f6fe0", "#e0412f", "#2fa85a", "#f0b400", "#ee6fa8", "#8a52d6", "#2b2b30", "#f07a20"];
 
-export async function createEraserStage(container) {
-  if (!(await load3D())) return null;
-  const { T, RBG } = three();
-  let renderer;
-  try { renderer = new T.WebGLRenderer({ alpha: true, antialias: true, powerPreference: "low-power" }); } catch (_) { return null; }
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-  renderer.shadowMap.enabled = true; renderer.shadowMap.type = T.PCFSoftShadowMap; renderer.outputColorSpace = T.SRGBColorSpace;
-  const canvas = renderer.domElement; canvas.className = "yk2-gl"; container.appendChild(canvas);
-  const scene = new T.Scene();
-  const camera = new T.PerspectiveCamera(28, 1, .1, 50); camera.position.set(0, 3.1, 6.2); camera.lookAt(0, -.05, 0);
-  scene.add(new T.HemisphereLight(0xffffff, 0x8a6a40, 1.05));
-  const sun = new T.DirectionalLight(0xffffff, 2.2); sun.position.set(-3, 6, 4); sun.castShadow = true; sun.shadow.mapSize.set(1024, 1024); sun.shadow.radius = 5; sun.shadow.bias = -0.0008;
-  Object.assign(sun.shadow.camera, { left: -4, right: 4, top: 4, bottom: -4, near: 1, far: 20 }); scene.add(sun);
-  const ground = new T.Mesh(new T.PlaneGeometry(30, 30), new T.ShadowMaterial({ opacity: .42 })); ground.rotation.x = -Math.PI / 2; ground.position.y = -.43; ground.receiveShadow = true; scene.add(ground);
-
-  /* 金属・つや出しの面が黒くならないように、まわりの景色（空と明かり）を簡単に作って映り込ませる */
-  try {
-    const envScene = new T.Scene();
-    const sphere = new T.SphereGeometry(10, 32, 16), pos = sphere.attributes.position, cols = [];
-    for (let i = 0; i < pos.count; i++) { const y = pos.getY(i) / 10, k = (y + 1) / 2; cols.push(.45 + .55 * k, .4 + .55 * k, .36 + .6 * k); }
-    sphere.setAttribute("color", new T.Float32BufferAttribute(cols, 3));
-    envScene.add(new T.Mesh(sphere, new T.MeshBasicMaterial({ side: T.BackSide, vertexColors: true })));
-    [[-4, 6, 3, 5, 3], [5, 5, -2, 4, 2], [0, 7, -6, 6, 2]].forEach(([x, y, z, w, h]) => { const m = new T.Mesh(new T.PlaneGeometry(w, h), new T.MeshBasicMaterial({ color: 0xffffff, side: T.DoubleSide })); m.position.set(x, y, z); m.lookAt(0, 0, 0); envScene.add(m); });
-    const pm = new T.PMREMGenerator(renderer); scene.environment = pm.fromScene(envScene, 0.03).texture; pm.dispose();
-  } catch (_) { /* 映り込みなしでも表示はできる */ }
+/* 消しゴムの組み立て（1人用の画面と、2人対戦の画面で共通）。T：three.js、RBG：角丸の箱。
+   ・build(eq, color)：本体・ふち・そこ・おもり・カバーの色から、消しゴムの3Dの形（Group）を作る。長い辺が x 方向、底が y=-0.4
+   ・environment(renderer)：金属・つや出しの面が黒くならないように、まわりの景色（空と明かり）を作って返す
+   ・disposeGroup(group)：作った形を片づける */
+export function eraserKit(T, RBG) {
   const rbox = (w, h, d, r = .06) => new RBG(w, h, d, 4, Math.min(r, Math.min(w, h, d) / 2 - .001));
   const speckle = (base, dot, n, size) => {
     const c = document.createElement("canvas"); c.width = c.height = 128; const g = c.getContext("2d"); g.fillStyle = base; g.fillRect(0, 0, 128, 128); g.fillStyle = dot;
@@ -46,8 +26,6 @@ export async function createEraserStage(container) {
   const std = (o) => new T.MeshStandardMaterial(o);
   const phys = (o) => new T.MeshPhysicalMaterial(o);
 
-  let group = null, yaw = 0.6, pitch = 0, dragging = false, last = null, raf = 0, W = 0, H = 0, alive = true;
-  const disposeGroup = (g) => g && g.traverse((o) => { if (o.material) { (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => { m.map && m.map.dispose(); m.dispose(); }); } });
   function build(eq, color) {
     const g = new T.Group();
     const add = (geo, mat, x = 0, y = 0, z = 0) => { const m = new T.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; g.add(m); return m; };
@@ -77,6 +55,41 @@ export async function createEraserStage(container) {
     else if (weight === "gold") add(rbox(.66, .28, .52, .05), std({ color: 0xffc933, metalness: 1, roughness: .18 }), .95, .49, 0);
     return g;
   }
+  const disposeGroup = (g) => g && g.traverse((o) => { if (o.material) { (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => { m.map && m.map.dispose(); m.dispose(); }); } });
+  function environment(renderer) {
+    try {
+      const envScene = new T.Scene();
+      const sphere = new T.SphereGeometry(10, 32, 16), pos = sphere.attributes.position, cols = [];
+      for (let i = 0; i < pos.count; i++) { const y = pos.getY(i) / 10, k = (y + 1) / 2; cols.push(.45 + .55 * k, .4 + .55 * k, .36 + .6 * k); }
+      sphere.setAttribute("color", new T.Float32BufferAttribute(cols, 3));
+      envScene.add(new T.Mesh(sphere, new T.MeshBasicMaterial({ side: T.BackSide, vertexColors: true })));
+      [[-4, 6, 3, 5, 3], [5, 5, -2, 4, 2], [0, 7, -6, 6, 2]].forEach(([x, y, z, w, h]) => { const m = new T.Mesh(new T.PlaneGeometry(w, h), new T.MeshBasicMaterial({ color: 0xffffff, side: T.DoubleSide })); m.position.set(x, y, z); m.lookAt(0, 0, 0); envScene.add(m); });
+      const pm = new T.PMREMGenerator(renderer); const tex = pm.fromScene(envScene, 0.03).texture; pm.dispose();
+      return tex;
+    } catch (_) { return null; }   /* 映り込みなしでも表示はできる */
+  }
+  return { build, disposeGroup, environment, rbox };
+}
+
+export async function createEraserStage(container) {
+  if (!(await load3D())) return null;
+  const { T, RBG } = three();
+  let renderer;
+  try { renderer = new T.WebGLRenderer({ alpha: true, antialias: true, powerPreference: "low-power" }); } catch (_) { return null; }
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.shadowMap.enabled = true; renderer.shadowMap.type = T.PCFSoftShadowMap; renderer.outputColorSpace = T.SRGBColorSpace;
+  const canvas = renderer.domElement; canvas.className = "yk2-gl"; container.appendChild(canvas);
+  const scene = new T.Scene();
+  const camera = new T.PerspectiveCamera(28, 1, .1, 50); camera.position.set(0, 3.1, 6.2); camera.lookAt(0, -.05, 0);
+  scene.add(new T.HemisphereLight(0xffffff, 0x8a6a40, 1.05));
+  const sun = new T.DirectionalLight(0xffffff, 2.2); sun.position.set(-3, 6, 4); sun.castShadow = true; sun.shadow.mapSize.set(1024, 1024); sun.shadow.radius = 5; sun.shadow.bias = -0.0008;
+  Object.assign(sun.shadow.camera, { left: -4, right: 4, top: 4, bottom: -4, near: 1, far: 20 }); scene.add(sun);
+  const ground = new T.Mesh(new T.PlaneGeometry(30, 30), new T.ShadowMaterial({ opacity: .42 })); ground.rotation.x = -Math.PI / 2; ground.position.y = -.43; ground.receiveShadow = true; scene.add(ground);
+
+  const kit = eraserKit(T, RBG);
+  { const env = kit.environment(renderer); if (env) scene.environment = env; }
+  let group = null, yaw = 0.6, pitch = 0, dragging = false, last = null, raf = 0, W = 0, H = 0, alive = true;
+  const { build, disposeGroup } = kit;
   function measure() {
     const r = container.getBoundingClientRect(); const w = Math.max(1, Math.round(r.width)), h = Math.max(1, Math.round(r.height));
     if (w === W && h === H) return; W = w; H = h; renderer.setSize(w, h, false); canvas.style.width = w + "px"; canvas.style.height = h + "px"; camera.aspect = w / h; camera.updateProjectionMatrix();

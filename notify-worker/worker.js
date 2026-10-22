@@ -2395,6 +2395,9 @@ export async function handleYuslotAction(deps, uid, body) {
       case "yachtRoomRoll": return await yachtRoomRoll(deps, uid, body);
       case "yachtRoomScore": return await yachtRoomScore(deps, uid, body);
       case "yachtRoomTimeout": return await yachtRoomTimeout(deps, uid, body);
+      case "keshiRoomStart": return await keshiRoomStart(deps, uid, body);
+      case "keshiRoomFlick": return await keshiRoomFlick(deps, uid, body);
+      case "keshiRoomTimeout": return await keshiRoomTimeout(deps, uid, body);
       case "kakuGetNotify": return { ok: true, prefs: await kakuGetNotify(deps, uid) };
       case "kakuSetNotify": return await kakuSetNotify(deps, uid, body);
       default: return { status: 400, error: "unknown_action" };
@@ -4823,6 +4826,161 @@ async function keshiLeagueEntry(deps, uid, body) {
     cur.league = body.enter;
   }
   return keshiLeagueView(deps, cur, uid, now);
+}
+
+/* ----- 🥊 2人対戦（ゲームルーム gameRooms/{roomId} の keshi フィールド。Worker だけが書く：消しゴムの位置・勝敗をブラウザが書き換えられないように） -----
+   ・ルームの作成・参加・退出は、オセロ・将棋・ヨットと同じ（ブラウザが gameRooms を書く）。ゲームの進み（弾く・時間切れ）だけ Worker を通る。
+   ・ルールは、机の上で交互に消しゴムを弾いて、先に机から落とした人が1本。3本勝負（2本先取）。
+     どちらも落ちないまま 1本で合計8回弾いたら、机のふちから遠い（真ん中に近い）ほうが勝ち。持ち時間は1回30秒で、続けて2回放置した人は負け。
+   ・弾いた結果（どこへ動くか・落ちたか）は、Worker が物理シミュレーションで決める。ブラウザは「どの向きに、どれだけの強さで」を頼むだけ。
+     動きの絵は、ブラウザが同じ計算で再生する（最後の位置は Worker の結果に合わせる）。そのため、ルームの書類には最後の位置と弾いた速さだけを書く。
+   ・1回の操作で、ルームの書類を1回読んで1回書く。はじめの1回だけ、2人の消しゴムの書類も読む。
+   ・準備中のあいだは最上位管理者だけ。ただし、最上位管理者の入っているルームなら、招待された友達も遊べる（動作確認のため）。 */
+export const KESHI_DESK = { hw: 3.6, hd: 5.6, startZ: 2.6 };
+const KESHI_TURN_MS = 30000;
+const KESHI_MISS_LIMIT = 2;
+const KESHI_BOUT_FLICKS = 8;
+const KESHI_VMAX = 11.5;
+const KESHI_DT = 1 / 120;
+const KESHI_MAX_STEPS = 1200;
+const r3 = (x) => Math.round(x * 1000) / 1000;
+const r4 = (x) => Math.round(x * 10000) / 10000;
+const keshiStartPos = () => [[0, KESHI_DESK.startZ], [0, -KESHI_DESK.startZ]];
+/* 強さ（重さ・すべり・反発・大きさ）から、動きの計算に使う数字へ。足し算・かけ算・割り算・平方根だけで作る（どの端末でも同じ答えになる） */
+export function keshiPhys(st) {
+  const clamp = (x, lo, hi) => (x < lo ? lo : x > hi ? hi : x);
+  return { m: r4(st.m / 50), a: r4(5 * (1 - 0.55 * clamp((st.s - 50) / 60, -0.3, 1))), e: r4(clamp(0.5 + (st.b - 50) / 120, 0.3, 0.95)), r: r4(1.15 * (1 + (st.z - 50) / 300)) };
+}
+export const keshiLaunchSpeed = (P, power) => KESHI_VMAX * power / Math.sqrt(Math.sqrt(P.m));
+/* 机の上の動き。pos：[[x,z],[x,z]]、who：弾いた人（0/1）、(vx,vz)：弾いた速さ。
+   戻り値：to（止まった位置。落ちた消しゴムは、ふちを越えた位置）、first（最初に落ちた人。落ちなければ -1。同時なら弾いた人）、out（落ちたか）、steps */
+export function keshiSim(P, pos, who, vx, vz) {
+  const x = [pos[0][0], pos[1][0]], z = [pos[0][1], pos[1][1]], vX = [0, 0], vZ = [0, 0], out = [false, false];
+  vX[who] = vx; vZ[who] = vz;
+  let first = -1, steps = 0;
+  while (steps < KESHI_MAX_STEPS) {
+    let moving = false;
+    for (let i = 0; i < 2; i++) {
+      if (out[i]) continue;
+      const sp = Math.sqrt(vX[i] * vX[i] + vZ[i] * vZ[i]);
+      if (sp > 0) { const ns = sp - P[i].a * KESHI_DT; if (ns <= 0.02) { vX[i] = 0; vZ[i] = 0; } else { vX[i] *= ns / sp; vZ[i] *= ns / sp; moving = true; } }
+      x[i] += vX[i] * KESHI_DT; z[i] += vZ[i] * KESHI_DT;
+    }
+    if (!out[0] && !out[1]) {
+      const dx = x[1] - x[0], dz = z[1] - z[0], rr = P[0].r + P[1].r, d2 = dx * dx + dz * dz;
+      if (d2 < rr * rr) {
+        const d = Math.sqrt(d2), nx = d > 1e-9 ? dx / d : 0, nz = d > 1e-9 ? dz / d : 1;
+        const vn = (vX[1] - vX[0]) * nx + (vZ[1] - vZ[0]) * nz, ia = 1 / P[0].m, ib = 1 / P[1].m;
+        if (vn < 0) { const e = (P[0].e + P[1].e) / 2, j = -(1 + e) * vn / (ia + ib); vX[0] -= j * ia * nx; vZ[0] -= j * ia * nz; vX[1] += j * ib * nx; vZ[1] += j * ib * nz; moving = true; }
+        const s = (rr - d) / (ia + ib); x[0] -= s * ia * nx; z[0] -= s * ia * nz; x[1] += s * ib * nx; z[1] += s * ib * nz;
+      }
+    }
+    const fell = [0, 1].filter((i) => !out[i] && (Math.abs(x[i]) > KESHI_DESK.hw || Math.abs(z[i]) > KESHI_DESK.hd));
+    fell.forEach((i) => { out[i] = true; });
+    if (fell.length && first < 0) first = fell.length === 2 ? who : fell[0];
+    steps++;
+    if (!moving) break;
+  }
+  return { to: [[r3(x[0]), r3(z[0])], [r3(x[1]), r3(z[1])]], first, out, steps };
+}
+const keshiMargin = (p) => Math.min(KESHI_DESK.hw - Math.abs(p[0]), KESHI_DESK.hd - Math.abs(p[1]));
+async function keshiRoomLoad(deps, uid, roomId) {
+  if (typeof roomId !== "string" || !/^[A-Za-z0-9]{10,40}$/.test(roomId)) return { error: { status: 400, error: "bad_request" } };
+  const raw = await deps.firestore.getRaw(`gameRooms/${roomId}`);
+  if (!raw) return { error: { status: 404, error: "no_room" } };
+  const data = decodeFields(raw.fields);
+  if (data.gameType !== "keshi") return { error: { status: 400, error: "bad_request" } };
+  const uids = Array.isArray(data.memberUids) ? data.memberUids : [];
+  if (!uids.includes(uid)) return { error: { status: 403, error: "not_member" } };
+  const { keshi } = await slotGetConfig(deps);
+  if (!keshi && !slotIsTopAdmin(deps, uid) && !uids.includes(deps.adminUid)) return { error: { status: 403, error: "not_published" } };
+  return { data, updateTime: raw.updateTime, roomId };
+}
+const keshiRoomView = (y, now) => ({ ok: true, keshi: y, serverNowMs: now });
+async function keshiRoomWrite(deps, cur, keshi) {
+  const fs = deps.firestore;
+  try {
+    await fs.commit([{
+      update: { name: fs.docName(`gameRooms/${cur.roomId}`), fields: encodeFields({ keshi }) }, updateMask: { fieldPaths: ["keshi"] },
+      updateTransforms: [{ fieldPath: "updatedAt", setToServerValue: "REQUEST_TIME" }], currentDocument: { updateTime: cur.updateTime }
+    }]);
+    return true;
+  } catch (error) { if (isRetryableCommitError(error)) return false; throw error; }
+}
+/* 弾いたあとの待ち時間：動きの再生が終わってから、次の人の持ち時間が始まるようにする */
+const keshiTurnDeadline = (now, steps) => now + KESHI_TURN_MS + Math.round(steps * KESHI_DT * 1000) + 1500;
+/* 1本が終わった：勝ち数を足して、3本勝負が決まったか、次の1本へ */
+function keshiRoomBoutEnd(y, winner, how, now, steps) {
+  y.wins[winner] += 1; y.hist.push({ w: winner, how });
+  if (y.wins[winner] >= 2) { y.done = true; y.winner = winner; y.reason = "finished"; y.at = now; return; }
+  y.bout += 1; y.starter = 1 - y.starter; y.cur = y.starter; y.flicks = 0; y.pos = keshiStartPos();
+  y.deadline = keshiTurnDeadline(now, steps); y.at = now;
+}
+/* 8回弾いても落ちなかったときの勝ち負け：机のふちから遠いほうが勝ち（同じなら、先に弾いた人の負け） */
+function keshiRoomEdgeWinner(y) {
+  const a = keshiMargin(y.pos[0]), b = keshiMargin(y.pos[1]);
+  return a > b ? 0 : b > a ? 1 : 1 - y.starter;
+}
+async function keshiRoomNew(deps, room, now) {
+  const order = room.memberUids.slice(0, 2);
+  const cur = await Promise.all(order.map((u) => keshiLoad(deps, u)));
+  const st = cur.map((c) => keshiStats(c.eq));
+  return {
+    gid: slotRandomHex(6), order, names: room.members.slice(0, 2), eq: cur.map((c) => c.eq), color: cur.map((c) => c.color), rt: st.map((s) => s.rating), par: st.map(keshiPhys),
+    bout: 1, starter: 0, cur: 0, flicks: 0, wins: [0, 0], hist: [], pos: keshiStartPos(), last: null, miss: [0, 0],
+    deadline: now + KESHI_TURN_MS + 4000, at: now, done: false, winner: -1, reason: ""
+  };
+}
+/* ゲームを始める（2人そろったあと、どちらの画面からでも呼べる。同じゲームを二重に始めない）。終わったあとの「もう一度」は rematch: true */
+async function keshiRoomStart(deps, uid, body) {
+  const cur = await keshiRoomLoad(deps, uid, body?.roomId);
+  if (cur.error) return cur.error;
+  const d = cur.data, now = deps.now();
+  if (!Array.isArray(d.members) || !Array.isArray(d.memberUids) || d.memberUids.length < 2 || d.status !== "playing") return { status: 409, error: "not_ready" };
+  const y = d.keshi;
+  const same = y && Array.isArray(y.order) && y.order[0] === d.memberUids[0] && y.order[1] === d.memberUids[1];
+  if (same && (!y.done || body?.rematch !== true)) return keshiRoomView(y, now);
+  const fresh = await keshiRoomNew(deps, d, now);
+  if (!(await keshiRoomWrite(deps, cur, fresh))) { const again = await keshiRoomLoad(deps, uid, body.roomId); return again.error || keshiRoomView(again.data.keshi || fresh, now); }
+  return keshiRoomView(fresh, now);
+}
+/* 弾く。body：{ roomId, gid, dx, dz（向き。長さは問わない）, p（強さ 0〜1。引っ張った長さ）} */
+async function keshiRoomFlick(deps, uid, body) {
+  const cur = await keshiRoomLoad(deps, uid, body?.roomId);
+  if (cur.error) return cur.error;
+  const now = deps.now(), y = cur.data.keshi;
+  if (!y || y.done === true) return { status: 409, error: "no_game" };
+  if (body?.gid !== y.gid) return { status: 409, error: "stale" };
+  if (y.order[y.cur] !== uid) return { status: 409, error: "not_your_turn" };
+  if (now > y.deadline + 2000) return { status: 409, error: "timeout" };
+  const dx = Number(body?.dx), dz = Number(body?.dz), pw = Number(body?.p), len = Math.sqrt(dx * dx + dz * dz);
+  if (!Number.isFinite(dx) || !Number.isFinite(dz) || !Number.isFinite(pw) || !(len > 1e-6) || pw < 0.03) return { status: 400, error: "bad_request" };
+  const speed = keshiLaunchSpeed(y.par[y.cur], Math.min(1, pw));
+  const vx = r3(dx / len * speed), vz = r3(dz / len * speed);
+  const from = y.pos.map((p) => p.slice());
+  const res = keshiSim(y.par, from, y.cur, vx, vz);
+  y.last = { n: (y.last ? y.last.n : 0) + 1, by: y.cur, vx, vz, from, to: res.to, first: res.first, steps: res.steps };
+  y.pos = res.to; y.flicks += 1; y.miss[y.cur] = 0; y.at = now;
+  if (res.first >= 0) keshiRoomBoutEnd(y, 1 - res.first, res.first === y.cur ? "self" : "ko", now, res.steps);
+  else if (y.flicks >= KESHI_BOUT_FLICKS) keshiRoomBoutEnd(y, keshiRoomEdgeWinner(y), "edge", now, res.steps);
+  else { y.cur = 1 - y.cur; y.deadline = keshiTurnDeadline(now, res.steps); }
+  if (!(await keshiRoomWrite(deps, cur, y))) return { status: 409, error: "busy" };
+  return keshiRoomView(y, now);
+}
+/* 持ち時間が過ぎたとき（どちらの画面からでも呼べる）。番を飛ばす。2回続けて放置した人は負け */
+async function keshiRoomTimeout(deps, uid, body) {
+  const cur = await keshiRoomLoad(deps, uid, body?.roomId);
+  if (cur.error) return cur.error;
+  const y = cur.data.keshi, now = deps.now();
+  if (!y || y.done === true) return keshiRoomView(y || null, now);
+  if (body?.gid !== y.gid || Number(body?.bout) !== y.bout || Number(body?.flicks) !== y.flicks || Number(body?.turn) !== y.cur) return keshiRoomView(y, now);   // もう次の番に進んでいる
+  if (now < y.deadline) return { status: 409, error: "too_early" };
+  y.miss[y.cur] += 1; y.flicks += 1; y.at = now;
+  if (y.miss[y.cur] >= KESHI_MISS_LIMIT) { y.done = true; y.winner = 1 - y.cur; y.reason = "timeout"; }
+  else if (y.flicks >= KESHI_BOUT_FLICKS) keshiRoomBoutEnd(y, keshiRoomEdgeWinner(y), "edge", now, 0);
+  else { y.cur = 1 - y.cur; y.deadline = now + KESHI_TURN_MS; }
+  if (!(await keshiRoomWrite(deps, cur, y))) { const again = await keshiRoomLoad(deps, uid, body.roomId); return again.error || keshiRoomView(again.data.keshi, now); }
+  return keshiRoomView(y, now);
 }
 
 /* =========================================================

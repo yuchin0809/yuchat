@@ -471,9 +471,10 @@ service cloud.firestore {
       allow create: if signedIn()
         && request.resource.data.get('ownerUid', '') == request.auth.uid
         && request.resource.data.get('memberUids', []).hasOnly([request.auth.uid])
-        && !('yacht' in request.resource.data);
+        && !('yacht' in request.resource.data)
+        && !('keshi' in request.resource.data);
 
-      // 🎲 ヨットの対戦の進み（yacht：サイコロの目・点数・手番）は通知 Worker（サービスアカウント）だけが書く。ブラウザからは変えられない
+      // 🎲 ヨットの対戦の進み（yacht：サイコロの目・点数・手番）と、🥊 消しバトの対戦の進み（keshi：消しゴムの位置・勝敗・手番）は、通知 Worker（サービスアカウント）だけが書く。ブラウザからは変えられない
       allow update: if signedIn() && (
         ((request.auth.uid in resource.data.get('memberUids', [])) && yachtUntouched())
         || (isJoiningGameRoom() && yachtUntouched())
@@ -481,7 +482,7 @@ service cloud.firestore {
       );
 
       function yachtUntouched() {
-        return !request.resource.data.diff(resource.data).affectedKeys().hasAny(['yacht']);
+        return !request.resource.data.diff(resource.data).affectedKeys().hasAny(['yacht', 'keshi']);
       }
 
       allow delete: if signedIn() && (
