@@ -64,6 +64,8 @@ export default {
     ctx.waitUntil(runRankTick(env, event.scheduledTime).catch((error) => console.error("rank tick error", String(error?.message || error).slice(0, 300))));
     /* 🤖 NPC 枠のキャンセル：1日1〜3回、10:00〜14:30 のランダムな時刻（日付から決まる）。予定の時刻から30分の間以外は Firestore に触れずにすぐ戻る */
     ctx.waitUntil(runKakuCancelTick(env, event.scheduledTime).catch((error) => console.error("kaku cancel error", String(error?.message || error).slice(0, 300))));
+    /* 🛠 ゆう経済の1日1回の処理（株価・利息など）の見守り：GitHub Actions の定期実行が来なかった日の保険。決まった数回の分だけ動く */
+    ctx.waitUntil(runDailyWatchdogTick(env, event.scheduledTime).catch((error) => console.error("daily watchdog error", String(error?.message || error).slice(0, 300))));
     /* 🎫 先着ゲームの週間ランキング：毎週月曜 7:00（日本時間）に結果発表（1位500・2位250・3位100コイン）。それ以外の分は Firestore に触れずにすぐ戻る */
     ctx.waitUntil(runBattleWeekTick(env, event.scheduledTime).catch((error) => console.error("battle week error", String(error?.message || error).slice(0, 300))));
     /* 💸 コイン送金：3日たっても承認されない申請を、1日1回（日本時間 3:07）自動で却下して返金する。それ以外の分は Firestore に触れずにすぐ戻る */
@@ -4125,6 +4127,37 @@ async function rankStatus(deps, uid, body) {
     levels: RANK_LEVELS.map((r) => ({ name: r.name, min: r.min })),
     weekStartMs: Number(d.weekStart) || rankWeekStart(deps.now()), nextRollMs: (Number(d.weekStart) || rankWeekStart(deps.now())) + RANK_WEEK_MS
   };
+}
+
+/* =========================================================
+   🛠 ゆう経済の1日1回の処理（株価の更新・利息・総資産ランキング）の見守り
+   ・この処理は GitHub Actions の derby-runner が日本時間 13:00 以降に行う。GitHub の定期実行は、遅れたり、まったく来ない日がある（10/22 は午前の実行がすべて来なかった）。
+   ・そこで、毎分動くこの Worker が、13:10 など決まった時刻に「今日の分が済んでいるか」を確かめ（rankings/assets の date と complete）、
+     済んでいなければ、GitHub の API で derby-runner を手動実行（workflow_dispatch）する。処理は何回動いても二重にならない。
+   ・GitHub に頼むための鍵（Cloudflare の Secret「GITHUB_DISPATCH_TOKEN」。このリポジトリの Actions だけ読み書きできる fine-grained トークン）が登録されていないあいだは、何もしない（ログに残すだけ）。
+   ・読み取り：確かめる時刻（1日8回）に rankings/assets を1件だけ。それ以外の分は Firestore に触れない。
+========================================================= */
+const DAILY_WATCH_REPO = "yuchin0809/yuchat";
+const DAILY_WATCH_MINUTES = [13 * 60 + 10, 13 * 60 + 25, 13 * 60 + 45, 14 * 60 + 10, 15 * 60 + 10, 17 * 60 + 10, 20 * 60 + 10, 23 * 60 + 10]; // 日本時間の「0:00 からの分」
+const dailyWatchDone = new Set();
+export function resetDailyWatchForTest() { dailyWatchDone.clear(); }
+export async function runDailyWatchdogTick(env = {}, scheduledTime = Date.now(), deps = null, fetchImpl = (...args) => fetch(...args)) {
+  const minuteOfDay = Math.floor(((scheduledTime + KAKU_JST) % KAKU_DAY_MS) / KAKU_MIN);
+  if (!DAILY_WATCH_MINUTES.includes(minuteOfDay)) return { skipped: "outside" };
+  const today = kakuDayId(scheduledTime);
+  if (dailyWatchDone.has(today)) return { skipped: "done" };
+  const d = deps || createDefaultDeps(env);
+  const doc = await d.firestore.get("rankings/assets");
+  if (doc && doc.date === today && doc.complete === true) { dailyWatchDone.add(today); return { skipped: "done" }; }
+  const token = env.GITHUB_DISPATCH_TOKEN;
+  if (!token) { console.warn("ゆう経済の今日の分が未完了ですが、GITHUB_DISPATCH_TOKEN が未登録のため、手動実行を頼めません"); return { skipped: "no_token" }; }
+  const res = await fetchImpl(`https://api.github.com/repos/${DAILY_WATCH_REPO}/actions/workflows/derby-runner.yml/dispatches`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "yuuchat-notify", "Content-Type": "application/json" },
+    body: JSON.stringify({ ref: "main" })
+  });
+  if (res.status !== 204) { console.warn("derby-runner の手動実行を頼めませんでした", res.status); return { dispatched: false, status: res.status }; }
+  return { dispatched: true };
 }
 
 /* =========================================================
