@@ -799,3 +799,43 @@ test("高い台：確変の枠の持ち主は、総資産に関係なく遊べ�
   const other = Object.keys(SLOT_ASSET_MIN).find((m) => m !== machine);
   assert.equal((await seatOn(ctx, 1, other)).error, "assets_low");
 });
+
+/* ===== 読み取りを減らす（動きは変えない） ===== */
+test("ロビー：席を1回の問い合わせで読み、数秒はメモリから返す。着席・退席のときは捨てる（表示は変わらない）", async () => {
+  const ctx = setup({ now: OFF_HOURS_NOW, n: 4 });
+  const before = { getRaw: ctx.fs.counts.getRaw, query: ctx.fs.counts.query };
+  const a = await ctx.act("id1", "u1", { action: "lobby" });
+  assert.equal(ctx.fs.counts.getRaw, before.getRaw, "6台を1台ずつ読まない");
+  assert.equal(ctx.fs.counts.query - before.query, 1, "席の一覧は1回の問い合わせ");
+  assert.ok(Object.values(a.seats).every((x) => x.occupied === false));
+  // 何回開いても、数秒のあいだは読み直さない
+  for (let i = 0; i < 5; i++) { ctx.state.now += 1000; await ctx.act(`id${1 + (i % 3)}`, `u${1 + (i % 3)}`, { action: "lobby" }); }
+  assert.equal(ctx.fs.counts.query - before.query, 1, "6秒以内は、読み取りなし");
+  // 着席すると、すぐロビーに反映される（本人は mine、ほかの人は使用中）
+  setUser(ctx, 1, { coins: 5000 });
+  const seat = await seatOn(ctx, 1, "yubasic");
+  assert.equal(seat.ok, true);
+  const mine = await ctx.act("id1", "u1", { action: "lobby" }), other = await ctx.act("id2", "u2", { action: "lobby" });
+  assert.equal(mine.seats.yubasic.occupied, true); assert.equal(mine.seats.yubasic.mine, true);
+  assert.equal(other.seats.yubasic.occupied, true); assert.equal(other.seats.yubasic.mine, false); assert.equal(other.seats.yubasic.name, "u1");
+  // 退席すると、すぐ空きになる
+  await leave(ctx, 1, seat);
+  assert.equal((await ctx.act("id2", "u2", { action: "lobby" })).seats.yubasic.occupied, false);
+  // 数秒たてば、読み直す
+  const q = ctx.fs.counts.query; ctx.state.now += 7000;
+  await ctx.act("id2", "u2", { action: "lobby" });
+  assert.equal(ctx.fs.counts.query - q, 1);
+});
+
+test("先着ページの表：「キャンセルの通知」の設定は、15秒おきに開かれても毎回は読まない。設定を変えたらすぐ反映", async () => {
+  const ctx = setup({ now: TT.sameOpen + H, n: 3 });
+  await dayWithNpc(ctx);
+  let gets = 0; const orig = ctx.fs.get; ctx.fs.get = async (p) => { if (String(p).startsWith("yuslotPrefs/")) gets++; return orig(p); };
+  for (let i = 0; i < 4; i++) { ctx.state.now += 14000; assert.equal((await ctx.act("id1", "u1", { action: "battleBoard" })).notify, false); }
+  assert.equal(gets, 1, "1分のあいだは、設定を読み直さない");
+  ctx.state.now += 20000; await ctx.act("id1", "u1", { action: "battleBoard" });
+  assert.equal(gets, 2, "1分たてば読み直す");
+  await ctx.act("id1", "u1", { action: "kakuSetNotify", prefs: { cancel: true } });
+  assert.equal((await ctx.act("id1", "u1", { action: "battleBoard" })).notify, true, "設定を変えたら、すぐ反映");
+  assert.equal((await ctx.act("id2", "u2", { action: "battleBoard" })).notify, false, "ほかの人には影響しない");
+});

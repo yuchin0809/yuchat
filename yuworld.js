@@ -15,7 +15,7 @@
 /* 🎟 ゆう宝くじ売り場の画面（別ファイル。Worker の lottery* アクションを呼んで表示するだけ） */
 import { renderLottery, stopLottery } from "./yulottery.js?v=20261021-lottery7";
 /* 🌈 確変台のパネル（台の一覧の上）。抽選・先着・通知設定。Worker の kaku* アクションを呼んで表示するだけ */
-import { kakuInit, kakuPanelHtml, kakuBind, kakuMachineInfo, startKaku, stopKaku, refreshKaku } from "./yukaku.js?v=20261022-kaku13";
+import { kakuInit, kakuPanelHtml, kakuBind, kakuMachineInfo, startKaku, stopKaku, refreshKaku } from "./yukaku.js?v=20261023-kaku14";
 /* 🏅 会員ランクのカード（台の一覧の上）。ランクの判定・進みは Worker の rankStatus が返す */
 import { rankInit, rankPanelHtml, rankRefresh } from "./yurank.js?v=20261020-rank1";
 
@@ -599,7 +599,7 @@ async function doFlush() {
     if (e.code === "seat_lost") { stopFlushTimer(); stopAuto(); showMsg("席が解放されました。ロビーに戻ります。", "warn"); backToLobbySoon(); }
   } finally { state.busy = false; }
 }
-function startLobbyTimer() { stopLobbyTimer(); state.lobbyTimer = setInterval(() => { if (state.screen === "lobby") refreshLobby(); }, 8000); }
+function startLobbyTimer() { stopLobbyTimer(); state.lobbyTimer = setInterval(() => { if (state.screen === "lobby" && !document.hidden) refreshLobby(); }, 8000); }   // 画面が裏にあるあいだは、読み直さない（戻ったらすぐ読み直す）
 function stopLobbyTimer() { if (state.lobbyTimer) { clearInterval(state.lobbyTimer); state.lobbyTimer = null; } stopKaku(); }
 function stopFeverTimer() { if (state.feverTimer) { clearInterval(state.feverTimer); state.feverTimer = null; } }
 
@@ -955,6 +955,7 @@ function injectStyles() {
   style.textContent = css;
   document.head.appendChild(style);
   window.addEventListener("pagehide", settleBeacon);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && state.screen === "lobby") refreshLobby(); });
   document.addEventListener("visibilitychange", () => { if (!document.hidden && state.screen === "game" && state.kaku && state.kakuEnd && serverNow() >= state.kakuEnd) kakuTimeUp(); });   // 眠っていたスマホが戻ったとき、枠が終わっていたらすぐ退出
   window.addEventListener("beforeunload", settleBeacon);
   const unlock = () => { if (state.soundOn) ensureAudio(); };

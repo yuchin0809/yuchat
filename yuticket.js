@@ -316,7 +316,7 @@ function onTick() {
     const can = nowMs() >= S.status.times.waitOpen;
     if (can !== S.canJoin) { S.canJoin = can; render(); }
   }
-  if (S.screen === "page" && S.board && !S.busy && Date.now() - (S.boardAt || 0) > 15000) refreshBoard();     // 表は15秒おきに読み直す（キャンセルが出たら、すぐ取れるように）
+  if (S.screen === "page" && S.board && !S.busy && !document.hidden && Date.now() - (S.boardAt || 0) > 15000) refreshBoard();     // 表は15秒おきに読み直す（キャンセルが出たら、すぐ取れるように）
   if (S.screen === "wait") {
     const remain = waitInfo().goAt - nowMs();
     if (remain <= 0 && !S.goShown) { S.goShown = true; const el = ov.querySelector("#yt-go"); if (el) el.innerHTML = goBtn(); }

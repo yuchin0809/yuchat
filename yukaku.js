@@ -6,7 +6,7 @@
    ・Firebase には触れない。Worker に聞くのは、ロビーを開いたときと30秒おき、ボタンを押したときだけ。
 ========================================================= */
 
-import { ticketInit, ticketOpen } from "./yuticket.js?v=20261022-ticket5";
+import { ticketInit, ticketOpen } from "./yuticket.js?v=20261023-ticket6";
 
 let deps = null;          // { api, esc, machines(id→{name,emoji}), onChange }
 let data = null;          // 直近の kakuStatus
@@ -28,6 +28,7 @@ const KIND = { pre: "前日抽選", lot: "当日抽選", quick: "先着" };
 
 export function kakuInit(d) {
   deps = d; injectStyles();
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && running && data) refreshKaku(); });   // 戻ったら、すぐ読み直す
   // 🎫 先着ゲーム（全画面）。閉じたら、売り場の表示（獲得した枠など）を読み直す
   ticketInit({ api: d.api, esc: d.esc, machineName: () => { const m = data && data.today && d.machines[data.today.machine]; return m ? m.name : "確変台"; }, onClose: () => refreshKaku() });
 }
@@ -39,7 +40,7 @@ function pollDelay() {
   if (t) { const now = nowMs(); if (now >= t.times.quickOpen && t.slots.some((x) => x.kind === "quick" && !x.taken && now < x.s)) return 10000; }
   return 30000;
 }
-async function pollLoop() { await refreshKaku(); if (running) timer = setTimeout(pollLoop, pollDelay()); }
+async function pollLoop() { if (!document.hidden) await refreshKaku(); if (running) timer = setTimeout(pollLoop, pollDelay()); }   // 画面が裏にあるあいだは読み直さない
 
 /* 申込・先着の開始や締切の「時刻ちょうど」に、画面を切り替える（ボタンが出る・押せる）。
    サーバーは時刻ちょうどから受け付けるので、画面もその瞬間に合わせる（30秒おきの読み直しを待たない） */
