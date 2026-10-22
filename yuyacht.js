@@ -27,14 +27,33 @@ function cubeHtml(v, extra = "") {
 /* サイコロのトレイ：上の段＝キープしたサイコロ、赤いフェルト＝転がった目、右下のカップ（振るときはカップに集めて振り、そこから転がす）
    o.phase：idle（止まっている）／in（カップへ戻る）／shake（カップを振っている）／pour（カップから転がり出る）  o.shown：いまの目を見せてよいか
    o.tumble：その場で転がして見せる（相手の番で目が変わったとき）  o.canHold：キープの切り替えができるか  o.canRoll：カップを押して振れるか */
+/* 選んだ役に「当たっている」サイコロ（その役の点になっている目）。見やすくするための表示だけ：点数の計算は Worker */
+function hitDice(cat, dice) {
+  const no = [false, false, false, false, false];
+  if (cat == null || cat < 0) return no;
+  const c = [0, 0, 0, 0, 0, 0, 0];
+  dice.forEach((d) => { c[d]++; });
+  if (cat <= 5) return dice.map((d) => d === cat + 1);
+  if (cat === 6) return dice.map(() => true);
+  if (cat === 7) { const v = c.findIndex((n) => n >= 4); return v < 0 ? no : dice.map((d) => d === v); }
+  if (cat === 8) { const k = c.filter((n) => n > 0).sort(); return k.length === 2 && k[0] === 2 && k[1] === 3 ? dice.map(() => true) : no; }
+  if (cat === 9) {
+    for (const start of [3, 2, 1]) { const run = [start, start + 1, start + 2, start + 3]; if (run.every((v) => c[v] > 0)) { const used = new Set(); return dice.map((d) => { if (run.includes(d) && !used.has(d)) { used.add(d); return true; } return false; }); } }
+    return no;
+  }
+  if (cat === 10) return [1, 2, 3, 4, 5].every((v) => c[v] > 0) || [2, 3, 4, 5, 6].every((v) => c[v] > 0) ? dice.map(() => true) : no;
+  if (cat === 11) return c.some((n) => n === 5) ? dice.map(() => true) : no;
+  return no;
+}
 function trayHtml(dice, hold, o) {
-  const rack = Array.from({ length: 5 }, (_, i) => `<div class="yy-slot">${hold[i] ? `<button type="button" class="yy-dbtn" data-hold="${i}" ${o.canHold ? "" : "disabled"}>${cubeHtml(dice[i])}</button>` : ""}</div>`).join("");
+  const hl = o.hl || [false, false, false, false, false];
+  const rack = Array.from({ length: 5 }, (_, i) => `<div class="yy-slot${hold[i] && hl[i] ? " hit" : ""}">${hold[i] ? `<button type="button" class="yy-dbtn" data-hold="${i}" ${o.canHold ? "" : "disabled"}>${cubeHtml(dice[i])}</button><span class="yy-num">${dice[i]}</span>` : ""}</div>`).join("");
   const seeDice = o.phase === "pour" || o.phase === "in" || (o.phase === "idle" && o.shown);
   const spots = [0, 1, 2, 3, 4].map((i) => {
     if (hold[i] || !seeDice) return `<div class="yy-spot"></div>`;
     const cls = o.phase === "pour" ? "pour" : o.phase === "in" ? "in" : "";
     const jx = ((i * 29 + dice[i] * 7) % 13) - 6, jy = ((i * 17 + dice[i] * 5) % 11) - 5;
-    return `<div class="yy-spot"><div class="yy-dwrap ${cls}" style="--c:${i % 3};--r:${Math.floor(i / 3)};--dl:${(i * 60) % 240}ms;left:${jx}%;top:${jy}%"><button type="button" class="yy-dbtn" data-hold="${i}" ${o.canHold ? "" : "disabled"}>${cubeHtml(dice[i], o.phase === "pour" || o.tumble ? "tumble" : "")}</button></div></div>`;
+    return `<div class="yy-spot"><div class="yy-dwrap ${cls}${hl[i] && o.phase === "idle" ? " hit" : ""}" style="--c:${i % 3};--r:${Math.floor(i / 3)};--dl:${(i * 60) % 240}ms;left:${jx}%;top:${jy}%"><button type="button" class="yy-dbtn" data-hold="${i}" ${o.canHold ? "" : "disabled"}>${cubeHtml(dice[i], o.phase === "pour" || o.tumble ? "tumble" : "")}</button>${o.phase === "idle" ? `<span class="yy-num">${dice[i]}</span>` : ""}</div></div>`;
   }).join("");
   const cupCls = o.phase === "shake" ? "shake" : o.phase === "pour" ? "pour" : o.canRoll && !o.shown ? "ready" : "";
   const cup = `<div class="yy-spot yy-cupspot"><button type="button" class="yy-cup ${cupCls}" id="yyCup" aria-label="カップを振る" ${o.canRoll ? "" : "disabled"}><span class="yy-cup-rim"></span><span class="yy-cup-body"></span></button></div>`;
@@ -122,7 +141,7 @@ async function start(restart) {
 function cellHtml(i) {
   const filled = g.card[i] >= 0;
   const cand = !filled && !g.done && isShown() ? g.opts[i] : -1;
-  const cls = filled ? "filled" : cand >= 0 ? `cand${sel === i ? " sel" : ""}${cand === 0 ? " zero" : ""}` : "";
+  const cls = filled ? "filled" : cand >= 0 ? `cand${sel === i ? " sel" : ""}${cand === 0 ? " zero" : " pos"}` : "";
   const text = filled ? g.card[i] : cand >= 0 ? cand : "";
   return `<tr class="yy-row"><th><span class="yy-mark">${CATS[i].mark}</span>${CATS[i].name}</th><td class="yy-cell ${cls}" data-cat="${i}">${text}</td></tr>`;
 }
@@ -146,7 +165,7 @@ function drawGame() {
   const canRoll = idle && left > 0;
   ctx.root.innerHTML = `<div class="yy-head yy-head-game"><button type="button" class="yw-back" id="yyBack">← 一覧へ</button><span class="yy-left">🎲 あと${left}回</span></div>
     <div class="yy-game"><div class="yy-left-pane">${sheetHtml()}</div>
-      <div class="yy-play"><div class="yy-wood">${trayHtml(g.dice, held, { phase, shown, canHold, canRoll })}</div>
+      <div class="yy-play"><div class="yy-wood">${trayHtml(g.dice, held, { phase, shown, canHold, canRoll, hl: shown ? hitDice(sel, g.dice) : null })}</div>
         <p class="yy-hint">${sel >= 0 ? `「${ctx.esc(selName)}」に記録します` : !shown ? "カップをタップして、サイコロを振ろう" : left > 0 ? "残したいサイコロをタップでキープ → 「振り直す」。点数表の役をタップして記録" : "もう振れません。点数表の役をタップして記録しよう"}</p>
         <div class="yy-btns">
           <button type="button" class="yw-btn yy-roll" id="yyRoll" ${canRoll ? "" : "disabled"}>${!shown ? "🥤 カップを振る" : left > 0 ? `🥤 振り直す（あと${left}回）` : "もう振れません"}</button>
@@ -273,7 +292,7 @@ function roomCellHtml(i, who, y, me) {
   const mineTurn = !y.done && y.cur === me;
   const showCand = !filled && !y.done && y.cur === who && y.opts && y.opts[i] >= 0 && roomShown(y, y.cur === me);
   const clickable = showCand && who === me && mineTurn;
-  const cls = filled ? "filled" : showCand ? `cand${clickable ? "" : " other"}${rm.sel === i && who === me ? " sel" : ""}${y.opts[i] === 0 ? " zero" : ""}` : "";
+  const cls = filled ? "filled" : showCand ? `cand${clickable ? "" : " other"}${rm.sel === i && who === me ? " sel" : ""}${y.opts[i] === 0 ? " zero" : " pos"}` : "";
   return `<td class="yy-cell ${cls}" ${clickable ? `data-cat="${i}"` : ""}>${filled ? card[i] : showCand ? y.opts[i] : ""}</td>`;
 }
 function roomSheetHtml(y, me) {
@@ -319,7 +338,7 @@ function drawRoom() {
   const status = y.done ? "" : mineTurn
     ? `<div class="yy-turnbar mine">あなたの番です <span id="yrTimer" class="yy-timer"></span></div>`
     : `<div class="yy-turnbar">${turnName}さんの番です <span id="yrTimer" class="yy-timer"></span></div>`;
-  const play = y.done ? resultHtml(y, me) : `<div class="yy-play"><div class="yy-wood">${trayHtml(y.dice, mineTurn ? rm.held : [false, false, false, false, false], { phase: mineTurn ? rm.phase : "idle", shown, canHold, canRoll, tumble })}</div>
+  const play = y.done ? resultHtml(y, me) : `<div class="yy-play"><div class="yy-wood">${trayHtml(y.dice, mineTurn ? rm.held : [false, false, false, false, false], { phase: mineTurn ? rm.phase : "idle", shown, canHold, canRoll, tumble, hl: mineTurn && shown ? hitDice(rm.sel, y.dice) : null })}</div>
       <p class="yy-hint">${mineTurn ? (rm.sel >= 0 ? `「${rm.esc(CATS[rm.sel].name)}」に記録します` : !shown ? "カップをタップして、サイコロを振ろう" : left > 0 ? "残したいサイコロをタップでキープ → 「振り直す」。点数表の役をタップして記録" : "もう振れません。点数表の役をタップして記録しよう") : "相手の操作を待っています"}</p>
       ${mineTurn ? `<div class="yy-btns"><button type="button" class="yw-btn yy-roll" id="yrRoll" ${canRoll ? "" : "disabled"}>${!shown ? "🥤 カップを振る" : left > 0 ? `🥤 振り直す（あと${left}回）` : "もう振れません"}</button>
         <button type="button" class="yw-btn yy-rec" id="yrRec" ${rm.sel >= 0 && idle && shown ? "" : "disabled"}>${rm.sel >= 0 ? `記録する（${y.opts[rm.sel]}点）` : "役を選んで記録"}</button></div>` : ""}</div>`;
@@ -414,7 +433,8 @@ function injectStyles() {
   .yy-sheet td { text-align: right; padding: 4px 6px; border-bottom: 1px solid #d9d2b8; border-left: 1px solid #d9d2b8; width: 38px; font-weight: 700; }
   .yy-sheet thead th { background: #3b3f46; color: #fff; text-align: center; } .yy-turn b { font-size: 18px; } .yy-me-h { font-size: 22px; background: #ffe9ea !important; color: #000; }
   .yy-mark { display: inline-block; width: 1.2em; text-align: center; margin-right: 2px; }
-  .yy-cell { background: #ffe56a; } .yy-cell.filled { background: #fff; } .yy-cell.cand { cursor: pointer; color: #8a6d00; } .yy-cell.cand.zero { color: #b9a14a; }
+  .yy-cell { background: #ffe56a; } .yy-cell.filled { background: #fff; } .yy-cell.cand { cursor: pointer; color: #8a6d00; } .yy-cell.cand.zero { color: #b9a14a; background: #fbeeb0; font-weight: 500; }
+  .yy-cell.cand.pos { background: #ffd23a; color: #1d1d1d; font-weight: 900; box-shadow: inset 0 0 0 2px #e0902f; }
   .yy-cell.cand.sel { background: #ff9f1a; color: #fff; outline: 2px solid #c25e00; outline-offset: -2px; }
   .yy-sub-row th, .yy-sub-row td { background: #8a8d92; color: #fff; font-size: 12px; } .yy-sub-row.got td { background: #e0902f; }
   .yy-gap td { height: 6px; padding: 0; background: #3b3f46; border: none; }
@@ -424,20 +444,28 @@ function injectStyles() {
   .yy-rack { display: grid; grid-template-columns: repeat(5, 1fr); gap: 3px; background: #2a2d33; border-radius: 8px; padding: 3px; margin-bottom: 6px; }
   .yy-slot { aspect-ratio: 1; background: #1f2126; border-radius: 5px; display: flex; align-items: center; justify-content: center; }
   .yy-floor { position: relative; display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; background: radial-gradient(circle at 50% 40%, #a42a2a, #6e1414); box-shadow: inset 0 0 14px rgba(0,0,0,.45); border-radius: 10px; padding: 6px 2px; min-height: 130px; align-content: center; }
-  .yy-spot { aspect-ratio: 1; display: flex; align-items: center; justify-content: center; position: relative; }
+  .yy-spot { height: 76px; min-width: 0; display: flex; align-items: center; justify-content: center; position: relative; }
+  .yy-room .yy-spot { height: 68px; }
   .yy-dbtn { border: none; background: none; padding: 0; cursor: pointer; line-height: 0; } .yy-dbtn:disabled { cursor: default; }
   /* 立体のサイコロ：6面の立方体（preserve-3d）を、値に合わせて回す。斜めから見た角度（rotateX/Y のつけ足し）で、上と横の面も見える */
   .yy-3d { --s: 36px; position: relative; display: block; width: var(--s); height: var(--s); perspective: 340px; }
   .yy-slot .yy-3d { --s: 22px; }
+  .yy-slot { position: relative; } .yy-spot .yy-dwrap { display: flex; flex-direction: column; align-items: center; }
+  /* いまの目の数字（サイコロの下に大きく）。選んだ役に当たっているサイコロは、金色の枠と数字で光る */
+  .yy-num { display: inline-block; margin-top: 13px; min-width: 1.5em; text-align: center; font-weight: 900; font-size: 12px; line-height: 1.5; border-radius: 999px; background: rgba(0,0,0,.45); color: #fff; }
+  .yy-slot .yy-num { position: absolute; right: 1px; top: 1px; margin: 0; min-width: 1.4em; font-size: 10px; line-height: 1.4; z-index: 2; }
+  .yy-dwrap.hit .yy-3d, .yy-slot.hit .yy-3d { filter: drop-shadow(0 0 5px #ffd400) drop-shadow(0 0 3px #ffd400); }
+  .yy-dwrap.hit .yy-num, .yy-slot.hit .yy-num { background: #ffd400; color: #3a2a00; box-shadow: 0 0 8px #ffd400; }
+  .yy-slot.hit { box-shadow: 0 0 0 2px #ffd400 inset; }
   .yy-room .yy-3d { --s: 29px; } .yy-room .yy-slot .yy-3d { --s: 18px; }
-  @media (min-width: 720px) { .yy-3d, .yy-room .yy-3d { --s: 54px; } .yy-slot .yy-3d, .yy-room .yy-slot .yy-3d { --s: 34px; } }
+  @media (min-width: 720px) { .yy-3d, .yy-room .yy-3d { --s: 84px; } .yy-slot .yy-3d, .yy-room .yy-slot .yy-3d { --s: 52px; } .yy-sheet { font-size: 14px; } .yy-sheet td { width: 64px; } .yy-floor { min-height: 330px; } .yy-spot, .yy-room .yy-spot { height: 150px; } .yy-num { font-size: 15px; } .yy-play { max-width: 560px; } .yy-slot .yy-num { font-size: 13px; } }
   .yy-3d::before { content: ""; position: absolute; left: 6%; right: -8%; bottom: -10%; height: 26%; border-radius: 50%; background: radial-gradient(ellipse at center, rgba(0,0,0,.55), rgba(0,0,0,0) 70%); filter: blur(1.5px); }
-  .yy-cube { position: relative; display: block; width: 100%; height: 100%; transform-style: preserve-3d; transform: rotateX(-26deg) rotateY(-32deg) rotateZ(var(--rz, 0deg)) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg)); }
-  .yy-face { position: absolute; inset: 0; display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); box-sizing: border-box; padding: 15%; border-radius: 18%;
+  .yy-cube { position: relative; display: block; width: 100%; height: 100%; transform-style: preserve-3d; transform: rotateX(-16deg) rotateY(-20deg) rotateZ(var(--rz, 0deg)) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg)); }
+  .yy-face { position: absolute; inset: 0; display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); box-sizing: border-box; padding: 11%; border-radius: 18%;
     background: radial-gradient(circle at 30% 25%, #ffffff 0%, #f1f1f3 55%, #d4d4d9 100%); box-shadow: inset 0 0 calc(var(--s) * .12) rgba(0,0,0,.28), inset 0 calc(var(--s) * -.04) 0 rgba(0,0,0,.08); backface-visibility: hidden; }
-  .yy-face b { display: block; border-radius: 50%; margin: 14%; }
+  .yy-face b { display: block; border-radius: 50%; margin: 7%; }
   .yy-face b.on { background: radial-gradient(circle at 35% 30%, #5a5a5a, #0a0a0a 70%); box-shadow: inset 0 calc(var(--s) * .02) calc(var(--s) * .03) rgba(255,255,255,.25); }
-  .yy-face.f1 b.on { background: radial-gradient(circle at 35% 30%, #ff6b6b, #b30f0f 70%); margin: 4%; }
+  .yy-face.f1 b.on { background: radial-gradient(circle at 35% 30%, #ff6b6b, #b30f0f 70%); margin: 0; }
   .yy-face.f1 { transform: translateZ(calc(var(--s) / 2)); }
   .yy-face.f6 { transform: rotateY(180deg) translateZ(calc(var(--s) / 2)); }
   .yy-face.f3 { transform: rotateY(90deg) translateZ(calc(var(--s) / 2)); }
@@ -454,8 +482,8 @@ function injectStyles() {
   @keyframes yy-in { 0% { translate: 0 0; scale: 1; opacity: 1; } 100% { translate: calc((2 - var(--c)) * 100%) calc((1 - var(--r)) * 100%); scale: .3; opacity: 0; } }
   .yy-3d.tumble .yy-cube { animation: yy-tumble .95s cubic-bezier(.2,.75,.3,1) both; }
   @keyframes yy-tumble {
-    from { transform: rotateX(-26deg) rotateY(-32deg) rotateZ(var(--rz, 0deg)) rotateX(calc(var(--rx, 0deg) + 540deg)) rotateY(calc(var(--ry, 0deg) + 450deg)); }
-    to { transform: rotateX(-26deg) rotateY(-32deg) rotateZ(var(--rz, 0deg)) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg)); } }
+    from { transform: rotateX(-16deg) rotateY(-20deg) rotateZ(var(--rz, 0deg)) rotateX(calc(var(--rx, 0deg) + 540deg)) rotateY(calc(var(--ry, 0deg) + 450deg)); }
+    to { transform: rotateX(-16deg) rotateY(-20deg) rotateZ(var(--rz, 0deg)) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg)); } }
   /* ダイスカップ（黒い革のカップ。赤い縫い目）：サイコロを入れて振り、傾けて転がす */
   .yy-cupspot { align-items: flex-end; }
   .yy-cup { position: relative; display: block; width: 86%; height: 92%; max-width: 62px; padding: 0; border: none; background: none; cursor: pointer; transform-origin: 50% 90%; filter: drop-shadow(0 5px 4px rgba(0,0,0,.5)); }
