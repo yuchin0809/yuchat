@@ -4,8 +4,8 @@
      このファイルは、画面（3Dの消しゴム・強さ・パーツの一覧）を描いて、「買う」「付ける」を頼むだけ。
    ・ゆうワールド（yuworld.js）から renderKeshi({ root, api, esc, onBack }) で開く。
 ========================================================= */
-import { keshiStatsView } from "./yukeshi-core.js?v=20261023-keshi2";
-import { createEraserStage, SLEEVE_COLORS } from "./yukeshi3d.js?v=20261023-keshi2";
+import { keshiStatsView } from "./yukeshi-core.js?v=20261023-keshi3";
+import { createEraserStage, SLEEVE_COLORS } from "./yukeshi3d.js?v=20261023-keshi3";
 
 const SLOT_NAMES = { body: "本体", edge: "ふち", sole: "そこ", weight: "おもり" };
 const STAT_NAMES = [["m", "重さ"], ["s", "すべり"], ["b", "反発"], ["z", "大きさ"]];
@@ -45,12 +45,14 @@ function fail(code) {
 function drawShell() {
   const my = token;
   ctx.root.innerHTML = `<div class="yk2-head"><button type="button" class="yw-back" id="ykBack">← お店の一覧</button><h2>🧽 消しバト</h2><div class="yk2-coins" id="ykCoins"></div></div>
-    <p class="yk2-note">リーグ戦・2人対戦は、このあと追加します。まずは、自分だけの最強の消しゴムを作ろう！</p>
+    <button type="button" class="yk2-league-btn" id="ykLeague"><span>🏆</span><b>最強決定戦（リーグ戦）</b><em>エントリー受付中</em></button>
+    <p class="yk2-note">2人対戦は、このあと追加します。まずは、自分だけの最強の消しゴムを作ろう！</p>
     <div class="yk2-stagebox"><div class="yk2-stage" id="ykStage"><div class="yk2-fallback">🧽</div></div><div class="yk2-rating" id="ykRating"></div></div>
     <div class="yk2-card"><div class="yk2-stats" id="ykStats"></div></div>
     <div class="yk2-tabs" id="ykTabs"></div>
     <div class="yk2-card"><div class="yk2-parts" id="ykParts"></div><div id="ykAct"></div></div>`;
   $("#ykBack")?.addEventListener("click", back);
+  $("#ykLeague")?.addEventListener("click", openLeague);
   draw();
   createEraserStage($("#ykStage")).then((s) => {
     if (!s) return;
@@ -117,6 +119,71 @@ function errorMsg(code) {
   if (code === "busy" || code === "already_owned") load(token);
 }
 
+/* =========================================================
+   🏆 最強決定戦（リーグ戦）：エントリーの画面（試合・順位・賞金は、あとの段階で追加）
+   ・一度エントリーすると、毎週自動で参加扱い。月曜〜金曜の毎日、10:30・12:40・15:00 に5試合ずつ自動で対戦する予定（第1回は 10/26）。
+========================================================= */
+const DAY_LABELS = ["月", "火", "水", "木", "金"];
+const mdJa = (ms) => { const d = new Date(ms + 9 * 3600000); return `${d.getUTCMonth() + 1}月${d.getUTCDate()}日`; };
+const hmJa = (h, m) => `${h}:${String(m).padStart(2, "0")}`;
+let L = null;
+
+async function openLeague() {
+  const my = token;
+  stopKeshi(); token = my + 1; const t = token;
+  ctx.root.innerHTML = `<div class="yk2-head"><button type="button" class="yw-back" id="ylBack">← 消しゴムの改造へ</button><h2>🏆 最強決定戦</h2></div><div class="yk2-card yk2-msg">読み込み中…</div>`;
+  $("#ylBack")?.addEventListener("click", () => renderKeshi(ctx));
+  try { const r = await ctx.api("keshiLeagueState"); if (t !== token) return; L = r; drawLeague(); }
+  catch (e) { if (t !== token) return; ctx.root.querySelector(".yk2-msg").innerHTML = `<b>${ctx.esc(e && e.code === "not_published" ? "消しバトはまだ公開されていません。" : "読み込みに失敗しました。もう一度お試しください。")}</b>`; }
+}
+function sheet(title, html) {
+  const el = document.createElement("div"); el.className = "yl2-sheet";
+  el.innerHTML = `<div class="yl2-sheet-box"><h3>${ctx.esc(title)}</h3><div class="yl2-sheet-body">${html}</div><button type="button" class="yw-btn yk2-go" data-close>閉じる</button></div>`;
+  el.addEventListener("click", (e) => { if (e.target === el || e.target.hasAttribute("data-close")) el.remove(); });
+  ctx.root.appendChild(el);
+}
+function drawLeague() {
+  const w = L.week, pr = L.prizes;
+  const first = L.sets.map(([h, m]) => hmJa(h, m)).join("・");
+  const days = DAY_LABELS.map((d, i) => `<div class="yl2-day"><span>${d}</span><b>—</b></div>`).join("");
+  const matches = [1, 2, 3, 4, 5].map((n) => `<div class="yl2-match"><span>第${n}戦</span><em>—</em></div>`).join("");
+  const rows = DAY_LABELS.map((d, i) => `<div class="yl2-row"><span>${mdJa(w.days[i]).replace("月", "/").replace("日", "")}（${d}）</span><span>—</span><span>—</span></div>`).join("");
+  const entry = L.entered
+    ? `<div class="yl2-entry on"><div class="st">✅ エントリー済み</div><p>毎週、自動で参加扱いになります。参加者：${L.count}人</p><button type="button" class="yl2-quit" id="ylQuit">エントリーをやめる</button></div>`
+    : `<div class="yl2-entry"><div class="st">リーグ戦にエントリーしよう！</div><p>一度エントリーすると、毎週自動で参加扱いになります（いつでもやめられます）。参加者：${L.count}人</p><button type="button" class="yw-btn yk2-go yl2-join" id="ylJoin">エントリーする</button></div>`;
+  ctx.root.innerHTML = `<div class="yk2-head"><button type="button" class="yw-back" id="ylBack">← 消しゴムの改造へ</button></div>
+    <div class="yl2-banner"><div class="yl2-title">最強決定戦<small>〜消しバトリーグ〜</small></div>
+      <div class="yl2-btns"><button type="button" id="ylHelp">説明</button><button type="button" id="ylPrize">報酬</button></div>
+      <div class="yl2-rank">現在の順位 <b>—</b> 位</div></div>
+    <div class="yl2-period">開催期間：${mdJa(w.startMs)}〜${mdJa(w.days[4])}</div>
+    <div class="yl2-days">${days}</div>
+    <div class="yl2-soon">${L.started ? "試合の結果は、ここに表示されます。" : `第1回は <b>${mdJa(w.setsMs[0])}（月）${hmJa(...L.sets[0])}</b> からスタート！試合は自動で行われ、勝敗だけが表示されます。`}</div>
+    ${entry}
+    <div class="yl2-actions"><button type="button" id="ylPrize2">🏅 報酬</button><button type="button" id="ylRanking">👑 ランキング</button><button type="button" id="ylOrder">🧽 消しゴム変更</button></div>
+    <div class="yl2-sec">最新試合結果</div><div class="yl2-matches">${matches}</div>
+    <div class="yl2-sec">通算戦績<span>0勝 0敗</span></div><div class="yl2-table"><div class="yl2-row head"><span>日付</span><span>勝敗</span><span>順位</span></div>${rows}</div>`;
+  const help = () => sheet("最強決定戦のルール", `<ol class="yl2-rules"><li>自分の消しゴム1個で戦います。パーツを買って組み合わせて、最強の消しゴムを作ろう。</li>
+    <li>一度エントリーすると、毎週自動で参加扱いになります。</li>
+    <li>月曜〜金曜の毎日、${first} に5試合ずつ（1日15試合）、自動で対戦します。</li>
+    <li>1試合は3本勝負（2本先取）。結果だけが表示されます。強い消しゴムが有利ですが、毎回勝てるとは限りません。</li>
+    <li>対戦相手は、最初はランダム。そのあとは、勝ち負けの数が近い人になります。</li>
+    <li>月〜金の勝敗でランキングが決まり、金曜 15:10 に結果発表。</li></ol>`);
+  const prize = () => sheet("報酬", `<p>金曜 15:10 の結果発表で、ランキングの上位3名にゆうコインをお渡しします。</p><div class="yl2-prizes"><div>🥇 1位<b>${pr[0].toLocaleString("ja-JP")}</b>コイン</div><div>🥈 2位<b>${pr[1].toLocaleString("ja-JP")}</b>コイン</div><div>🥉 3位<b>${pr[2].toLocaleString("ja-JP")}</b>コイン</div></div>`);
+  $("#ylBack")?.addEventListener("click", () => renderKeshi(ctx));
+  $("#ylOrder")?.addEventListener("click", () => renderKeshi(ctx));
+  $("#ylHelp")?.addEventListener("click", help);
+  $("#ylPrize")?.addEventListener("click", prize); $("#ylPrize2")?.addEventListener("click", prize);
+  $("#ylRanking")?.addEventListener("click", () => sheet("ランキング", `<p>ランキングは、試合が始まってから表示されます。${L.started ? "" : `（第1回：${mdJa(w.setsMs[0])}（月）から）`}</p><p>いまのエントリー：${L.count}人</p>`));
+  $("#ylJoin")?.addEventListener("click", () => setEntry(true));
+  $("#ylQuit")?.addEventListener("click", () => { if (confirm("エントリーをやめますか？（あとでまたエントリーできます）")) setEntry(false); });
+}
+async function setEntry(enter) {
+  if (busy) return; busy = true;
+  try { L = await ctx.api("keshiLeagueEntry", { enter }); drawLeague(); }
+  catch (e) { alert("うまくいきませんでした（" + ((e && e.code) || "エラー") + "）。もう一度お試しください。"); }
+  finally { busy = false; }
+}
+
 function injectStyles() {
   if (stylesDone) return; stylesDone = true;
   const css = `
@@ -139,6 +206,26 @@ function injectStyles() {
   .yk2-part .nm { grid-area: nm; font-weight: 800; font-size: 14px; } .yk2-part .pr { grid-area: pr; font-weight: 800; font-size: 13px; color: #b45309; } .yk2-part.eq .pr { color: #2c8a52; } .yk2-part .fx { grid-area: fx; font-size: 12px; color: #777; }
   .yk2-desc { font-size: 12.5px; color: #555; line-height: 1.7; margin: 10px 0 8px; } .yk2-go { display: block; width: 100%; padding: 12px; font-size: 15px; } .yk2-buy { background: #e0902f; } .yw-btn:disabled { opacity: .5; cursor: default; }
   .yk2-colors { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; } .yk2-color { height: 54px; border: 3px solid transparent; border-radius: 12px; color: #fff; font-weight: 800; font-size: 11px; text-shadow: 0 1px 2px rgba(0,0,0,.6); cursor: pointer; } .yk2-color.on { border-color: #222; box-shadow: 0 0 0 2px #fff inset; }
+  .yk2-league-btn { display: flex; align-items: center; gap: 10px; width: 100%; margin: 10px 0 2px; padding: 12px 14px; border: none; border-radius: 14px; cursor: pointer; text-align: left; color: #ffe9a8; background: linear-gradient(135deg, #1b2347, #3b2a6b); box-shadow: 0 4px 14px rgba(40,20,90,.35); }
+  .yk2-league-btn span { font-size: 24px; } .yk2-league-btn b { flex: 1; font-size: 15px; } .yk2-league-btn em { font-style: normal; font-size: 11px; background: #e0902f; color: #fff; border-radius: 999px; padding: 2px 8px; }
+  .yl2-banner { position: relative; border-radius: 14px; padding: 14px 14px 12px; color: #fff; background: radial-gradient(circle at 20% 10%, #4a3a8c, #1b1840 70%); box-shadow: inset 0 0 0 2px #d4a93a, 0 4px 14px rgba(20,10,60,.4); }
+  .yl2-title { font-size: 26px; font-weight: 900; letter-spacing: 2px; color: #ffe08a; text-shadow: 0 2px 0 #7a4b00, 0 0 12px rgba(255,200,80,.5); } .yl2-title small { display: block; font-size: 12px; letter-spacing: 1px; color: #f4e7c0; text-shadow: none; margin-top: 2px; }
+  .yl2-btns { position: absolute; right: 10px; top: 10px; display: grid; gap: 6px; } .yl2-btns button { border: 2px solid #d4a93a; background: linear-gradient(#fff6d8, #f0cf6a); color: #5a3800; font-weight: 800; border-radius: 10px; padding: 5px 14px; font-size: 13px; cursor: pointer; }
+  .yl2-rank { margin-top: 10px; font-size: 13px; background: rgba(0,0,0,.45); border-radius: 999px; display: inline-block; padding: 3px 14px; } .yl2-rank b { font-size: 20px; color: #ffe08a; margin: 0 4px; }
+  .yl2-period { text-align: center; background: #14122e; color: #f3e9c7; font-size: 13px; padding: 6px; margin-top: 10px; border-radius: 8px 8px 0 0; }
+  .yl2-days { display: grid; grid-template-columns: repeat(5, 1fr); background: linear-gradient(#26224f, #14122e); border-radius: 0 0 10px 10px; }
+  .yl2-day { text-align: center; padding: 6px 2px 10px; color: #cfc8ee; border-right: 1px solid rgba(255,255,255,.08); } .yl2-day:last-child { border-right: none; } .yl2-day span { display: block; font-size: 12px; } .yl2-day b { font-size: 17px; color: #ffe08a; }
+  .yl2-soon { margin: 10px 0; font-size: 12.5px; line-height: 1.7; color: #555; background: #fff8e8; border-radius: 10px; padding: 8px 12px; }
+  .yl2-entry { background: #fff; border-radius: 14px; padding: 14px; box-shadow: 0 4px 16px rgba(0,0,0,.07); } .yl2-entry .st { font-weight: 900; font-size: 16px; } .yl2-entry p { font-size: 12.5px; color: #666; line-height: 1.7; margin: 6px 0 10px; }
+  .yl2-entry.on { background: #eefaf1; } .yl2-join { background: linear-gradient(#5fc47e, #2f9a58); font-size: 17px; }
+  .yl2-quit { border: none; background: none; color: #888; text-decoration: underline; font-size: 12px; cursor: pointer; padding: 4px 0; }
+  .yl2-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 12px 0; } .yl2-actions button { border: 2px solid #d4a93a; border-radius: 10px; background: linear-gradient(#3d3770, #1f1b46); color: #ffe9a8; font-weight: 800; font-size: 12.5px; padding: 10px 4px; cursor: pointer; }
+  .yl2-sec { display: flex; justify-content: space-between; background: #14122e; color: #f3e9c7; font-weight: 800; font-size: 13px; padding: 6px 12px; border-radius: 8px 8px 0 0; } .yl2-sec span { font-weight: 600; color: #ffe08a; }
+  .yl2-matches { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; background: #1c1938; padding: 8px; border-radius: 0 0 10px 10px; } .yl2-match { background: #0e0c22; border-radius: 8px; padding: 6px 2px; text-align: center; color: #cfc8ee; font-size: 11px; } .yl2-match em { display: block; font-style: normal; font-size: 18px; color: #6e68a0; margin-top: 4px; }
+  .yl2-table { background: #fff; border-radius: 0 0 10px 10px; overflow: hidden; margin-bottom: 14px; } .yl2-row { display: grid; grid-template-columns: 1.4fr 1fr 1fr; padding: 8px 12px; font-size: 13px; border-bottom: 1px solid #eee; color: #333; } .yl2-row.head { background: #ece7da; font-weight: 800; font-size: 12px; } .yl2-row span:nth-child(n+2) { text-align: right; color: #888; }
+  .yl2-sheet { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 18px; } .yl2-sheet-box { background: #fff; border-radius: 16px; padding: 16px; max-width: 420px; width: 100%; max-height: 80vh; overflow: auto; } .yl2-sheet-box h3 { margin: 0 0 10px; }
+  .yl2-rules { margin: 0; padding-left: 20px; font-size: 13px; line-height: 1.8; color: #444; } .yl2-sheet-body p { font-size: 13px; line-height: 1.8; color: #444; }
+  .yl2-prizes { display: grid; gap: 8px; margin: 10px 0 14px; } .yl2-prizes div { background: #fff8e8; border-radius: 10px; padding: 10px 14px; font-weight: 800; display: flex; justify-content: space-between; align-items: center; } .yl2-prizes b { font-size: 20px; color: #b45309; margin-left: auto; margin-right: 4px; }
   .yk2-stage, .yk2-parts, .yk2-tabs { touch-action: manipulation; -webkit-user-select: none; user-select: none; }
   `;
   const el = document.createElement("style"); el.id = "yk2-style"; el.textContent = css; document.head.appendChild(el);
