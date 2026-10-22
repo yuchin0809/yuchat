@@ -238,7 +238,7 @@ async function seat(machineId) {
     state.reels = [null, null, null]; state.target = null; state.stopped = [false, false, false];
     if (typeof r.serverNowMs === "number") state.clockOffset = r.serverNowMs - Date.now();
     stopLobbyTimer();
-    state.screen = "game"; render(); startFlushTimer();
+    state.screen = "game"; render(); startFlushTimer(); scheduleKakuExit();
   } catch (e) {
     if (e.code === "kaku_locked") { alert("この確変台は、いま枠をとった人だけが遊べます。"); refreshKaku(); }
     else if (e.code === "assets_low") alert(`この台は、総資産が ${Number(e.detail?.need || 0).toLocaleString()} コイン以上の人だけ遊べます。\n（いまの総資産：${Number(e.detail?.total || 0).toLocaleString()} コイン）\n総資産は、手持ちコイン＋預金＋株の評価額−借入です。`);
@@ -553,9 +553,25 @@ function updateFeverUI() {
 /* ---------- 退出・精算 ---------- */
 async function onExit() { if (!confirm("この台をやめますか？（コインは反映されます）")) return; await finishAndExit(); }
 function finishAndExitSoon() { setTimeout(() => finishAndExit(), 1200); }
-function backToLobbySoon() { clearScreenFx(); setTimeout(async () => { state.session = null; await openLobby(); }, 1200); }
+/* 確変の枠の終わりになったら、操作しなくても自動で精算して席を立つ（次の人が自分の時間に始められるように）。
+   画面を閉じていたり、スマホが眠っていた場合は、サーバーが次の人の着席のときに席を空ける */
+let kakuExitTimer = null;
+function clearKakuExit() { if (kakuExitTimer) { clearTimeout(kakuExitTimer); kakuExitTimer = null; } }
+function scheduleKakuExit() {
+  clearKakuExit();
+  if (!state.kaku || !state.kakuEnd) return;
+  kakuExitTimer = setTimeout(kakuTimeUp, Math.min(Math.max(0, state.kakuEnd - serverNow()) + 300, 2147000000));
+}
+function kakuTimeUp() {
+  kakuExitTimer = null;
+  if (state.screen !== "game" || !state.session || !state.kaku) return;
+  if (serverNow() < state.kakuEnd) { scheduleKakuExit(); return; }            // 時計のずれで早く動いたら、もう一度待つ
+  if (state.busy || state.spinning) { kakuExitTimer = setTimeout(kakuTimeUp, 400); return; }   // スピンの途中は、終わってから
+  showMsg("確変の枠が終わりました。精算して退出します。", "warn"); stopAuto(); finishAndExitSoon();
+}
+function backToLobbySoon() { clearKakuExit(); clearScreenFx(); setTimeout(async () => { state.session = null; await openLobby(); }, 1200); }
 async function finishAndExit() {
-  stopAuto(); stopFlushTimer(); stopFeverTimer(); clearScreenFx();
+  clearKakuExit(); stopAuto(); stopFlushTimer(); stopFeverTimer(); clearScreenFx();
   state.awaitingFever = false;
   const sess = state.session; state.session = null;
   if (sess) { try { const r = await api("settle", { session: sess }); if (typeof r.finalBalance === "number") state.balance = r.finalBalance; } catch (_) {} }
@@ -563,7 +579,7 @@ async function finishAndExit() {
   await openLobby();
 }
 async function settle() {
-  clearScreenFx();
+  clearKakuExit(); clearScreenFx();
   const sess = state.session; state.session = null; state.screen = "shop"; state.awaitingFever = false;
   if (sess) { try { await api("settle", { session: sess }); } catch (_) {} }
   if (typeof deps.onSettled === "function") { try { deps.onSettled(state.balance); } catch (_) {} }
@@ -939,6 +955,7 @@ function injectStyles() {
   style.textContent = css;
   document.head.appendChild(style);
   window.addEventListener("pagehide", settleBeacon);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && state.screen === "game" && state.kaku && state.kakuEnd && serverNow() >= state.kakuEnd) kakuTimeUp(); });   // 眠っていたスマホが戻ったとき、枠が終わっていたらすぐ退出
   window.addEventListener("beforeunload", settleBeacon);
   const unlock = () => { if (state.soundOn) ensureAudio(); };
   window.addEventListener("pointerdown", unlock, { passive: true });

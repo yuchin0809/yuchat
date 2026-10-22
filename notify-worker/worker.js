@@ -2406,7 +2406,7 @@ async function yuslotLobby(deps, uid) {
   await Promise.all(ids.map(async (id) => {
     const raw = await deps.firestore.getRaw(`yuslotSeats/${id}`);
     const d = raw ? decodeFields(raw.fields) : null;
-    seats[id] = d && Number(d.graceUntilMs || 0) > now ? { name: d.name || "", occupied: true, mine: d.uid === uid } : { occupied: false };
+    seats[id] = d && Number(d.graceUntilMs || 0) > now && !slotSeatStale(d, id, now) ? { name: d.name || "", occupied: true, mine: d.uid === uid } : { occupied: false };
   }));
   return { ok: true, seats, open: slotBusinessOpen(now), serverNowMs: now };
 }
@@ -2420,6 +2420,16 @@ async function slotTotalAssets(deps, data, need) {
   if (base >= need) return base;
   const market = await deps.firestore.get("market/current");
   return assetBreakdown(data, marketPricesOf(market)).total;
+}
+/* 確変台の席が「もう使えない席」か：確変の時間帯のあいだは、枠の終わり（kakuEnd）を過ぎた席・確変でない席。時間帯のあとは、kakuEnd を過ぎた席 */
+export function slotSeatStale(seat, machine, now) {
+  const kakuEnd = Number(seat?.kakuEnd) || 0;
+  const day = kakuDayId(now);
+  if (kakuMachineFor(day) === machine) {
+    const t = kakuTimes(day);
+    if (now >= t.playStart && now < t.playEnd) return !(kakuEnd > now);
+  }
+  return kakuEnd > 0 && now >= kakuEnd;
 }
 async function yuslotSeat(deps, uid, body) {
   const machine = typeof body?.machine === "string" ? body.machine : "";
@@ -2448,7 +2458,8 @@ async function yuslotSeat(deps, uid, body) {
   const seatPath = `yuslotSeats/${machine}`;
   const raw = await deps.firestore.getRaw(seatPath);
   const cur = raw ? decodeFields(raw.fields) : null;
-  if (cur && cur.uid !== uid && Number(cur.graceUntilMs || 0) > now) return { status: 409, error: "seat_taken", name: cur.name || "" };
+  // 前の人の確変の枠が終わっているのに、席が残っている（画面を閉じたまま・開いたまま）ときは、席を空けて次の人が座れる（前の人は、次に反映するとき席がなくなっている）
+  if (cur && cur.uid !== uid && Number(cur.graceUntilMs || 0) > now && !slotSeatStale(cur, machine, now)) return { status: 409, error: "seat_taken", name: cur.name || "" };
 
   const nonce = slotRandomHex();
   const seatFields = {
@@ -2456,6 +2467,7 @@ async function yuslotSeat(deps, uid, body) {
     machine: { stringValue: machine }, seatedAtMs: { integerValue: String(now) },
     graceUntilMs: { integerValue: String(now + SLOT_SEAT_GRACE_MS) }, flushedTotal: { integerValue: "0" }
   };
+  if (kakuRight && kakuRight.end) seatFields.kakuEnd = { integerValue: String(kakuRight.end) };   // 確変の枠の終わり（これを過ぎた席は、次の人が座れる）
   const write = { update: { name: deps.firestore.docName(seatPath), fields: seatFields } };
   if (raw) write.currentDocument = { updateTime: raw.updateTime }; else write.currentDocument = { exists: false };
   try {
