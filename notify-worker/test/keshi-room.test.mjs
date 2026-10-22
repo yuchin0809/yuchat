@@ -76,37 +76,41 @@ function setup({ keshi = true } = {}) {
 }
 const BASE = keshiStats(KESHI_DEFAULT_EQ);
 const BP = [keshiPhys(BASE), keshiPhys(BASE)];
-const START = [[0, KESHI_DESK.startZ], [0, -KESHI_DESK.startZ]];
+const START = [[-KESHI_DESK.startX, KESHI_DESK.startZ], [KESHI_DESK.startX, -KESHI_DESK.startZ]];
 /* 弾いている人から相手へ、まっすぐ弾く */
 const aimAt = (y) => ({ gid: y.gid, dx: y.pos[1 - y.cur][0] - y.pos[y.cur][0], dz: y.pos[1 - y.cur][1] - y.pos[y.cur][1] });
 const who = (y) => (y.order[y.cur] === "id1" ? 1 : 2);
 
 test("動きの計算：強さの数字は、足し算・かけ算で作った決まった値。初期の消しゴムどうしは同じ", () => {
-  assert.deepEqual(keshiPhys(BASE), { m: 1, a: 5, e: 0.5, r: 1.15 });
+  assert.deepEqual(keshiPhys(BASE), { m: 1, a: 6, e: 0.5, r: 0.78 });
   const heavy = keshiPhys(keshiStats({ ...KESHI_DEFAULT_EQ, body: "titan", weight: "lead" }));
   assert.ok(heavy.m > 1.5, "重い消しゴムは重い");
   const slick = keshiPhys(keshiStats({ ...KESHI_DEFAULT_EQ, sole: "air" }));
-  assert.ok(slick.a < 4, "すべる底は、止まりにくい");
+  assert.ok(slick.a < 4.6, "すべる底は、止まりにくい");
   const top = keshiPhys(keshiStats({ body: "titan", edge: "crystal", sole: "air", weight: "gold" }));
   assert.ok(top.e <= 0.95 && top.a > 1 && top.m < 3);
 });
 
-test("動きの計算：弱くはじくと相手に届かず、強くはじいてまっすぐ当てると、相手が机から落ちる", () => {
-  const go = (p) => { const v = keshiLaunchSpeed(BP[0], p); return keshiSim(BP, START, 0, 0, -v); };
-  const weak = go(0.3);
-  assert.equal(weak.first, -1); assert.deepEqual(weak.to[1], [0, -2.6], "相手は動かない"); assert.ok(weak.to[0][1] < 2.6 && weak.to[0][1] > 1);
-  const strong = go(0.9);
-  assert.equal(strong.first, 1, "相手が落ちた"); assert.deepEqual(strong.out, [false, true]);
-  assert.ok(strong.to[0][1] < 1 && Math.abs(strong.to[0][1]) < KESHI_DESK.hd, "自分は机の上に残る");
+test("動きの計算：まっすぐ弾いても当たらない。狙って弱く弾くと当たって動かすだけ、思いきり当てると机から落とせる", () => {
+  const aim = () => { const dx = START[1][0] - START[0][0], dz = START[1][1] - START[0][1], n = Math.hypot(dx, dz); return [dx / n, dz / n]; };
+  const go = (p, dir) => { const v = keshiLaunchSpeed(BP[0], p); return keshiSim(BP, START, 0, dir[0] * v, dir[1] * v); };
+  const straight = go(0.8, [0, -1]);
+  assert.deepEqual(straight.to[1], START[1], "まっすぐ弾いても、相手には当たらない（はじめの位置がずれている）"); assert.equal(straight.first, -1);
+  const weak = go(0.4, aim());
+  assert.equal(weak.first, -1); assert.deepEqual(weak.to[1], START[1], "弱いと、相手に届かない");
+  const mid = go(0.8, aim());
+  assert.equal(mid.first, -1, "狙って当てても、1回では落ちない"); assert.ok(mid.to[1][1] < START[1][1] - 0.8, "相手は動く");
+  const full = go(1, aim());
+  assert.equal(full.first, 1, "思いきり当てると、相手が落ちる"); assert.deepEqual(full.out, [false, true]);
   const self = keshiSim(BP, START, 0, 0, keshiLaunchSpeed(BP[0], 1));
   assert.equal(self.first, 0, "相手のいない向きに強く弾くと、自分が落ちる");
 });
 
 test("動きの計算：重い消しゴムは当たり負けしにくく、軽いほうが遠くへ飛ぶ。同じ入力は、いつも同じ答え。必ず止まる", () => {
   const heavy = keshiPhys(keshiStats({ ...KESHI_DEFAULT_EQ, weight: "gold" })), light = keshiPhys(BASE);
-  const hit = (a, b) => { const P = [a, b]; return keshiSim(P, START, 0, 0, -keshiLaunchSpeed(a, 0.7) * 1); };
+  const hit = (a, b) => { const P = [a, b], dx = START[1][0] - START[0][0], dz = START[1][1] - START[0][1], n = Math.hypot(dx, dz), v = keshiLaunchSpeed(a, 0.8); return keshiSim(P, START, 0, dx / n * v, dz / n * v); };
   const h2l = hit(heavy, light), l2h = hit(light, heavy);
-  assert.ok(START[1][1] - h2l.to[1][1] > START[1][1] - l2h.to[1][1], "重いほうが当てたほうが、相手は遠くへ飛ぶ");
+  assert.ok(Math.hypot(h2l.to[1][0] - START[1][0], h2l.to[1][1] - START[1][1]) > Math.hypot(l2h.to[1][0] - START[1][0], l2h.to[1][1] - START[1][1]), "重いほうが当てたほうが、相手は遠くへ飛ぶ");
   assert.deepEqual(hit(heavy, light), h2l);
   let seed = 3; const rnd = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
   for (let i = 0; i < 300; i++) {
@@ -172,8 +176,8 @@ test("2人対戦：弾く。番の人だけ・正しい形だけ。弾くと、�
   assert.equal(r.ok, true);
   y = r.keshi;
   assert.equal(y.cur, 1); assert.equal(y.flicks, 1); assert.equal(y.last.n, 1); assert.equal(y.last.by, 0); assert.deepEqual(y.last.from, START); assert.deepEqual(y.last.to, y.pos);
-  assert.ok(y.last.vz < 0 && y.last.vx === 0, "相手の向きへ弾いた"); assert.ok(y.pos[0][1] < 2.6 && y.pos[0][1] > 0, "少し前に進んだ");
-  assert.deepEqual(y.pos[1], [0, -2.6]); assert.ok(y.deadline - y.at >= 30000);
+  assert.ok(y.last.vz < 0 && y.last.vx > 0, "相手の向きへ弾いた（相手は少し右前にいる）"); assert.ok(y.pos[0][1] < 2.6 && y.pos[0][1] > 0, "少し前に進んだ");
+  assert.deepEqual(y.pos[1], START[1]); assert.ok(y.deadline - y.at >= 30000);
   assert.equal(ctx.fs.counts.getRaw - before.getRaw, 1); assert.equal(ctx.fs.counts.commit - before.commit, 1);
   assert.deepEqual(ctx.room().keshi, y);
   assert.equal((await ctx.r(1, "keshiRoomFlick", { ...aimAt(y), p: 0.4 })).error, "not_your_turn", "続けて弾けない");
@@ -185,13 +189,13 @@ test("2人対戦：3本勝負。相手を落とすと1本。先に2本取った�
   const ctx = setup();
   let y = (await ctx.r(1, "keshiRoomStart")).keshi;
   const flick = async (p) => { const r = await ctx.r(who(y), "keshiRoomFlick", { ...aimAt(y), p }); assert.equal(r.ok, true, JSON.stringify(r)); y = r.keshi; return y; };
-  y = await flick(0.9);
+  y = await flick(1);
   assert.deepEqual([y.wins, y.bout, y.starter, y.cur, y.flicks], [[1, 0], 2, 1, 1, 0], "1本目は先手の勝ち。2本目は後手から");
   assert.deepEqual(y.hist, [{ w: 0, how: "ko" }]); assert.deepEqual(y.pos, START, "机の上の位置が元に戻る");
-  assert.equal(y.last.first, 1); assert.ok(y.last.to[1][1] < -KESHI_DESK.hd, "落ちた消しゴムの最後の位置は、机の外");
-  y = await flick(0.9);
+  assert.equal(y.last.first, 1); assert.ok(Math.abs(y.last.to[1][1]) >= KESHI_DESK.hd || Math.abs(y.last.to[1][0]) >= KESHI_DESK.hw, "落ちた消しゴムの最後の位置は、机の外");
+  y = await flick(1);
   assert.deepEqual([y.wins, y.bout, y.starter, y.done], [[1, 1], 3, 0, false], "2本目は後手の勝ち");
-  y = await flick(0.9);
+  y = await flick(1);
   assert.deepEqual([y.wins, y.done, y.winner, y.reason], [[2, 1], true, 0, "finished"]);
   assert.deepEqual(y.hist.map((h) => h.w), [0, 1, 0]);
   assert.equal((await ctx.r(1, "keshiRoomFlick", { gid: y.gid, dx: 0, dz: -1, p: 0.5 })).error, "no_game");

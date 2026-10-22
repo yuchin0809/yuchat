@@ -320,3 +320,44 @@ test("リーグ戦：週の途中・金曜 15:10 以降でも、エントリー�
   const next = await ctx.act(1, { action: "keshiLeagueState" });
   assert.deepEqual([next.started, next.week.startMs, next.entered, next.count], [false, JST(2026, 11, 2, 0), true, 1], "次の週は、まだ始まっていない・エントリーは続く");
 });
+
+test("予約公開：2026-10-23 10:00 JST に、ヨット・消しバトの公開スイッチを入れる。1回だけ（そのあと非公開にしても入れ直さない）", async () => {
+  const { runScheduledPublishTick, resetScheduledPublishForTest } = await import("../worker.js");
+  resetScheduledPublishForTest();
+  const ctx = setup({ keshi: false });
+  ctx.fs.put("worldConfig/yuslot", encF({ yuslotPublished: true, yachtPublished: false, keshiPublished: false }));
+  const T = JST(2026, 10, 23, 10, 0);
+  const reads = () => ctx.fs.counts.getRaw;
+  const r0 = reads();
+  assert.equal((await runScheduledPublishTick({}, T - 60000, ctx.deps)).skipped, "outside", "10:00 の前は何もしない");
+  assert.equal((await runScheduledPublishTick({}, T + 31 * 60000, ctx.deps)).skipped, "outside", "予約の時刻から30分をすぎたら何もしない");
+  assert.equal(reads(), r0, "そのあいだは Firestore に触れない");
+  assert.equal((await ctx.act(1, { action: "keshiState" })).error, "not_published");
+  const r = await runScheduledPublishTick({}, T + 60000, ctx.deps);
+  assert.deepEqual(r.ran, ["20261023-1000"]);
+  const cfg = ctx.fs.plain("worldConfig/yuslot");
+  assert.deepEqual([cfg.yuslotPublished, cfg.yachtPublished, cfg.keshiPublished, cfg.scheduledPublish["20261023-1000"]], [true, true, true, true]);
+  assert.equal((await ctx.act(1, { action: "keshiState" })).ok, true, "公開のあとは、ふつうの人も使える（すぐ反映される）");
+  assert.equal((await ctx.act(1, { action: "config" })).yachtPublished, true);
+  /* そのあと管理者が非公開にしても、入れ直さない（メモリを忘れた別の動き方をしても、書類の印で止まる） */
+  resetScheduledPublishForTest();
+  ctx.fs.put("worldConfig/yuslot", encF({ ...ctx.fs.plain("worldConfig/yuslot"), keshiPublished: false }));
+  resetYuslotCacheForTest();
+  const again = await runScheduledPublishTick({}, T + 120000, ctx.deps);
+  assert.deepEqual(again.ran, []);
+  assert.equal(ctx.fs.plain("worldConfig/yuslot").keshiPublished, false);
+  assert.equal(ctx.fs.counts.commit, 1, "書き込みは1回だけ");
+});
+
+test("予約公開：公開の書類がまだ無くても動く。同時に2か所から動いても、1回だけ", async () => {
+  const { runScheduledPublishTick, resetScheduledPublishForTest } = await import("../worker.js");
+  resetScheduledPublishForTest();
+  const ctx = setup({ keshi: false });
+  ctx.fs.docs.delete("worldConfig/yuslot");
+  const T = JST(2026, 10, 23, 10, 5);
+  const rs = await Promise.all([runScheduledPublishTick({}, T, ctx.deps), runScheduledPublishTick({}, T, ctx.deps)]);
+  const cfg = ctx.fs.plain("worldConfig/yuslot");
+  assert.deepEqual([cfg.yachtPublished, cfg.keshiPublished], [true, true]);
+  assert.equal(rs.filter((x) => x.ran && x.ran.length).length >= 1, true);
+  assert.equal(ctx.fs.counts.commit <= 2, true);
+});

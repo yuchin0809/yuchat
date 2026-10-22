@@ -10,6 +10,7 @@ import { eraserKit } from "./yukeshi3d.js?v=20261023-keshi7";
 import { keshiSimStepper, KESHI_DESK, KESHI_DT, eraserIcon } from "./yukeshi-core.js?v=20261023-keshi7";
 
 const TOP_Y = -0.4;   // 机の上の面の高さ
+const ERASER_SCALE = 0.62;   // 机の上の消しゴムの大きさ（1人用の改造の画面の消しゴムを、この倍率に小さくする）
 const START_YAW = [Math.PI / 2, -Math.PI / 2];   // はじめは、おたがいに向かい合う
 const yawOf = (dx, dz) => Math.atan2(-dz, dx);   // 消しゴムの長い辺（x）を、(dx,dz) の向きにそろえる回転
 
@@ -50,8 +51,8 @@ export async function createBattleStage(container, { me, eq, color }) {
 
   /* 消しゴム2個（それぞれ、位置・向き・落ちる動きを自由に決められる） */
   const items = [0, 1].map((i) => {
-    const holder = new T.Group(), model = kit.build(eq[i], color[i]); holder.add(model); scene.add(holder);
-    const ring = new T.Mesh(new T.RingGeometry(1.35, 1.6, 40), new T.MeshBasicMaterial({ color: 0xffc933, transparent: true, opacity: .85, side: T.DoubleSide })); ring.rotation.x = -Math.PI / 2; ring.position.y = TOP_Y + .01; ring.visible = false; scene.add(ring);
+    const holder = new T.Group(), model = kit.build(eq[i], color[i]); model.scale.setScalar(ERASER_SCALE); model.position.y = TOP_Y * (1 - ERASER_SCALE); holder.add(model); scene.add(holder);   // 消しゴムは小さめ（机の上の面に、底がつくように下げる）
+    const ring = new T.Mesh(new T.RingGeometry(.92, 1.1, 40), new T.MeshBasicMaterial({ color: 0xffc933, transparent: true, opacity: .85, side: T.DoubleSide })); ring.rotation.x = -Math.PI / 2; ring.position.y = TOP_Y + .01; ring.visible = false; scene.add(ring);
     return { holder, model, ring };
   });
   /* 狙いの矢印（弾く向きと強さ） */
@@ -88,9 +89,9 @@ export async function createBattleStage(container, { me, eq, color }) {
   function setAim(a, yaw) {
     aim = a;
     if (!a) { arrow.visible = false; dirty = true; return; }
-    const o = poseState[me < 0 ? 0 : me], len = .7 + a.p * 3.4, n = Math.hypot(a.dx, a.dz) || 1, dx = a.dx / n, dz = a.dz / n;
+    const o = poseState[me < 0 ? 0 : me], len = .5 + a.p * 3.4, n = Math.hypot(a.dx, a.dz) || 1, dx = a.dx / n, dz = a.dz / n;
     arrow.position.set(o.x, TOP_Y + .05, o.z); arrow.rotation.y = yawOf(dx, dz);
-    shaft.scale.x = len; shaft.position.x = 1.2 + len / 2; head.position.x = 1.2 + len + .3;
+    shaft.scale.x = len; shaft.position.x = .85 + len / 2; head.position.x = .85 + len + .3;
     shaftMat.color.setHSL(.33 * (1 - Math.min(1, a.p)), .9, .5); arrow.visible = true; dirty = true;
   }
   function frame(t) {
