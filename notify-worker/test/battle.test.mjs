@@ -528,10 +528,10 @@ test("キャンセルの予定：1日1〜3回、10:00〜14:30 の完全ランダ
   assert.deepEqual([...counts].sort(), [1, 2, 3]);
 });
 
-test("キャンセルの予定：2026-10-22 だけ、通常の回のあとに追加で2回（13:20 と 14:17）", () => {
+test("キャンセルの予定：2026-10-22 だけ、通常の回のあとに追加で2回（13:20 と 14:10）", () => {
   const p = kakuCancelPlan("2026-10-22"), t0 = kakuDayStart("2026-10-22");
   assert.equal(p.n, p.times.length);
-  assert.deepEqual(p.times.slice(-2), [t0 + (13 * 60 + 20) * 60000, t0 + (14 * 60 + 17) * 60000]);
+  assert.deepEqual(p.times.slice(-2), [t0 + (13 * 60 + 20) * 60000, t0 + (14 * 60 + 10) * 60000]);
   assert.ok(p.times.slice(0, -2).every((t) => t < p.times.at(-2)) && p.n >= 3 && p.n <= 5);
   assert.equal(kakuCancelPlan("2026-10-23").n, kakuCancelPlan("2026-10-23").times.length);
 });

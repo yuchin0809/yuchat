@@ -3630,7 +3630,7 @@ async function battlePractice(deps, uid) {
 const CANCEL_FROM_MIN = 600, CANCEL_UNTIL_MIN = 870;     // 10:00〜14:30 の間のランダムな時刻
 const CANCEL_WINDOW_MS = 18500;                           // ※内緒：最初の1人のスタートから、この時間で取れなければ NPC が取る
 /* その日だけ追加で出すキャンセル（日本時間の "時:分"）。※その日の通常の時刻より後ろにすること（実行済みの回数 cxDone の数え方がずれないように） */
-const CANCEL_EXTRA = { "2026-10-22": ["13:20", "14:17"] };
+const CANCEL_EXTRA = { "2026-10-22": ["13:20", "14:10"] };
 export function kakuCancelPlan(dayId) {
   const r = kakuSeeded("cancel:" + dayId), t0 = kakuDayStart(dayId);
   const n = 1 + Math.floor(r() * 3);
