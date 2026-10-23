@@ -112,6 +112,10 @@ async function ng(n, p) { try { await assertFails(p); pass++; logs.push("PASS �
   await ng("未ログインがグループを作る", addDoc(collection(anon, "groups"), { name: "x", members: ["alice"] }));
   await ok("管理者 alice がメンバーを追加", updateDoc(doc(alice, "groups/g1"), { members: ["alice", "bob", "carol"], updatedAt: serverTimestamp() }));
   await ok("メンバー bob が既読（lastReadAt）を更新", updateDoc(doc(bob, "groups/g1"), { "lastReadAt.uidB": serverTimestamp() }));
+  // アプリが1回の書き込み（バッチ）で、メッセージの追加と同時に書く「最新メッセージ」の項目（管理者でないメンバーも、これで送れること）
+  const chatLast = (uid, name) => ({ lastMessageAt: serverTimestamp(), lastMessageSenderUid: uid, lastMessageId: "m1", lastMessageSender: name, lastMessagePreview: "こんにちは", lastMessageHasImage: false, "lastReadAt": { [uid]: serverTimestamp() } });
+  await ok("メンバー bob（管理者でない）が、メッセージ送信と同時に最新メッセージ・既読を更新", setDoc(doc(bob, "groups/g1"), chatLast("uidB", "bob"), { merge: true }));
+  await ng("メンバー bob が最新メッセージの更新と一緒にグループ名も変える", setDoc(doc(bob, "groups/g1"), { ...chatLast("uidB", "bob"), name: "勝手に変更" }, { merge: true }));
   await ng("メンバー bob がグループ名を変更（管理者だけ）", updateDoc(doc(bob, "groups/g1"), { name: "勝手に変更" }));
   await ng("非メンバー carol が g1 を更新", updateDoc(doc(carol, "groups/gDel"), { name: "x" }));
   await ok("メンバー bob が gLeave から自分だけ退出", updateDoc(doc(bob, "groups/gLeave"), { members: ["alice"], "lastReadAt.uidB": deleteField(), updatedAt: serverTimestamp() }));
