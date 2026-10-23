@@ -128,6 +128,7 @@ test("はじめて開く：初期の消しゴム（コインと表を返す）�
   assert.deepEqual(st.stats, { m: 50, s: 50, b: 50, z: 50, rating: 50 });
   assert.deepEqual(st.have, { body: ["plain"], edge: ["paper"], sole: ["bare"], weight: ["none"] });
   assert.equal(st.table.parts.body.length, 5); assert.equal(st.table.colors.length, 8);
+  assert.deepEqual(st.league, { entered: false, prizes: [1500, 1000, 300], sets: [[10, 30], [12, 40], [15, 0]], firstMs: Date.UTC(2026, 9, 25, 15, 0) });   // 第1回：2026-10-26（月）0:00 JST
   assert.equal(ctx.fs.plain("yuslotKeshi/id1"), null);
 });
 
@@ -360,4 +361,19 @@ test("予約公開：公開の書類がまだ無くても動く。同時に2か�
   assert.deepEqual([cfg.yachtPublished, cfg.keshiPublished], [true, true]);
   assert.equal(rs.filter((x) => x.ran && x.ran.length).length >= 1, true);
   assert.equal(ctx.fs.counts.commit <= 2, true);
+});
+
+test("最強決定戦の開催の状態（画面用 keshiLeaguePhase）：第1回の前・開催中・金曜15:10のあと。第1回の始まりはサーバーと同じ", async () => {
+  const { keshiLeaguePhase, keshiLeagueTag, KESHI_LEAGUE_FIRST_MS } = await import("../../yukeshi-core.js");
+  const { keshiLeagueWeek } = await import("../worker.js");
+  assert.equal(KESHI_LEAGUE_FIRST_MS, keshiLeagueWeek(JST(2026, 10, 20, 12)).startMs, "第1回の始まりは、サーバーと同じ");
+  const F = KESHI_LEAGUE_FIRST_MS;
+  let p = keshiLeaguePhase(JST(2026, 10, 23, 12), F); assert.deepEqual([p.phase, p.no, p.startMs], ["before", 1, F]); assert.equal(p.days, 3);
+  assert.equal(keshiLeagueTag(JST(2026, 10, 23, 12)), "第1回 10/26（月）スタート！");
+  p = keshiLeaguePhase(JST(2026, 10, 26, 10, 31), F); assert.deepEqual([p.phase, p.no], ["live", 1]);
+  assert.equal(keshiLeagueTag(JST(2026, 10, 28, 9)), "第1回 開催中！");
+  p = keshiLeaguePhase(JST(2026, 10, 30, 15, 9), F); assert.equal(p.phase, "live");
+  p = keshiLeaguePhase(JST(2026, 10, 30, 15, 10), F); assert.deepEqual([p.phase, p.no, p.startMs], ["between", 2, JST(2026, 11, 2, 0)]);
+  assert.equal(keshiLeagueTag(JST(2026, 10, 31, 12)), "次回 11/2（月）スタート");
+  p = keshiLeaguePhase(JST(2026, 11, 2, 0), F); assert.deepEqual([p.phase, p.no], ["live", 2]);
 });

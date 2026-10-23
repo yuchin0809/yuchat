@@ -15,8 +15,8 @@
 /* 🎟 ゆう宝くじ売り場の画面（別ファイル。Worker の lottery* アクションを呼んで表示するだけ） */
 import { renderLottery, stopLottery } from "./yulottery.js?v=20261021-lottery7";
 import { renderYacht, stopYacht } from "./yuyacht.js?v=20261023-yacht5";
-import { renderKeshi, stopKeshi } from "./yukeshi.js?v=20261023-keshi11";
-import { eraserIcon } from "./yukeshi-core.js?v=20261023-keshi11";
+import { renderKeshi, stopKeshi } from "./yukeshi.js?v=20261023-keshi12";
+import { eraserIcon, keshiLeagueTag } from "./yukeshi-core.js?v=20261023-keshi12";
 /* 🌈 確変台のパネル（台の一覧の上）。抽選・先着・通知設定。Worker の kaku* アクションを呼んで表示するだけ */
 import { kakuInit, kakuPanelHtml, kakuBind, kakuMachineInfo, startKaku, stopKaku, refreshKaku } from "./yukaku.js?v=20261023-kaku15";
 /* 🏅 会員ランクのカード（台の一覧の上）。ランクの判定・進みは Worker の rankStatus が返す */
@@ -128,7 +128,10 @@ function render() {
   if (state.screen === "loading") return renderMessage("読み込み中…", "");
   if (state.screen === "preparing") { renderMessage("🚧 現在準備中です", "このお店はまだ公開されていません。公開までもうしばらくお待ちください。"); rootEl.insertAdjacentHTML("beforeend", `<button type="button" class="yw-back" id="ywBackShop">← お店の一覧へ</button>`); $("#ywBackShop")?.addEventListener("click", () => { state.screen = "shop"; render(); }); return; }
   if (state.screen === "shop") return renderShop();
-  if (state.screen === "keshi") return renderKeshi({ root: rootEl, api, esc, openRooms: () => { if (typeof deps.openGame === "function") deps.openGame("keshi"); }, onBack: () => { state.screen = "shop"; render(); } });
+  if (state.screen === "keshi") {
+    const first = state.keshiLeagueFirst === true; state.keshiLeagueFirst = false;   // 最強決定戦の札から来たときは、リーグの画面を開く
+    return renderKeshi({ root: rootEl, api, esc, leagueFirst: first, openRooms: () => { if (typeof deps.openGame === "function") deps.openGame("keshi"); }, onBack: () => { state.screen = "shop"; render(); } });
+  }
   if (state.screen === "yacht") return renderYacht({ root: rootEl, api, esc, openRooms: () => { if (typeof deps.openGame === "function") deps.openGame("yacht"); }, onBack: () => { state.screen = "shop"; render(); } });
   if (state.screen === "lobby") return renderLobby();
   if (state.screen === "game") return renderGame();
@@ -157,6 +160,11 @@ const GAME_SHOPS = [
   { id: "shogi", icon: '<svg class="yw-shogi-svg" viewBox="0 0 64 72" aria-hidden="true"><polygon points="32,3 57,17 62,69 2,69 7,17" fill="#f0cf8c" stroke="#5e3a12" stroke-width="3" stroke-linejoin="round"/><polygon points="32,9 52,20 56,63 8,63 12,20" fill="none" stroke="#b98a45" stroke-width="1.5" stroke-linejoin="round"/><text x="32" y="50" text-anchor="middle" font-size="33" font-weight="900" font-family="serif" fill="#2b1a08">王</text></svg>', name: "将棋", cls: "yw-shogi-banner", desc: "友達と将棋で対戦。ルームを作って招待しよう。" },
   { id: "daifugo", icon: "🃏", name: "大富豪", cls: "yw-daifugo-banner", soon: true, desc: "みんなで大富豪。ただいまメンテナンス中です。" }
 ];
+/* ゆうワールドの一番上に出す、最強決定戦（消しバトのリーグ戦）の目立つ札。押すと、消しバトの最強決定戦の画面を開く */
+function leagueTop() {
+  if (!state.keshiPublished) return "";
+  return `<button type="button" class="yw-league-top" id="ywLeagueTop"><span class="yw-lt-shine" aria-hidden="true"></span><span class="yw-lt-ico">🏆</span><span class="yw-lt-body"><b>最強決定戦（消しバト）</b><small>${keshiLeagueTag(Date.now())}　上位3名にコイン！</small></span><span class="yw-lt-go">見る ▶</span></button>`;
+}
 function renderShop() {
   const blocked = !state.published && !state.isTopAdmin;
   const adminPanel = state.isTopAdmin ? `<div class="yw-admin"><span>管理者メニュー：ゆうスロの公開状態 <b>${state.published ? "公開中" : "非公開（準備中）"}</b></span>
@@ -172,6 +180,7 @@ function renderShop() {
           <div class="yw-shop-desc">${g.desc}</div></div>
       </button>`).join("");
   rootEl.innerHTML = `<div class="yw-head"><h2>🎡 ゆうワールド</h2><p>お店をえらんで遊べます。コインはゆうChat共通です。</p></div>
+    ${leagueTop()}
     ${adminPanel}
     <div class="yw-shop-grid">
       <button type="button" class="yw-shop-card${blocked ? " is-soon" : ""}" id="ywOpenSlot">
@@ -191,7 +200,7 @@ function renderShop() {
           <div class="yw-shop-desc">サイコロを振って役を作る、得点を競うゲーム。週間ランキングで1位500コイン！</div></div>
       </button>
       <button type="button" class="yw-shop-card${state.keshiPublished ? "" : " is-soon"}" id="ywOpenKeshi" ${state.keshiPublished || state.isTopAdmin ? "" : "disabled"}>
-        <div class="yw-shop-banner yw-keshi-banner"><span>${eraserIcon("yw-keshi-svg")}</span></div>
+        <div class="yw-shop-banner yw-keshi-banner"><span>${eraserIcon("yw-keshi-svg")}</span>${state.keshiPublished ? `<em class="yw-league-ribbon">🏆 最強決定戦 ${keshiLeagueTag(Date.now())}</em>` : ""}</div>
         <div class="yw-shop-body"><div class="yw-shop-name">消しバト${state.keshiPublished ? "" : " <span class=\"yw-badge\">準備中</span>"}</div>
           <div class="yw-shop-desc">パーツで自分だけの最強の消しゴムを作って、机の上で戦わせよう。</div></div>
       </button>
@@ -201,6 +210,7 @@ function renderShop() {
   rootEl.querySelectorAll("[data-game]").forEach((el) => el.addEventListener("click", () => { if (typeof deps.openGame === "function") deps.openGame(el.dataset.game); }));
   $("#ywOpenYacht")?.addEventListener("click", () => { state.screen = "yacht"; render(); });
   $("#ywOpenKeshi")?.addEventListener("click", () => { state.screen = "keshi"; render(); });
+  $("#ywLeagueTop")?.addEventListener("click", () => { state.screen = "keshi"; state.keshiLeagueFirst = true; render(); });
   $("#ywToggle")?.addEventListener("click", onTogglePublish);
   $("#ywToggleYacht")?.addEventListener("click", onToggleYacht);
   $("#ywToggleKeshi")?.addEventListener("click", onToggleKeshi);
@@ -871,7 +881,16 @@ function injectStyles() {
   .yw-shogi-banner { background: linear-gradient(135deg, #c8964b, #8a5a1f); }
   .yw-daifugo-banner { background: linear-gradient(135deg, #2d6cdf, #1b2f7a); }
   .yw-keshi-svg { width: 96px; height: 68px; filter: drop-shadow(0 3px 3px rgba(0,0,0,.3)); }
-  .yw-keshi-banner { background: linear-gradient(135deg, #2f6fe0, #7bb7ff); }
+  .yw-league-top { position: relative; overflow: hidden; display: flex; align-items: center; gap: 10px; width: 100%; margin: 0 0 12px; padding: 12px 14px; border: 2px solid #e8b84a; border-radius: 14px; cursor: pointer; text-align: left; color: #fff; background: radial-gradient(circle at 10% 0%, #5a45b0, #1b1840 75%); box-shadow: 0 4px 16px rgba(40,20,110,.4), 0 0 0 3px rgba(232,184,74,.25); font-family: inherit; animation: yw-lt-glow 2.4s ease-in-out infinite; }
+  @keyframes yw-lt-glow { 0%, 100% { box-shadow: 0 4px 16px rgba(40,20,110,.4), 0 0 0 3px rgba(232,184,74,.25); } 50% { box-shadow: 0 4px 22px rgba(120,80,255,.55), 0 0 0 6px rgba(255,214,102,.5); } }
+  .yw-lt-shine { position: absolute; top: 0; bottom: 0; width: 50px; left: -70px; background: linear-gradient(100deg, transparent, rgba(255,255,255,.35), transparent); transform: skewX(-18deg); animation: yw-lt-shine 3.6s ease-in-out infinite; pointer-events: none; } @keyframes yw-lt-shine { 0% { left: -70px; } 45%, 100% { left: 120%; } }
+  .yw-lt-ico { font-size: 34px; } .yw-lt-body { flex: 1; min-width: 0; } .yw-lt-body b { display: block; font-size: 16px; color: #ffe08a; text-shadow: 0 1px 0 #7a4b00; } .yw-lt-body small { display: block; font-size: 12px; color: #e9e4ff; margin-top: 2px; }
+  .yw-lt-go { background: linear-gradient(#ffb347, #e0701f); color: #fff; font-weight: 900; font-size: 13px; border-radius: 999px; padding: 6px 12px; box-shadow: 0 2px 0 #9a4b10; white-space: nowrap; }
+  @media (prefers-reduced-motion: reduce) { .yw-league-top, .yw-lt-shine { animation: none !important; } }
+  .yw-keshi-banner { position: relative; background: linear-gradient(135deg, #2f6fe0, #7bb7ff); }
+  .yw-league-ribbon { position: absolute; left: 0; right: 0; bottom: 0; text-align: center; font-style: normal; font-weight: 900; font-size: 12.5px; padding: 4px 6px; color: #5a3800; background: linear-gradient(90deg, #ffe9a0, #f0b92e, #ffe9a0); background-size: 200% 100%; animation: yw-ribbon 3s linear infinite; box-shadow: 0 -2px 8px rgba(0,0,0,.25); }
+  @keyframes yw-ribbon { 0% { background-position: 0 0; } 100% { background-position: 200% 0; } }
+  @media (prefers-reduced-motion: reduce) { .yw-league-ribbon { animation: none; } }
   .yw-yacht-banner { background: linear-gradient(135deg, #12b3a8, #0a5f8a); }
   .yw-shop-card.is-soon .yw-shop-banner { filter: brightness(.55) saturate(.7); }
   .yw-shop-card.is-soon .yw-shop-body { opacity: .6; }
