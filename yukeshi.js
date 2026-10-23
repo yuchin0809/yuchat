@@ -2,10 +2,10 @@
    消しバト（ゆうワールドのお店）：消しゴムの改造（第1段階）
    ・パーツの種類・値段・強さの計算・コインの引き落としは、すべて Worker（keshiState / keshiBuy / keshiEquip）が行う。
      このファイルは、画面（3Dの消しゴム・強さ・パーツの一覧）を描いて、「買う」「付ける」を頼むだけ。
-   ・ゆうワールド（yuworld.js）から renderKeshi({ root, api, esc, openRooms, onBack }) で開く。
+   ・ゆうワールド（yuworld.js）から renderKeshi({ root, api, esc, openRooms, leagueFirst, onBack }) で開く。
 ========================================================= */
-import { keshiStatsView, keshiPunchView, eraserIcon } from "./yukeshi-core.js?v=20261023-keshi11";
-import { createEraserStage, SLEEVE_COLORS } from "./yukeshi3d.js?v=20261023-keshi11";
+import { keshiStatsView, keshiPunchView, keshiLeaguePhase, eraserIcon } from "./yukeshi-core.js?v=20261023-keshi12";
+import { createEraserStage, SLEEVE_COLORS } from "./yukeshi3d.js?v=20261023-keshi12";
 
 const SLOT_NAMES = { body: "本体", edge: "ふち", sole: "そこ", weight: "おもり" };
 const STAT_NAMES = [["m", "重さ"], ["s", "すべり"], ["b", "反発"], ["z", "大きさ"]];
@@ -31,6 +31,7 @@ async function load(my) {
     if (my !== token) return;
     st = r; table = r.table; sel = { tab: "body", picks: { ...st.eq } };
     drawShell();
+    if (ctx.leagueFirst) { ctx.leagueFirst = false; openLeague(); }   // ゆうワールドの最強決定戦の札から来たときは、そのままリーグの画面を開く
   } catch (e) { if (my === token) fail(e && e.code); }
 }
 function fail(code) {
@@ -41,11 +42,32 @@ function fail(code) {
   $("#ykRetry")?.addEventListener("click", () => renderKeshi(ctx));
 }
 
+/* 🏆 最強決定戦の大きなバナー（開催の状態・賞金・エントリー済みかが、ひと目で分かる）。状態は、日付と、ショップを開いたときに受け取った情報だけで作る（追加の通信なし） */
+function leagueBanner() {
+  const lg = st.league || { entered: false, prizes: [0, 0, 0], sets: [[10, 30], [12, 40], [15, 0]], firstMs: 0 };
+  const now = Date.now(), p = keshiLeaguePhase(now, lg.firstMs || 0);
+  const md = (ms) => { const d = new Date(ms + 9 * 3600000); return `${d.getUTCMonth() + 1}/${d.getUTCDate()}`; };
+  const times = lg.sets.map(([h, m]) => `${h}:${String(m).padStart(2, "0")}`).join("・");
+  const ribbon = p.phase === "live" ? `第${p.no}回 開催中！` : `第${p.no}回 ${md(p.startMs)}（月）スタート！`;
+  const line = p.phase === "live" ? `金曜 15:10 まで、毎日 ${times} に5試合ずつ自動で対戦`
+    : p.phase === "before" ? `開幕まで あと${p.days}日。いまエントリーすると、第1回の最初から参加できます`
+    : `次の週は ${md(p.startMs)}（月）から。エントリーしておくと、毎週自動で参加できます`;
+  const pr = (lg.prizes || []).map((v, i) => `<span><i>${["🥇", "🥈", "🥉"][i]}</i>${Number(v).toLocaleString("ja-JP")}<small>コイン</small></span>`).join("");
+  return `<button type="button" class="kl-banner${p.phase === "live" ? " live" : ""}" id="ykLeague">
+    <span class="kl-shine" aria-hidden="true"></span>
+    <span class="kl-ribbon">🏆 ${ribbon}</span>
+    <span class="kl-title">最強決定戦<small>〜消しバトリーグ〜</small></span>
+    <span class="kl-line">${line}</span>
+    <span class="kl-prizes">${pr}</span>
+    <span class="kl-cta${lg.entered ? " done" : ""}">${lg.entered ? "✅ エントリー済み　順位・試合を見る ▶" : "👉 いますぐエントリーする ▶"}</span>
+  </button>`;
+}
+
 /* 画面の枠は1回だけ作る（3Dの消しゴムを作り直さないため）。パーツの一覧などは、変わるたびに中身だけ描き直す */
 function drawShell() {
   const my = token;
   ctx.root.innerHTML = `<div class="yk2-head"><button type="button" class="yw-back" id="ykBack">← お店の一覧</button><h2>${eraserIcon("ker-inline")} 消しバト</h2><div class="yk2-coins" id="ykCoins"></div></div>
-    <button type="button" class="yk2-league-btn" id="ykLeague"><span>🏆</span><b>最強決定戦（リーグ戦）</b><em>エントリー受付中</em></button>
+    ${leagueBanner()}
     <button type="button" class="yk2-league-btn yk2-vs-btn" id="ykVs"><span>🥊</span><b>2人対戦</b><em>友達と1対1</em></button>
     <button type="button" class="yk2-league-btn yk2-prac-btn" id="ykPractice"><span>🎯</span><b>試し打ち</b><em>いま選んでいる組み合わせで</em></button>
     <p class="yk2-note">パーツを買って、自分だけの最強の消しゴムを作ろう！ パーツは、いくつか選んでまとめて買えます。</p>
@@ -76,7 +98,7 @@ async function openPractice() {
   if (busy) return;
   const pl = plan(), eq = previewEq(), color = st.color, my = token;
   stopKeshi();
-  try { practice = practice || await import("./yukeshi-practice.js?v=20261023-keshi11"); }
+  try { practice = practice || await import("./yukeshi-practice.js?v=20261023-keshi12"); }
   catch (_) { alert("試し打ちを開けませんでした。通信環境をご確認のうえ、もう一度お試しください。"); drawShell(); return; }
   if (token !== my + 1) return;
   practice.renderPractice({ root: ctx.root, esc: ctx.esc, table, eq, color, title: pl.slots.length ? `選んでいるパーツ：${pl.slots.map((slot) => pl.part(slot).name).join("・")}（まだ買っていないものも試せます）` : "いま付けているパーツ", onBack: () => drawShell() });
@@ -250,6 +272,18 @@ function injectStyles() {
   .yk2-league-btn { display: flex; align-items: center; gap: 10px; width: 100%; margin: 10px 0 2px; padding: 12px 14px; border: none; border-radius: 14px; cursor: pointer; text-align: left; color: #ffe9a8; background: linear-gradient(135deg, #1b2347, #3b2a6b); box-shadow: 0 4px 14px rgba(40,20,90,.35); }
   .yk2-battle-head { margin: 10px 0 2px; padding-top: 8px; border-top: 1px dashed #d9d2b8; font-size: 12.5px; font-weight: 800; color: #14507a; } .yk2-battle-head small { display: block; font-weight: 500; color: #888; font-size: 11px; margin-top: 1px; }
   .yk2-battle .bar i { background: linear-gradient(90deg, #4aa0e0, #7a5ad6 70%, #d6409a); } .yk2-battle b { font-size: 13px; } .yk2-stat.yk2-battle { grid-template-columns: 52px 1fr 44px 38px; }
+  .kl-banner { position: relative; overflow: hidden; display: grid; gap: 4px; width: 100%; margin: 10px 0 4px; padding: 14px 14px 12px; border: 2px solid #e8b84a; border-radius: 16px; cursor: pointer; text-align: left; color: #fff; background: radial-gradient(circle at 15% 0%, #5a45b0, #1b1840 70%); box-shadow: 0 6px 20px rgba(40,20,110,.45), 0 0 0 3px rgba(232,184,74,.25); font-family: inherit; }
+  .kl-banner.live { animation: kl-glow 2.2s ease-in-out infinite; }
+  @keyframes kl-glow { 0%, 100% { box-shadow: 0 6px 20px rgba(40,20,110,.45), 0 0 0 3px rgba(232,184,74,.25); } 50% { box-shadow: 0 6px 26px rgba(120,80,255,.6), 0 0 0 6px rgba(255,214,102,.5); } }
+  .kl-shine { position: absolute; top: 0; bottom: 0; width: 60px; left: -80px; background: linear-gradient(100deg, transparent, rgba(255,255,255,.35), transparent); transform: skewX(-18deg); animation: kl-shine 3.6s ease-in-out infinite; pointer-events: none; }
+  @keyframes kl-shine { 0% { left: -80px; } 45%, 100% { left: 120%; } }
+  .kl-ribbon { justify-self: start; background: linear-gradient(#ffe9a0, #f0b92e); color: #5a3800; font-weight: 900; font-size: 12.5px; border-radius: 999px; padding: 3px 12px; box-shadow: 0 2px 0 #9a6a00; }
+  .kl-title { font-size: 28px; font-weight: 900; letter-spacing: 2px; color: #ffe08a; text-shadow: 0 2px 0 #7a4b00, 0 0 14px rgba(255,200,80,.55); line-height: 1.15; } .kl-title small { display: block; font-size: 12px; letter-spacing: 1px; color: #fff; text-shadow: none; opacity: .85; margin-top: 2px; }
+  .kl-line { font-size: 12.5px; line-height: 1.6; color: #e9e4ff; }
+  .kl-prizes { display: flex; flex-wrap: wrap; gap: 6px 10px; } .kl-prizes span { background: rgba(0,0,0,.4); border: 1px solid rgba(255,214,102,.6); border-radius: 10px; padding: 3px 10px; font-weight: 900; font-size: 16px; color: #ffe08a; } .kl-prizes i { font-style: normal; margin-right: 3px; } .kl-prizes small { font-size: 10.5px; margin-left: 2px; color: #fff; font-weight: 600; }
+  .kl-cta { margin-top: 4px; text-align: center; background: linear-gradient(#ffb347, #e0701f); color: #fff; font-weight: 900; font-size: 15px; border-radius: 12px; padding: 10px; box-shadow: 0 3px 0 #9a4b10; animation: kl-pulse 1.6s ease-in-out infinite; } .kl-cta.done { background: linear-gradient(#52c07a, #2a8a52); box-shadow: 0 3px 0 #1c6038; animation: none; }
+  @keyframes kl-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.03); } }
+  @media (prefers-reduced-motion: reduce) { .kl-banner.live, .kl-shine, .kl-cta { animation: none !important; } }
   .yk2-prac-btn { margin-top: 8px; background: linear-gradient(135deg, #5b3a1a, #a8651f); box-shadow: 0 4px 14px rgba(120,70,20,.35); } .yk2-prac-btn em { background: #14507a; }
   .yk2-sum { background: #fff8e8; border: 1px solid #f0dc9a; border-radius: 10px; padding: 8px 10px; margin: 0 0 10px; font-size: 12.5px; } .yk2-sum > b { display: block; margin-bottom: 4px; } .yk2-sum div { display: flex; justify-content: space-between; gap: 8px; padding: 2px 0; } .yk2-sum em { font-style: normal; font-weight: 800; color: #b45309; } .yk2-sum .tot { border-top: 1px dashed #d9c27a; margin-top: 4px; padding-top: 5px; font-weight: 800; }
   .yk2-resetpick { margin-top: 6px; border: none; background: none; color: #14507a; font-size: 12px; text-decoration: underline; cursor: pointer; padding: 2px 0; }

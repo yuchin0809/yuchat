@@ -15,6 +15,28 @@ export function keshiStatsView(table, eq) {
   return st;
 }
 
+/* 最強決定戦（リーグ戦）の開催の状態（日付だけで決まる。通信しない）。毎週：月曜 0:00 JST 〜 金曜 15:10 JST が開催期間。第1回は firstMs（月曜 0:00 JST）から。
+   戻り値：{ phase: "before"（まだ第1回の前）| "live"（開催中）| "between"（金曜15:10〜日曜：次は来週の月曜）, startMs（今回／次回の月曜 0:00）, endMs（金曜 15:10）, no（第何回）, days（開始まで／終わりまでの日数） } */
+/* 第1回の始まり（月曜 0:00 JST）。サーバー（worker.js の KESHI_LEAGUE_FIRST_MS）と同じ。ゆうワールドのお店の札など、サーバーから受け取る前に使う */
+export const KESHI_LEAGUE_FIRST_MS = Date.UTC(2026, 9, 25, 15, 0);
+const mdOf = (ms) => { const d = new Date(ms + 9 * 3600000); return `${d.getUTCMonth() + 1}/${d.getUTCDate()}`; };
+/* お店の札・バナーに出す短い文（開催の状態から） */
+export function keshiLeagueTag(nowMs) {
+  const p = keshiLeaguePhase(nowMs, KESHI_LEAGUE_FIRST_MS);
+  return p.phase === "live" ? `第${p.no}回 開催中！` : p.phase === "before" ? `第1回 ${mdOf(p.startMs)}（月）スタート！` : `次回 ${mdOf(p.startMs)}（月）スタート`;
+}
+export function keshiLeaguePhase(nowMs, firstMs) {
+  const DAY = 86400000, J = 9 * 3600000;
+  const day = Math.floor((nowMs + J) / DAY), dow = new Date(day * DAY).getUTCDay();
+  let mon = (day - ((dow + 6) % 7)) * DAY - J;
+  if (mon < firstMs) mon = firstMs;
+  const end = mon + 4 * DAY + 15 * 3600000 + 10 * 60000;
+  if (nowMs < mon) return { phase: "before", startMs: mon, endMs: end, no: 1, days: Math.ceil((mon - nowMs) / DAY) };
+  if (nowMs < end) return { phase: "live", startMs: mon, endMs: end, no: Math.round((mon - firstMs) / (7 * DAY)) + 1, days: Math.max(0, Math.ceil((end - nowMs) / DAY)) };
+  const next = mon + 7 * DAY;
+  return { phase: "between", startMs: next, endMs: next + 4 * DAY + 15 * 3600000 + 10 * 60000, no: Math.round((next - firstMs) / (7 * DAY)) + 1, days: Math.ceil((next - nowMs) / DAY) };
+}
+
 /* 消しゴムの絵（絵文字には消しゴムがないので、自分で描く）。cls：大きさなどを決める class */
 export const eraserIcon = (cls = "ker-svg") => `<svg class="${cls}" viewBox="0 0 100 70" aria-hidden="true"><g transform="rotate(-16 50 35)"><rect x="6" y="20" width="88" height="34" rx="8" fill="#f7f4ed" stroke="#c9c2ae" stroke-width="2"/><rect x="10" y="22" width="80" height="8" rx="4" fill="#fff" opacity=".7"/><rect x="31" y="14" width="42" height="46" rx="3" fill="#2f6fe0"/><rect x="31" y="14" width="42" height="6" fill="#fff"/><rect x="31" y="54" width="42" height="6" fill="#fff"/><text x="52" y="42" text-anchor="middle" font-size="12" font-weight="900" fill="#fff" font-family="sans-serif">消しゴム</text></g></svg>`;
 

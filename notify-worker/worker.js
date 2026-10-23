@@ -4650,7 +4650,8 @@ async function keshiState(deps, uid, body) {
   const me = await loadMyUser(deps.firestore, uid, body?.username);
   if (me.error) return me.error;
   const cur = await keshiLoad(deps, uid);
-  return { ...keshiView(cur, Number(decodeFields(me.raw.fields).coins || 0), deps.now()), table: keshiTable() };
+  /* league：ショップの「最強決定戦」の大きなバナー用（エントリー済みか・賞金・開催の始まり）。追加の読み取りはない */
+  return { ...keshiView(cur, Number(decodeFields(me.raw.fields).coins || 0), deps.now()), table: keshiTable(), league: { entered: cur.league === true, prizes: KESHI_LEAGUE_PRIZES, sets: KESHI_LEAGUE_SETS, firstMs: KESHI_LEAGUE_FIRST_MS } };
 }
 function keshiWrite(deps, uid, cur, fields) {
   const fs = deps.firestore;
