@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  LOTTERY, lotteryNextDrawMs, lotteryRoundId, lotteryEventFor, lotteryPrizeOf, lotteryTiersFor, lotteryNumberLabel, lotterySaleStartMs, lotteryPrizeNumbers, lotteryAllocate, lotteryDrawWinners,
+  LOTTERY, lotteryCfg, lotteryNextDrawMs, lotteryRoundId, lotteryEventFor, lotteryPrizeOf, lotteryTiersFor, lotteryNumberLabel, lotterySaleStartMs, lotteryPrizeNumbers, lotteryAllocate, lotteryDrawWinners,
   lotteryRunDraw, lotteryResizeRound, runLotteryTick, handleAdminAction, handleYuslotAction, resetLotteryCacheForTest
 } from "../worker.js";
 
@@ -91,14 +91,14 @@ test("抽選日時：次の金曜 14:30（JST）。ちょうどの時刻は次�
 test("毎週名前と賞金の倍率が変わり、6週に1回ビッグイベント。特別回の上書きも効く", () => {
   const ev = Array.from({ length: 12 }, (_, i) => lotteryEventFor(T + i * WEEK));
   assert.equal(new Set(ev.slice(0, 5).map((e) => e.name)).size, 5, "連続する週で名前が変わる");
-  assert.ok(ev.slice(1, 4).map((e) => e.scale).every((x, i, a) => a.indexOf(x) === i), "ふつうの週は倍率が週ごとに違う");
-  assert.ok(ev.slice(1, 5).every((e) => !e.big), "最初の回のあとの数週はふつうの週");
-  assert.deepEqual(ev.map((e) => e.big), [true, false, false, false, false, true, false, false, false, true, true, false]);
+  assert.ok(ev.slice(2, 5).map((e) => e.scale).every((x, i, a) => a.indexOf(x) === i), "ふつうの週は倍率が週ごとに違う");
+  assert.ok(ev.slice(2, 5).every((e) => !e.big), "2回目（特別回）のあとの数週はふつうの週");
+  assert.deepEqual(ev.map((e) => e.big), [true, true, false, false, false, true, false, false, false, true, true, false]);
   assert.match(ev[0].name, /グランドオープン/);
   assert.equal(lotteryPrizeOf(LOTTERY.tiers[0], ev[0].scale), 10000, "最初の回の1等は10,000");
   assert.equal(lotteryPrizeOf(LOTTERY.tiers.find((t) => t.name === "2等"), ev[0].scale), 3000, "最初の回の2等は3,000");
   assert.equal(lotteryPrizeOf(LOTTERY.tiers.find((t) => t.adjacent), ev[0].scale), 2500, "最初の回の前後賞は2,500");
-  assert.ok(ev.slice(1).filter((e) => e.big).every((e) => e.scale >= 1.5), "初回以外のビッグは賞金が大きい");
+  assert.ok(ev.slice(2).filter((e) => e.big).every((e) => e.scale >= 1.5), "初回・2回目以外のビッグは賞金が大きい");
   assert.ok(ev.filter((e) => !e.big).every((e) => e.scale <= 1), "ふつうの週は控えめ（賞金の合計が売上を超えない）");
   const nye = lotteryEventFor(Date.UTC(2026, 11, 25, 5, 30, 0));
   assert.equal(nye.big, true); assert.equal(nye.scale, 2); assert.match(nye.name, /年末/);
@@ -539,8 +539,8 @@ test("状態の取得：抽選のあと次の販売開始までは準備中（�
   resetLotteryCacheForTest();
   const stT = await handleYuslotAction(deps, "id0", { action: "lotteryStatus", username: "u0" });
   assert.equal(stT.ok, true); assert.equal(stT.event.id, "2026-10-30"); assert.equal(stT.phase, "selling");
-  assert.equal(stT.myTickets, 0); assert.deepEqual(stT.myNumbers, []); assert.equal(stT.remaining, 1500);
-  assert.equal(stT.open, true); assert.equal(stT.pool, 1500);
+  assert.equal(stT.myTickets, 0); assert.deepEqual(stT.myNumbers, []); assert.equal(stT.remaining, 2500);
+  assert.equal(stT.open, true); assert.equal(stT.pool, 2500);
   assert.equal(stT.tiers.length, 8); assert.equal(stT.tiers[0].count, 1); assert.equal(stT.tiers[1].adjacent, true);
   assert.equal(stT.event.price, LOTTERY.price);
   assert.equal(stT.limits.maxPerRound, undefined, "購入上限はない");
@@ -597,4 +597,88 @@ test("Firestore の読み書きを減らす：購入＝読み取り3回（残高
   const b2 = { ...fs.counts };
   await handleYuslotAction(deps, "uH", { action: "lotteryStatus", username: "はなこ" });
   assert.deepEqual({ get: fs.counts.get - b2.get, getRaw: fs.counts.getRaw - b2.getRaw, query: fs.counts.query - b2.query }, { get: 0, getRaw: 0, query: 0 }, "別の人が開いても読み取りなし");
+});
+
+/* ---- 2回目（10/30）：1等は同じ。2等・3等の本数と賞金を増やし、番号の数は 2,500 ---- */
+const T2 = T + WEEK;
+
+test("2回目（10/30）の設定：番号は2,500（25組）、1等は同じ、2等は3本×5,000、3等は10本×1,500。ほかの回は従来どおり1,500", () => {
+  const ev = lotteryEventFor(T2);
+  assert.equal(ev.id, "2026-10-30"); assert.equal(ev.poolSize, 2500); assert.equal(ev.big, true); assert.equal(ev.scale, 1);
+  const tier = (name) => lotteryTiersFor(ev.scale, ev).find((t) => t.name === name);
+  assert.deepEqual([tier("1等").count, tier("1等").prize], [1, 10000], "1等は初回と同じ");
+  assert.deepEqual([tier("前後賞").count, tier("前後賞").prize], [2, 2500]);
+  assert.deepEqual([tier("2等").count, tier("2等").prize], [3, 5000], "2等は本数も賞金も増える");
+  assert.deepEqual([tier("3等").count, tier("3等").prize], [10, 1500], "3等は本数も賞金も増える");
+  assert.equal(lotteryTiersFor(1, ev).reduce((s, t) => s + t.count, 0), 1 + 2 + 3 + 10 + 10 + 20 + 60 + 115);
+  const first = lotteryEventFor(T);
+  assert.equal(first.poolSize, 1500); assert.equal(lotteryTiersFor(1, first).find((t) => t.name === "2等").count, 1, "初回は従来どおり");
+  assert.deepEqual(lotteryCfg("2026-11-06"), { poolSize: LOTTERY.poolSize, tiers: LOTTERY.tiers }, "特別回でない回は既定");
+  assert.equal(lotteryEventFor(T + 2 * WEEK).poolSize, 1500);
+});
+
+test("2回目：番号の割り当て（2,500通り・連番は1組まで）と当選番号（重ならない・数がそろう）", () => {
+  const ev = lotteryEventFor(T2);
+  const rng = rngOf(3);
+  const bits = "0".repeat(2500);
+  const a = lotteryAllocate(bits, 100, "seq", rng, ev);
+  assert.equal(a.numbers.length, 100); assert.equal(Math.floor(a.numbers[0] / 100), Math.floor(a.numbers[99] / 100), "連番は同じ組");
+  const all = lotteryAllocate(bits, 2500, "random", rng, ev);
+  assert.equal(all.numbers.length, 2500); assert.equal(lotteryAllocate("1".repeat(2500), 1, "random", rng, ev).error, "sold_out");
+  const pn = lotteryPrizeNumbers(rng, ev);
+  assert.equal(pn.length, 1 + 2 + 3 + 10 + 10 + 20 + 60 + 115);
+  assert.equal(new Set(pn.map((p) => p.number)).size, pn.length, "番号は重ならない");
+  assert.ok(pn.every((p) => p.number >= 0 && p.number < 2500));
+  let high = false; for (let s = 1; s < 30 && !high; s++) high = lotteryPrizeNumbers(rngOf(s), ev).some((p) => p.number >= 1500);
+  assert.ok(high, "2,500通りのうち1,500以上の番号からも引かれる");
+  assert.equal(lotteryNumberLabel(2499), "25組099番");
+});
+
+test("2回目：全部売り切って抽選すると、2等3本・3等10本が払われる（払った合計＝賞金の合計）。購入は2,501枚目で売り切れ", async () => {
+  const users = {}; for (let i = 0; i < 25; i++) users[`u${i}`] = { uid: `id${i}`, name: `u${i}`, coins: 5000 };
+  const { fs, deps, state, buy } = setup({ now: lotterySaleStartMs(T2) + MIN, users, random: rngOf(41) });
+  for (let i = 0; i < 25; i++) { const r = await buy(`id${i}`, `u${i}`, 100, i < 12 ? "seq" : "random"); assert.equal(r.ok, true, `u${i} ${r.error}`); assert.equal(r.remaining, 2500 - (i + 1) * 100); }
+  assert.equal((await buy("id0", "u0", 1, "random")).error, "sold_out");
+  assert.equal((await buy("id0", "u0", 2501, "random")).error, "bad_count");
+  assert.equal(fs.plain("lotteryRounds/2026-10-30").soldBits.length, 2500);
+  state.now = T2;
+  const r = await lotteryRunDraw(deps, T2);
+  assert.equal(r.status, "drawn");
+  const round = fs.plain("lotteryRounds/2026-10-30");
+  assert.equal(round.tickets, 2500);
+  assert.equal(round.paid, 10000 + 2 * 2500 + 3 * 5000 + 10 * 1500 + 10 * 300 + 20 * 150 + 60 * 30 + 115 * 10, "全部売れたので賞金の合計がそのまま払われる");
+  const by = (t) => round.winners.filter((w) => w.tier === t);
+  assert.equal(by("2等").length, 3); assert.ok(by("2等").every((w) => w.amount === 5000));
+  assert.equal(by("3等").length, 10); assert.ok(by("3等").every((w) => w.amount === 1500));
+  assert.equal(by("1等")[0].amount, 10000);
+  const ann = fs.plain("announcements/lottery-2026-10-30");
+  assert.ok(ann.body.includes("2等（5,000 コイン）") && ann.body.includes("3等（1,500 コイン）") && ann.body.length <= 500 && ann.title.length <= 50);
+});
+
+test("2回目：状態の取得は2,500・等級と前回（初回）の結果は従来の等級で表示される。初回の結果は1,500のまま", async () => {
+  const { fs, deps, state, buy } = setup({ now: lotterySaleStartMs(T2) + MIN, random: rngOf(8) });
+  fs.put("lotteryRounds/2026-10-23", encF({ status: "done", name: "初回", big: true, scale: 1, drawMs: T, tickets: 3, paid: 10000, announced: true,
+    prizeNumbers: [{ tier: "1等", number: 7 }, { tier: "2等", number: 9 }], winners: [{ uid: "uT", name: "たろう", tier: "1等", number: 7, amount: 10000 }] }));
+  await buy("uT", "たろう", 5, "seq");
+  resetLotteryCacheForTest();
+  const st = await handleYuslotAction(deps, "uT", { action: "lotteryStatus", username: "たろう" });
+  assert.equal(st.pool, 2500); assert.equal(st.remaining, 2495);
+  assert.deepEqual(st.tiers.filter((t) => ["2等", "3等"].includes(t.name)).map((t) => [t.count, t.prize]), [[3, 5000], [10, 1500]]);
+  assert.deepEqual(st.last.tiers.filter((t) => ["2等", "3等"].includes(t.name)).map((t) => [t.count, t.prize]), [[1, 3000], [3, 1000]], "前回（初回）の等級は初回のまま");
+  assert.equal(st.last.myWin, 10000);
+});
+
+test("2回目：売れた番号の表が1,500文字の回（設定が変わる前に売れていた場合）は、空きをたして2,500文字にしてから買える", async () => {
+  const { fs, deps, state, buy } = setup({ now: lotterySaleStartMs(T2) + MIN, random: rngOf(12) });
+  fs.put("lotteryRounds/2026-10-30", encF({ round: "2026-10-30", name: "x", tickets: 2, sales: 20, soldBits: "11" + "0".repeat(1498) }));
+  fs.put("lotteryEntries/2026-10-30_uT", encF({ uid: "uT", name: "たろう", round: "2026-10-30", numbers: [0, 1] }));
+  const first = await buy("uT", "たろう", 1, "random");
+  assert.equal(first.ok, undefined, "付け替えが済むまでは買えない");
+  const second = await buy("uT", "たろう", 1, "random");
+  assert.equal(second.ok, true);
+  const round = fs.plain("lotteryRounds/2026-10-30");
+  assert.equal(round.soldBits.length, 2500); assert.equal(round.tickets, 3);
+  assert.deepEqual(fs.plain("lotteryEntries/2026-10-30_uT").numbers.slice(0, 2), [0, 1], "もとの番号はそのまま");
+  const r2 = await lotteryResizeRound(deps, "2026-10-30");
+  assert.equal(r2.skipped, "ok", "何度呼んでも安全");
 });
