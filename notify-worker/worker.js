@@ -2986,7 +2986,7 @@ async function lotteryAnnounce(deps, id, round) {
   const now = new Date(deps.now());
   await fs.createIfAbsent(`announcements/lottery-${id}`, {
     title: truncate(`🎟 ${round.name} 結果発表！`, 50), body: truncate(lines.join("\n"), 480),
-    createdAt: now, updatedAt: now, createdByUid: "yuuchat-lottery", createdByName: "ゆう宝くじ売り場"
+    createdAt: now, updatedAt: now, createdByUid: "yuuchat-lottery", createdByName: "ゆうくじ売り場"
   });
   try { await notifyNewAnnouncement(deps, `lottery-${id}`); }
   catch (error) { console.warn("lottery notify failed", String(error?.message || error).slice(0, 120)); }

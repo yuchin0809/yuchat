@@ -1,5 +1,5 @@
 /* =========================================================
-   🎟 ゆう宝くじ売り場の画面（yuworld.js から呼ばれる）
+   🎟 宝くじ売り場の画面（ゆうくじ売り場の中の1つ）（yuworld.js から呼ばれる）
 
    ・抽選・購入・賞金・公開/非公開の判定はすべて通知 Worker（/yuslot の lottery* アクション）が行う。
      ここは Worker が返した内容を表示して、購入ボタンを押したら Worker に頼むだけ。Firebase には直接触れない。
@@ -70,7 +70,7 @@ export function renderLottery(c) {
   active = true;
   lastBought = "";
   injectStyles();
-  ctx.root.innerHTML = `<div class="yl-head"><button type="button" class="yw-back" id="ylBack">← お店の一覧</button><h2>🎟 ゆう宝くじ売り場</h2></div><div class="yl-card yl-msg">読み込み中…</div>`;
+  ctx.root.innerHTML = `<div class="yl-head"><button type="button" class="yw-back" id="ylBack">${ctx.backLabel || "← お店の一覧"}</button><h2>🎟 宝くじ売り場</h2></div><div class="yl-card yl-msg">読み込み中…</div>`;
   $("#ylBack")?.addEventListener("click", () => { stopLottery(); ctx.onBack(); });
   return load();
 }
@@ -87,7 +87,7 @@ async function load() {
 }
 
 function renderError() {
-  ctx.root.innerHTML = `<div class="yl-head"><button type="button" class="yw-back" id="ylBack">← お店の一覧</button><h2>🎟 ゆう宝くじ売り場</h2></div>
+  ctx.root.innerHTML = `<div class="yl-head"><button type="button" class="yw-back" id="ylBack">${ctx.backLabel || "← お店の一覧"}</button><h2>🎟 宝くじ売り場</h2></div>
     <div class="yl-card yl-msg"><b>読み込みに失敗しました</b><p>通信環境をご確認のうえ、もう一度お試しください。</p><button type="button" class="yw-btn" id="ylRetry">もう一度</button></div>`;
   $("#ylBack")?.addEventListener("click", () => { stopLottery(); ctx.onBack(); });
   $("#ylRetry")?.addEventListener("click", load);
@@ -158,7 +158,7 @@ function bindAdminPreview() {
 }
 
 function draw() {
-  const head = `<div class="yl-head"><button type="button" class="yw-back" id="ylBack">← お店の一覧</button><h2>🎟 ゆう宝くじ売り場</h2></div>`;
+  const head = `<div class="yl-head"><button type="button" class="yw-back" id="ylBack">${ctx.backLabel || "← お店の一覧"}</button><h2>🎟 宝くじ売り場</h2></div>`;
   if (!st.published && !st.isTopAdmin) {
     ctx.root.innerHTML = `${head}<div class="yl-card yl-msg"><b>🚧 現在準備中です</b><p>宝くじ売り場はまだ公開されていません。公開までもうしばらくお待ちください。</p></div>`;
     $("#ylBack")?.addEventListener("click", () => { stopLottery(); ctx.onBack(); });
