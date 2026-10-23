@@ -15,8 +15,8 @@
 /* 🎟 ゆう宝くじ売り場の画面（別ファイル。Worker の lottery* アクションを呼んで表示するだけ） */
 import { renderLottery, stopLottery } from "./yulottery.js?v=20261021-lottery7";
 import { renderYacht, stopYacht } from "./yuyacht.js?v=20261023-yacht5";
-import { renderKeshi, stopKeshi } from "./yukeshi.js?v=20261023-keshi8";
-import { eraserIcon } from "./yukeshi-core.js?v=20261023-keshi8";
+import { renderKeshi, stopKeshi } from "./yukeshi.js?v=20261023-keshi9";
+import { eraserIcon } from "./yukeshi-core.js?v=20261023-keshi9";
 /* 🌈 確変台のパネル（台の一覧の上）。抽選・先着・通知設定。Worker の kaku* アクションを呼んで表示するだけ */
 import { kakuInit, kakuPanelHtml, kakuBind, kakuMachineInfo, startKaku, stopKaku, refreshKaku } from "./yukaku.js?v=20261023-kaku15";
 /* 🏅 会員ランクのカード（台の一覧の上）。ランクの判定・進みは Worker の rankStatus が返す */

@@ -6,8 +6,8 @@
    ・3Dの机と消しゴムは three.js（ヨットと同じもの）。3D が使えない端末では、対戦できない（メッセージを出す）。
 ========================================================= */
 import { load3D, three } from "./yuyacht3d.js?v=20261023-3d1";
-import { eraserKit } from "./yukeshi3d.js?v=20261023-keshi8";
-import { keshiSimStepper, KESHI_DESK, KESHI_DT, eraserIcon } from "./yukeshi-core.js?v=20261023-keshi8";
+import { eraserKit } from "./yukeshi3d.js?v=20261023-keshi9";
+import { keshiSimStepper, KESHI_DESK, KESHI_DT, eraserIcon } from "./yukeshi-core.js?v=20261023-keshi9";
 
 const TOP_Y = -0.4;   // 机の上の面の高さ
 const ERASER_SCALE = 0.57;   // 机の上の消しゴムの大きさ（1人用の改造の画面の消しゴムを、この倍率に小さくする）
@@ -202,7 +202,31 @@ function ensureShell() {
       <p class="kb-hint" id="kbHint"></p><div id="kbResult"></div></div>`;
     disposeStage();
   }
+  sizeStage();
   if (!kr.stage && !kr.stageBuilding && !kr.stageFail) buildStage();
+}
+/* 机の画面の大きさは、いっぱいまで大きく、そのうえで固定する（px で決めて、あとから勝手に変えない）。
+   ・横は、ルームの幅いっぱい。縦横の比は 5:7。ただし、高さは、画面の高さの 92% までにおさめる。
+   ・以前は「幅 100%・高さ 80vh まで」だったので、スクロールでアドレスバーが出入りする・スクロールバーが出る・下の結果の欄が増える、などで、
+     そのたびに大きさが変わっていた。いまは、画面の幅が変わったとき（向きを変えたとき）だけ、決め直す。 */
+function sizeStage() {
+  const host = $("#kbStage");
+  if (!host) return;
+  const avail = Math.floor((host.parentElement && host.parentElement.clientWidth) || host.clientWidth || 0);
+  if (avail < 100) return;   // まだ画面に出ていない：出てから決める
+  const w = Math.max(220, Math.min(avail, Math.floor(window.innerHeight * 0.92 * 5 / 7)));
+  host.style.width = w + "px"; host.style.height = Math.round(w * 7 / 5) + "px";
+  kr.sizedFor = window.innerWidth;
+  if (kr.stage) kr.stage.render();
+  if (!kr.onResize) {
+    let tm = null;
+    kr.onResize = () => {
+      clearTimeout(tm);
+      tm = setTimeout(() => { if (window.innerWidth !== kr.sizedFor && document.body.contains(kr.boardEl)) sizeStage(); }, 200);   // 高さだけの変化（アドレスバーの出入りなど）では、決め直さない
+    };
+    window.addEventListener("resize", kr.onResize);
+    window.addEventListener("orientationchange", kr.onResize);
+  }
 }
 async function buildStage() {
   kr.stageBuilding = true;
@@ -347,7 +371,7 @@ function startTimer() {
 function injectStyles() {
   if (stylesDone) return; stylesDone = true;
   const css = `
-  .kb-root, .kb-root * { -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+  .kb-root, .kb-root * { -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }   /* ダブルタップでの拡大を止める */
   .kb-card { background: #fff; border-radius: 14px; padding: 14px 16px; margin: 12px 0; box-shadow: 0 4px 16px rgba(0,0,0,.07); }
   .kb-msg { text-align: center; padding: 26px 16px; } .kb-msg p { color: #777; font-size: 12px; line-height: 1.7; margin: 8px 0 0; } .kb-ico { width: 74px; height: 52px; display: block; margin: 0 auto 6px; }
   .kb-top { display: grid; grid-template-columns: 1fr auto 1fr; gap: 6px; align-items: stretch; margin-bottom: 6px; }
@@ -358,7 +382,7 @@ function injectStyles() {
   .kb-mid { display: flex; flex-direction: column; align-items: center; justify-content: center; font-weight: 800; font-size: 13px; padding: 0 4px; } .kb-mid small { font-weight: 600; color: #888; font-size: 10.5px; }
   .kb-turn { text-align: center; background: #3b3f46; color: #fff; border-radius: 10px; padding: 8px; font-weight: 800; margin-bottom: 8px; font-size: 14px; } .kb-turn.mine { background: #e0902f; }
   .kb-timer { margin-left: 8px; font-weight: 700; font-size: 13px; } .kb-timer.warn { color: #ff6b6b; }
-  .kb-stage { position: relative; width: 100%; max-width: 560px; margin: 0 auto; aspect-ratio: 5 / 7; max-height: 80vh; border-radius: 16px; overflow: hidden; background: radial-gradient(ellipse at 50% 40%, #b9cde0 0%, #8aa3bd 60%, #6a8099 100%); box-shadow: inset 0 0 30px rgba(0,0,0,.25); touch-action: none; }
+  .kb-stage { position: relative; width: 100%; margin: 0 auto; aspect-ratio: 5 / 7; flex: none;   /* 実際の大きさは、sizeStage() が px で決める */ border-radius: 16px; overflow: hidden; background: radial-gradient(ellipse at 50% 40%, #b9cde0 0%, #8aa3bd 60%, #6a8099 100%); box-shadow: inset 0 0 30px rgba(0,0,0,.25); touch-action: none; }
   .kb-gl { position: absolute; left: 0; top: 0; touch-action: none; }
   .kb-loading { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; color: #fff; font-weight: 700; font-size: 13px; text-align: center; padding: 0 16px; }
   .kb-banner { position: absolute; left: 8%; right: 8%; top: 38%; background: rgba(20,20,28,.86); color: #fff; border-radius: 14px; padding: 14px 10px; text-align: center; font-weight: 900; font-size: 17px; line-height: 1.6; white-space: pre-line; opacity: 0; transform: scale(.85); transition: opacity .2s, transform .2s; pointer-events: none; z-index: 3; }
