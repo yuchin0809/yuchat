@@ -5,7 +5,7 @@
      ここは Worker が返した内容を表示して、購入ボタンを押したら Worker に頼むだけ。Firebase には直接触れない。
    ・毎週金曜 14:30（日本時間）に抽選。名前・賞金は毎週変わり、6週に1回ビッグイベント（Worker が決める）。
      販売は抽選の週の月曜 8:00 に始まる。抽選のあと次の販売開始までは「準備中」（前回の結果のリプレイだけ見られる）。購入上限はない。
-   ・券には番号（15組×100番＝全1,500通り）が付く。買い方は「連番」（同じ組の続き番号）か「バラ」（ランダム）。番号の割り当て・当選番号・
+   ・券には番号（1組100番。1回の番号の数はサーバーが決める。通常は15組×100番＝全1,500通り）が付く。買い方は「連番」（同じ組の続き番号）か「バラ」（ランダム）。番号の割り当て・当選番号・
      前後賞（1等の前後の番号）はすべて Worker が決める。1等は全体で1本。確率は Worker が返した値から計算して表示。
    ・結果発表は「抽選会ショー」（yulotteryshow.js）。ブラウザ内の演出だけで、Worker が確定した結果を見せる。
      14:30 に売り場を開いていれば、結果が出た瞬間に自動で始まる。あとから開いたときは、買った回（または当選した回）の結果を初めて見るとき
@@ -153,7 +153,7 @@ function draw() {
       <div class="yl-pot"><span id="ylPot">${fmt(top ? top.prize : 0)}</span><small>コイン</small></div>
       <div class="yl-carry">1枚 ${e.price} コイン ／ 全${fmt(pool)}枚（残り ${fmt(st.remaining ?? pool)} 枚）</div>
     </div>
-    <div class="yl-card"><h3>🏆 賞金</h3>${tiers}<p class="yl-sub">番号は 15組×100番（全${fmt(pool)}通り）。抽選で決まった当選番号と同じ番号の券が当たりです。1等は全体で1本だけ。「前後賞」は1等の前後の番号なので、連番で買うと1等と一緒に当たることも！7等は元返しです。</p></div>
+    <div class="yl-card"><h3>🏆 賞金</h3>${tiers}<p class="yl-sub">番号は ${Math.round(pool / 100)}組×100番（全${fmt(pool)}通り）。抽選で決まった当選番号と同じ番号の券が当たりです。1等は全体で1本だけ。「前後賞」は1等の前後の番号なので、連番で買うと1等と一緒に当たることも！7等は元返しです。</p></div>
     <div class="yl-card yl-buy">
       <div class="yl-mine">あなたの宝くじ <b>${fmt(st.myTickets)}枚</b>（購入上限なし）${st.balance == null ? "" : ` ／ 所持 💰 <span id="ylBal">${fmt(st.balance)}</span>`}</div>
       <div class="yl-modes"><button type="button" class="yl-mode ${buyMode === "seq" ? "on" : ""}" data-mode="seq">連番<small>同じ組の続き番号</small></button><button type="button" class="yl-mode ${buyMode === "random" ? "on" : ""}" data-mode="random">バラ<small>ランダムな番号</small></button></div>

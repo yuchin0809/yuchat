@@ -2766,11 +2766,30 @@ const LOTTERY_BIG_SCALE = 2;
 /* 日付を決めて特別回にする（YYYY-MM-DD ＝ 抽選の日本時間の日付） */
 const LOTTERY_OVERRIDES = {
   "2026-10-23": { name: "🎊 グランドオープン記念！ゆうミリオンジャンボ", scale: 1, big: true }, // 最初の回：1等 10,000
+  // 2回目：1等は同じ。2等・3等の本数と賞金を増やし、そのぶん番号の数を 2,500（25組）にした回（tiers・pool を持つ回は、その回だけこの設定を使う）
+  "2026-10-30": {
+    name: "🎊 ゆうミリオンジャンボ 第2弾！", scale: 1, big: true, pool: 2500,
+    tiers: [
+      { name: "1等", count: 1, prize: 10000 },
+      { name: "前後賞", count: 2, prize: 2500, adjacent: true },
+      { name: "2等", count: 3, prize: 5000 },
+      { name: "3等", count: 10, prize: 1500 },
+      { name: "4等", count: 10, prize: 300 },
+      { name: "5等", count: 20, prize: 150 },
+      { name: "6等", count: 60, prize: 30 },
+      { name: "7等", count: 115, prize: 10, fixed: true }
+    ]
+  },
   "2026-12-25": { name: "🎄年末ジャンボ宝くじ", scale: 2, big: true },
   "2027-01-01": { name: "🎍新春お年玉ジャンボ", scale: 1.5, big: true }
 };
 
 const lotteryMod = (n, m) => ((n % m) + m) % m;
+/* その回の番号の数と等級（特別回の設定があればそれ、なければ既定の LOTTERY） */
+export function lotteryCfg(roundId) {
+  const o = LOTTERY_OVERRIDES[roundId];
+  return { poolSize: o?.pool || LOTTERY.poolSize, tiers: o?.tiers || LOTTERY.tiers };
+}
 
 /* 今より後の、いちばん近い金曜 14:30（JST）の抽選時刻（ミリ秒）。ちょうどの時刻は次の回になる */
 export function lotteryNextDrawMs(nowMs) {
@@ -2797,7 +2816,7 @@ export function lotteryEventFor(drawMs) {
   else { name = LOTTERY_NAMES[lotteryMod(idx, LOTTERY_NAMES.length)]; scale = LOTTERY_SCALES[lotteryMod(idx, LOTTERY_SCALES.length)]; }
   const o = LOTTERY_OVERRIDES[id];
   if (o) { name = o.name; scale = o.scale; big = o.big === true; }
-  return { id, drawMs, saleStartMs: lotterySaleStartMs(drawMs), closeMs: drawMs - LOTTERY.closeBeforeMs, index: idx, name, scale, big, price: LOTTERY.price };
+  return { id, drawMs, saleStartMs: lotterySaleStartMs(drawMs), closeMs: drawMs - LOTTERY.closeBeforeMs, index: idx, name, scale, big, price: LOTTERY.price, ...lotteryCfg(id) };
 }
 /* 等級ごとの賞金（その回の倍率を反映。元返し等級は倍率をかけない） */
 export function lotteryPrizeOf(tier, scale) {
@@ -2806,25 +2825,25 @@ export function lotteryPrizeOf(tier, scale) {
   return v >= 100 ? Math.round(v / 10) * 10 : Math.round(v); // 100以上は10コイン単位に丸める
 }
 /* その回の等級の一覧（表示用） */
-export function lotteryTiersFor(scale) { return LOTTERY.tiers.map((t) => ({ name: t.name, count: t.count, prize: lotteryPrizeOf(t, scale), ...(t.adjacent ? { adjacent: true } : {}) })); }
+export function lotteryTiersFor(scale, cfg = LOTTERY) { return cfg.tiers.map((t) => ({ name: t.name, count: t.count, prize: lotteryPrizeOf(t, scale), ...(t.adjacent ? { adjacent: true } : {}) })); }
 /* 番号（0〜1499）の表示：01組000番〜15組099番 */
 export function lotteryNumberLabel(n) {
   return `${String(Math.floor(n / LOTTERY.perGroup) + 1).padStart(2, "0")}組${String(n % LOTTERY.perGroup).padStart(3, "0")}番`;
 }
 
 /* 当選番号を決める（純粋関数）：1等 → 前後賞（1等の前後。端は輪になってつながる）→ ほかの等級を、重ならないように引く */
-export function lotteryPrizeNumbers(random) {
-  const N = LOTTERY.poolSize, taken = new Set(), out = [];
+export function lotteryPrizeNumbers(random, cfg = LOTTERY) {
+  const N = cfg.poolSize, tiers = cfg.tiers, taken = new Set(), out = [];
   const add = (tier, number) => { taken.add(number); out.push({ tier: tier.name, number }); };
   const pick = () => {
     for (let k = 0; k < 64; k++) { const n = Math.floor(random() * N); if (!taken.has(n)) return n; }
     for (let n = 0; n < N; n++) if (!taken.has(n)) return n; // 乱数が偏っていても必ず終わる
     return 0;
   };
-  const first = LOTTERY.tiers[0];
+  const first = tiers[0];
   const top = pick(); add(first, top);
-  for (const t of LOTTERY.tiers) if (t.adjacent) { add(t, (top + N - 1) % N); add(t, (top + 1) % N); }
-  for (const t of LOTTERY.tiers) {
+  for (const t of tiers) if (t.adjacent) { add(t, (top + N - 1) % N); add(t, (top + 1) % N); }
+  for (const t of tiers) {
     if (t === first || t.adjacent) continue;
     for (let k = 0; k < t.count; k++) add(t, pick());
   }
@@ -2832,22 +2851,22 @@ export function lotteryPrizeNumbers(random) {
 }
 
 /* 当選番号の券を持っている人を探して、賞金を決める（純粋関数）。1人が複数の番号に当たることもある */
-export function lotteryDrawWinners(entries, scale, prizes) {
+export function lotteryDrawWinners(entries, scale, prizes, cfg = LOTTERY) {
   const owner = new Map();
   for (const e of entries) for (const n of e.numbers || []) owner.set(n, e);
   const winners = [];
   for (const pr of prizes) {
     const e = owner.get(pr.number);
     if (!e) continue; // 売れ残りの番号は払わない
-    winners.push({ uid: e.uid, name: e.name, tier: pr.tier, number: pr.number, amount: lotteryPrizeOf(LOTTERY.tiers.find((t) => t.name === pr.tier), scale) });
+    winners.push({ uid: e.uid, name: e.name, tier: pr.tier, number: pr.number, amount: lotteryPrizeOf(cfg.tiers.find((t) => t.name === pr.tier), scale) });
   }
   return winners;
 }
 
 /* 番号の割り当て（純粋関数）。soldBits は 1,500 文字の "0"/"1"（1＝売れた）。
    mode "seq"＝同じ組の続き番号（連番）、"random"＝空いている番号からランダム */
-export function lotteryAllocate(soldBits, count, mode, random) {
-  const N = LOTTERY.poolSize, G = LOTTERY.perGroup;
+export function lotteryAllocate(soldBits, count, mode, random, cfg = LOTTERY) {
+  const N = cfg.poolSize, G = LOTTERY.perGroup;
   const free = [];
   for (let i = 0; i < N; i++) if (soldBits[i] !== "1") free.push(i);
   if (free.length < count) return { error: "sold_out", remaining: free.length };
@@ -2877,13 +2896,19 @@ export function lotteryAllocate(soldBits, count, mode, random) {
    ・合計の枚数・買った人・コインは変わらない。売れた番号の表と、付け替える人の番号を、1回の commit（更新時刻の条件つき）で書く。
    ・すでに 1,500 文字なら何もしない（何度呼んでも安全）。1,500 枚を超えて売れていたら、何も変えずに知らせる（aborted）。 */
 export async function lotteryResizeRound(deps, roundId) {
-  const fs = deps.firestore, N = LOTTERY.poolSize;
+  const fs = deps.firestore, cfg = lotteryCfg(roundId), N = cfg.poolSize;
   for (let attempt = 0; attempt < 5; attempt++) {
     const roundRaw = await fs.getRaw(`lotteryRounds/${roundId}`);
     if (!roundRaw) return { skipped: "no_round" };
     const round = decodeFields(roundRaw.fields);
     if (typeof round.soldBits !== "string" || round.soldBits.length === N) return { skipped: "ok" };
     if (round.status === "done") return { skipped: "done" };
+    if (round.soldBits.length < N) { // 番号の数をふやした回：売れた番号の表の後ろに、空き（0）をたすだけ
+      try { await fs.commit([{ update: { name: fs.docName(`lotteryRounds/${roundId}`), fields: encodeFields({ soldBits: round.soldBits + "0".repeat(N - round.soldBits.length) }) }, updateMask: { fieldPaths: ["soldBits"] }, currentDocument: { updateTime: roundRaw.updateTime } }]); }
+      catch (error) { if (isRetryableCommitError(error)) continue; throw error; }
+      lotteryDocCache.delete(`lotteryRounds/${roundId}`);
+      return { ok: true, moved: 0, tickets: Number(round.tickets) || 0 };
+    }
     const docs = await fs.query("lotteryEntries", [["round", "EQUAL", roundId]]);
     const entries = docs.map((d) => ({ id: d.id, updateTime: d.updateTime, numbers: Array.isArray(d.data.numbers) ? d.data.numbers.filter((n) => Number.isInteger(n) && n >= 0) : [] })).filter((e) => e.numbers.length > 0);
     const total = entries.reduce((sum, e) => sum + e.numbers.length, 0);
@@ -2895,8 +2920,8 @@ export async function lotteryResizeRound(deps, roundId) {
       const keep = e.numbers.filter((n) => n < N);
       const move = e.numbers.filter((n) => n >= N).sort((a, b) => a - b);
       const consecutive = move.length > 1 && move.every((n, i) => i === 0 || n === move[i - 1] + 1);
-      let alloc = consecutive ? lotteryAllocate(bits.join(""), move.length, "seq", deps.random) : null;
-      if (!alloc || alloc.error) alloc = lotteryAllocate(bits.join(""), move.length, "random", deps.random);
+      let alloc = consecutive ? lotteryAllocate(bits.join(""), move.length, "seq", deps.random, cfg) : null;
+      if (!alloc || alloc.error) alloc = lotteryAllocate(bits.join(""), move.length, "random", deps.random, cfg);
       if (alloc.error) return { aborted: "no_room", tickets: total };
       alloc.numbers.forEach((n) => { bits[n] = "1"; });
       plan.push({ id: e.id, updateTime: e.updateTime, numbers: [...keep, ...alloc.numbers].sort((a, b) => a - b) });
@@ -2911,7 +2936,7 @@ export async function lotteryResizeRound(deps, roundId) {
   }
   return { skipped: "busy" };
 }
-const lotteryIsLegacyBits = (round) => typeof round?.soldBits === "string" && round.soldBits.length !== LOTTERY.poolSize;
+const lotteryIsLegacyBits = (round, roundId) => typeof round?.soldBits === "string" && round.soldBits.length !== lotteryCfg(roundId).poolSize;
 
 let lotteryConfigCache = { value: null, at: 0 };
 let lotteryDocCache = new Map();
@@ -2949,7 +2974,7 @@ async function lotteryAnnounce(deps, id, round) {
   const ws = Array.isArray(round.winners) ? round.winners : [];
   const nums = Array.isArray(round.prizeNumbers) ? round.prizeNumbers : [];
   const lines = [`「${round.name}」の抽選結果です！（販売 ${lotteryYen(round.tickets)} 枚）`];
-  for (const t of lotteryTiersFor(Number(round.scale) || 1)) {
+  for (const t of lotteryTiersFor(Number(round.scale) || 1, lotteryCfg(id))) {
     const w = ws.filter((x) => x.tier === t.name);
     if (t.count <= 3) { // 1等・前後賞・2等・3等は当選番号と当選者を出す
       const items = nums.filter((n) => n.tier === t.name).map((n) => { const h = w.find((x) => x.number === n.number); return `${lotteryNumberLabel(n.number)} ${h ? h.name + "さん" : "（売れ残り）"}`; });
@@ -2978,16 +3003,16 @@ export async function lotteryRunDraw(deps, drawMs) {
     if (round.announced !== true) await lotteryAnnounce(deps, ev.id, round);
     return { status: "done", id: ev.id };
   }
-  if (lotteryIsLegacyBits(round)) { // 番号の数を減らす前の回なら、抽選の前に番号を付け替える（付け替えで更新時刻が変わるので読み直す）
+  if (lotteryIsLegacyBits(round, ev.id)) { // 番号の数を変える前の回なら、抽選の前に番号を付け替える（付け替えで更新時刻が変わるので読み直す）
     await lotteryResizeRound(deps, ev.id);
     raw = await fs.getRaw(roundPath); round = decodeFields(raw.fields);
   }
   const docs = await fs.query("lotteryEntries", [["round", "EQUAL", ev.id]]);
-  const entries = docs.map((d) => ({ uid: d.data.uid, name: d.data.name, numbers: Array.isArray(d.data.numbers) ? d.data.numbers.filter((n) => Number.isInteger(n) && n >= 0 && n < LOTTERY.poolSize) : [] })).filter((e) => e.numbers.length > 0 && e.uid && e.name);
+  const entries = docs.map((d) => ({ uid: d.data.uid, name: d.data.name, numbers: Array.isArray(d.data.numbers) ? d.data.numbers.filter((n) => Number.isInteger(n) && n >= 0 && n < ev.poolSize) : [] })).filter((e) => e.numbers.length > 0 && e.uid && e.name);
   const tickets = entries.reduce((s, e) => s + e.numbers.length, 0);
   const salesCoins = tickets * ev.price;
-  const prizeNumbers = lotteryPrizeNumbers(deps.random);
-  let winners = lotteryDrawWinners(entries, ev.scale, prizeNumbers);
+  const prizeNumbers = lotteryPrizeNumbers(deps.random, ev);
+  let winners = lotteryDrawWinners(entries, ev.scale, prizeNumbers, ev);
 
   // 実在するユーザー（uid が一致）だけに払う。払えない分は払わない（持ち越しなし）
   const uidOf = new Map(entries.map((e) => [e.name, e.uid]));
@@ -3066,13 +3091,13 @@ async function lotteryStatus(deps, uid, body) {
   const prev = await lotteryCachedGet(deps, `lotteryRounds/${prevId}`, lotteryDoneTtl);
   const done = prev && prev.status === "done";
   const ws = done && Array.isArray(prev.winners) ? prev.winners : [];
-  const topTiers = new Set(LOTTERY.tiers.filter((t) => t.count <= 3).map((t) => t.name)); // 1等・前後賞・2等・3等は当選番号と当選者を表示
+  const topTiers = new Set(lotteryCfg(prevId).tiers.filter((t) => t.count <= 3).map((t) => t.name)); // 1等・前後賞・2等・3等は当選番号と当選者を表示
   const pn = done && Array.isArray(prev.prizeNumbers) ? prev.prizeNumbers : [];
   const last = done ? {
     id: prevId, name: prev.name, big: prev.big === true, drawMs: prev.drawMs, tickets: prev.tickets, paid: prev.paid,
     numbers: pn.filter((n) => topTiers.has(n.tier)).map((n) => { const h = ws.find((w) => w.number === n.number); return { tier: n.tier, number: n.number, name: h ? h.name : null }; }),
     winnerCount: ws.length,
-    tiers: lotteryTiersFor(Number(prev.scale) || 1).map((t) => ({ ...t, hit: ws.filter((w) => w.tier === t.name).length })), // 抽選会ショー用（その回の賞金と、等級ごとの当選口数）
+    tiers: lotteryTiersFor(Number(prev.scale) || 1, lotteryCfg(prevId)).map((t) => ({ ...t, hit: ws.filter((w) => w.tier === t.name).length })), // 抽選会ショー用（その回の賞金と、等級ごとの当選口数）
     myWins: ws.filter((w) => w.uid === uid).map((w) => ({ tier: w.tier, number: w.number, amount: w.amount })),
     myWin: ws.filter((w) => w.uid === uid).reduce((s, w) => s + (Number(w.amount) || 0), 0)
   } : null;
@@ -3086,7 +3111,7 @@ async function lotteryStatus(deps, uid, body) {
     deps.firestore.get(`lotteryEntries/${ev.id}_${uid}`),
     loadMyUser(deps.firestore, uid, body?.username)
   ]);
-  if (lotteryIsLegacyBits(round)) { // 番号の数を減らす前の回：番号を付け替えてから、読み直す
+  if (lotteryIsLegacyBits(round, ev.id)) { // 番号の数を変える前の回：番号を付け替えてから、読み直す
     await lotteryResizeRound(deps, ev.id).catch(() => {});
     [round, entry] = await Promise.all([lotteryCachedGet(deps, `lotteryRounds/${ev.id}`, 0), deps.firestore.get(`lotteryEntries/${ev.id}_${uid}`)]);
   }
@@ -3096,8 +3121,8 @@ async function lotteryStatus(deps, uid, body) {
     ...base,
     event: { id: ev.id, name: ev.name, big: ev.big, price: ev.price, drawMs: ev.drawMs, saleStartMs: ev.saleStartMs, closeMs: ev.closeMs, scale: ev.scale },
     open: phase === "selling",
-    tickets, pool: LOTTERY.poolSize, remaining: Math.max(0, LOTTERY.poolSize - tickets),
-    tiers: lotteryTiersFor(ev.scale),
+    tickets, pool: ev.poolSize, remaining: Math.max(0, ev.poolSize - tickets),
+    tiers: lotteryTiersFor(ev.scale, ev),
     myTickets: myNumbers.length, myNumbers,
     balance: me.error ? null : Number(decodeFields(me.raw.fields).coins || 0),
     limits: { seqMax: LOTTERY.seqMax }
@@ -3106,12 +3131,13 @@ async function lotteryStatus(deps, uid, body) {
 
 async function lotteryBuy(deps, uid, body) {
   const count = Number(body?.count);
-  if (!Number.isInteger(count) || count < 1 || count > LOTTERY.poolSize) return { status: 400, error: "bad_count" };
+  if (!Number.isInteger(count) || count < 1) return { status: 400, error: "bad_count" };
   const mode = body?.mode === "seq" ? "seq" : "random";
   const now = deps.now();
   const published = await lotteryGetPublished(deps);
   if (!published && !slotIsTopAdmin(deps, uid)) return { status: 403, error: "not_published" };
   const ev = lotteryEventFor(lotteryNextDrawMs(now));
+  if (count > ev.poolSize) return { status: 400, error: "bad_count" };
   if (now < ev.saleStartMs) return { status: 409, error: "not_started", saleStartMs: ev.saleStartMs };
   if (now >= ev.closeMs) return { status: 409, error: "sales_closed" };
   if (mode === "seq" && count > LOTTERY.seqMax) return { status: 409, error: "no_consecutive" }; // 連番は1組（100枚）まで
@@ -3129,13 +3155,13 @@ async function lotteryBuy(deps, uid, body) {
   const roundPath = `lotteryRounds/${ev.id}`;
   const roundRaw = await deps.firestore.getRaw(roundPath);
   const round = roundRaw ? decodeFields(roundRaw.fields) : {};
-  const N = LOTTERY.poolSize;
-  if (lotteryIsLegacyBits(round)) { // 番号の数を減らす前の回：先に番号を付け替える（付け替えが済むまでは買えない）
+  const N = ev.poolSize;
+  if (lotteryIsLegacyBits(round, ev.id)) { // 番号の数を変える前の回：先に番号を付け替える（付け替えが済むまでは買えない）
     const m = await lotteryResizeRound(deps, ev.id).catch(() => ({}));
     return { status: 409, error: m.ok ? "busy" : "preparing" };
   }
   const bits = typeof round.soldBits === "string" && round.soldBits.length === N ? round.soldBits : "0".repeat(N);
-  const alloc = lotteryAllocate(bits, count, mode, deps.random);
+  const alloc = lotteryAllocate(bits, count, mode, deps.random, ev);
   if (alloc.error) return { status: 409, error: alloc.error, remaining: alloc.remaining };
   const next = bits.split("");
   alloc.numbers.forEach((n) => { next[n] = "1"; });
@@ -4089,7 +4115,7 @@ async function adminLotteryRefund(deps, callerUid, uid, body) {
   const entryPath = `lotteryEntries/${ev.id}_${uid}`, roundPath = `lotteryRounds/${ev.id}`;
   for (let attempt = 0; attempt < 5; attempt++) {
     let roundRaw = await fs.getRaw(roundPath);
-    if (roundRaw && lotteryIsLegacyBits(decodeFields(roundRaw.fields))) { await lotteryResizeRound(deps, ev.id); roundRaw = await fs.getRaw(roundPath); }
+    if (roundRaw && lotteryIsLegacyBits(decodeFields(roundRaw.fields), ev.id)) { await lotteryResizeRound(deps, ev.id); roundRaw = await fs.getRaw(roundPath); }
     const entryRaw = await fs.getRaw(entryPath);
     const numbers = entryRaw ? (decodeFields(entryRaw.fields).numbers || []).filter((n) => Number.isInteger(n) && n >= 0) : [];
     if (!roundRaw || numbers.length === 0) return { ok: true, name, roundId: ev.id, roundName: ev.name, tickets: 0, refund: 0, dryRun: body?.dryRun === true };
@@ -4101,7 +4127,7 @@ async function adminLotteryRefund(deps, callerUid, uid, body) {
     if (!userRaw || userRaw.fields?.uid?.stringValue !== uid) return { status: 409, error: "user_not_found" };
     const before = readIntegerField(userRaw.fields.coins);
     if (!Number.isSafeInteger(before) || before + refund > ADMIN_COIN_BALANCE_MAX) return { status: 409, error: "invalid_balance" };
-    const bits = typeof round.soldBits === "string" ? round.soldBits.split("") : Array(LOTTERY.poolSize).fill("0");
+    const bits = typeof round.soldBits === "string" ? round.soldBits.split("") : Array(ev.poolSize).fill("0");
     numbers.forEach((n) => { if (n < bits.length) bits[n] = "0"; });
     const roundFields = { soldBits: bits.join(""), tickets: Math.max(0, (Number(round.tickets) || 0) - numbers.length), sales: Math.max(0, (Number(round.sales) || 0) - refund) };
     try {
