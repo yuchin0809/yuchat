@@ -11,7 +11,7 @@
      14:30 に売り場を開いていれば、結果が出た瞬間に自動で始まる。あとから開いたときは、買った回（または当選した回）の結果を初めて見るとき
      に1回だけ自動で流れる（見た・買ったは端末内 localStorage に保存。Firebase には保存しない）。「もう一度見る」ボタンでいつでも再生できる。
 ========================================================= */
-import { playLotteryShow, stopLotteryShow } from "./yulotteryshow.js?v=20261019-show1";
+import { playLotteryShow, stopLotteryShow } from "./yulotteryshow.js?v=20261023-show2";
 
 let ctx = null;          // { root, api, esc, sfx, onBack }
 let st = null;           // 直近の lotteryStatus
@@ -113,6 +113,50 @@ function lastCardHtml() {
       ${(st.last.myWins || []).length ? `<div class="yl-mywin">🎉 あなたの当選：${st.last.myWins.map((w) => `${esc(w.tier)} ${fmtNo(w.number)}（+${fmt(w.amount)}）`).join("、")}<br>合計 ${fmt(st.last.myWin)} コイン</div>` : ""}</div>` : "";
 }
 
+/* 等級ごとの賞金の一覧（販売中の画面と、管理者の先行公開で共通） */
+function tierRowsHtml() {
+  const esc = ctx.esc, medals = { "1等": "🥇", "前後賞": "🎀", "2等": "🥈", "3等": "🥉" };
+  const pool = st.pool || 1500;
+  const pct = (n) => { const v = (n / pool) * 100; return (v >= 1 ? String(Math.round(v * 10) / 10) : String(Math.round(v * 100) / 100)) + "%"; };
+  return (st.tiers || []).map((t) => `<div class="yl-tier"><span>${medals[t.name] || "🎖"} ${esc(t.name)}</span><span class="yl-tier-n">${t.count}本・1枚 ${pct(t.count)}</span><b>${fmt(t.prize)} <small>コイン</small></b></div>`).join("");
+}
+
+/* 管理者だけ：次の回の「仮の結果発表」（画面の中だけで作る作り物の結果。サーバーにも Firestore にも何も書かない）。
+   次の回の等級・番号の数（Worker が管理者にだけ返す st.tiers・st.pool）で、売り切れた想定の結果を作る */
+function fakePreviewLast(youWin1) {
+  const pool = st.pool || 1500, tiers = (st.tiers || []).map((t) => ({ ...t, hit: 0 }));
+  const names = ["ゆうた", "さくら", "はると", "めい", "りく", "ひなた", "そうた", "あおい", "れん", "みお", "ことは", "だいき", "ほのか", "かいと"];
+  const nm = () => names[Math.floor(Math.random() * names.length)];
+  const used = new Set();
+  const pick = () => { let n; do { n = Math.floor(Math.random() * pool); } while (used.has(n)); used.add(n); return n; };
+  const SHOWN = ["1等", "前後賞", "2等", "3等"];
+  const first = pick(), numbers = [], myWins = [];
+  for (const t of tiers) {
+    if (SHOWN.includes(t.name)) {
+      const list = t.name === "1等" ? [first] : t.adjacent ? [(first + pool - 1) % pool, (first + 1) % pool] : Array.from({ length: t.count }, pick);
+      list.forEach((n) => { used.add(n); const named = t.name === "1等" || Math.random() < 0.85; numbers.push({ tier: t.name, number: n, name: named ? nm() : null }); if (named) t.hit++; });
+    } else t.hit = Math.round(t.count * (0.4 + Math.random() * 0.5));
+  }
+  if (youWin1) {
+    const one = numbers.find((n) => n.tier === "1等"); one.name = "あなた";
+    myWins.push({ tier: "1等", number: first, amount: (tiers.find((t) => t.name === "1等") || {}).prize || 0 });
+  }
+  const paid = tiers.reduce((sum, t) => sum + t.hit * t.prize, 0);
+  return {
+    id: "preview", name: st.event?.name || "宝くじ", big: false, drawMs: 0, tickets: pool, paid, numbers,
+    winnerCount: tiers.reduce((sum, t) => sum + t.hit, 0), tiers, myWins, myWin: myWins.reduce((sum, w) => sum + w.amount, 0)
+  };
+}
+function adminPreviewHtml() {
+  return st.isTopAdmin && (st.tiers || []).length
+    ? `<div class="yw-admin"><span>🧪 管理者だけ：次の回の「結果発表」を、仮の結果で試せます（誰にも影響しません）</span><span class="yl-prevbtns"><button type="button" class="yw-btn yw-btn-sub" id="ylPreview">🎬 仮の発表を見る</button><button type="button" class="yw-btn yw-btn-sub" id="ylPreview1">👑 自分が1等の場合</button></span></div>`
+    : "";
+}
+function bindAdminPreview() {
+  $("#ylPreview")?.addEventListener("click", () => startShow(fakePreviewLast(false), true));
+  $("#ylPreview1")?.addEventListener("click", () => startShow(fakePreviewLast(true), true));
+}
+
 function draw() {
   const head = `<div class="yl-head"><button type="button" class="yw-back" id="ylBack">← お店の一覧</button><h2>🎟 ゆう宝くじ売り場</h2></div>`;
   if (!st.published && !st.isTopAdmin) {
@@ -125,7 +169,11 @@ function draw() {
       <button type="button" id="ylToggle" class="yw-btn yw-btn-sub">${st.published ? "非公開にする" : "公開する"}</button></div>` : "";
   const last = lastCardHtml();
   if (st.phase === "preparing") {
-    ctx.root.innerHTML = `${head}${admin}
+    const peek = st.adminPeek && e.name ? `<div class="yl-card yl-peek"><h3>🔒 次の回（管理者だけ先に公開中）</h3>
+        <div class="yl-name">${e.big ? "🌟 " : ""}${esc(e.name)}</div>
+        <p class="yl-sub">抽選：${fmtDraw(e.drawMs)} ／ 番号 全${fmt(st.pool)}枚（${Math.round((st.pool || 0) / 100)}組×100番）／ 1枚 ${e.price} コイン</p>${tierRowsHtml()}
+        <p class="yl-sub">ふつうの人には、販売開始（${fmtDraw(e.saleStartMs)}）まで名前も賞金も出ません。</p></div>` : "";
+    ctx.root.innerHTML = `${head}${admin}${adminPreviewHtml()}${peek}
       <div class="yl-card yl-prep"><div class="yl-prep-icon">🚧</div><b>次の宝くじは準備中です</b>
         <p>販売開始：${fmtDraw(e.saleStartMs)}（毎週月曜 8:00）<br>次の抽選：${fmtDraw(e.drawMs)}（毎週金曜 14:30）</p>
         <div class="yl-count" id="ylCount"></div>
@@ -134,16 +182,15 @@ function draw() {
     $("#ylBack")?.addEventListener("click", () => { stopLottery(); ctx.onBack(); });
     $("#ylToggle")?.addEventListener("click", togglePublished);
     $("#ylReplay")?.addEventListener("click", () => startShow(st.last));
+    bindAdminPreview();
     tick();
     return;
   }
-  const medals = { "1等": "🥇", "前後賞": "🎀", "2等": "🥈", "3等": "🥉" };
   const pool = st.pool || 1500;
-  const pct = (n) => { const v = (n / pool) * 100; return (v >= 1 ? String(Math.round(v * 10) / 10) : String(Math.round(v * 100) / 100)) + "%"; };
-  const tiers = (st.tiers || []).map((t) => `<div class="yl-tier"><span>${medals[t.name] || "🎖"} ${esc(t.name)}</span><span class="yl-tier-n">${t.count}本・1枚 ${pct(t.count)}</span><b>${fmt(t.prize)} <small>コイン</small></b></div>`).join("");
+  const tiers = tierRowsHtml();
   const top = (st.tiers || [])[0];
   const mineNums = (st.myNumbers || []).length ? `<details class="yl-nums"><summary>あなたの番号を見る（${fmt(st.myNumbers.length)}枚）</summary><p>${esc(fmtNumbers(st.myNumbers))}</p></details>` : "";
-  ctx.root.innerHTML = `${head}${admin}
+  ctx.root.innerHTML = `${head}${admin}${adminPreviewHtml()}
     <div class="yl-banner ${e.big ? "big" : ""}">
       ${e.big ? `<div class="yl-bigbadge">🌟 ビッグイベント 🌟</div>` : ""}
       <div class="yl-name">${esc(e.name)}</div>
@@ -178,6 +225,7 @@ function draw() {
     buyCount = clampBuy(buyCount); updateBuyUi(true);
   }));
   $("#ylBuy")?.addEventListener("click", buy);
+  bindAdminPreview();
   $("#ylReplay")?.addEventListener("click", () => startShow(st.last));
   updateBuyUi(true);
   tick();
@@ -293,13 +341,13 @@ function maybeReveal() {
 }
 function hasBought(id) { try { return !!localStorage.getItem("yl_bought_" + id); } catch (_) { return false; } }
 function markBought(id) { try { localStorage.setItem("yl_bought_" + id, "1"); } catch (_) { /* 何もしない */ } }
-async function startShow(l) {
+async function startShow(l, preview) {
   if (playing) return;
   playing = true;
-  try { await playLotteryShow(ctx, l, { bought: hasBought(l.id) || l.myWin > 0 }); }
+  try { await playLotteryShow(ctx, l, { bought: hasBought(l.id) || l.myWin > 0, preview: preview === true }); }
   catch (_) { /* 演出に失敗しても売り場は使える */ }
   playing = false;
-  if (active && ctx && st) load();   // 残高（賞金）を最新に（途中で売り場を離れていたら何もしない）
+  if (!preview && active && ctx && st) load();   // 残高（賞金）を最新に（途中で売り場を離れていたら何もしない）
 }
 
 const COLORS = ["#ff2d78", "#ff8a00", "#ffe14a", "#17e36a", "#17b6ff", "#b14cff", "#ffffff"];
@@ -320,6 +368,8 @@ function injectStyles() {
   if (stylesDone) return; stylesDone = true;
   const css = `
   .yl-head h2 { margin: 6px 0 4px; font-size: 20px; }
+  .yl-prevbtns { display: flex; flex-wrap: wrap; gap: 6px; }
+  .yl-peek { border: 2px dashed #b9a2ff; background: #faf7ff; }
   .yl-card { background: #fff; border-radius: 14px; padding: 14px 16px; margin: 12px 0; box-shadow: 0 4px 16px rgba(0,0,0,.07); }
   .yl-card h3 { margin: 0 0 8px; font-size: 15px; }
   .yl-msg { text-align: center; padding: 26px 16px; } .yl-msg p { color: #666; line-height: 1.8; margin: 8px 0 12px; }

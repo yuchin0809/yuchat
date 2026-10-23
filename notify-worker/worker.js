@@ -2784,6 +2784,7 @@ const LOTTERY_OVERRIDES = {
   "2027-01-01": { name: "🎍新春お年玉ジャンボ", scale: 1.5, big: true }
 };
 
+const LOTTERY_SHOWN_TIERS = ["1等", "前後賞", "2等", "3等"]; // 抽選会ショーで、当選番号と当選者を1つずつ見せる等級
 const lotteryMod = (n, m) => ((n % m) + m) % m;
 /* その回の番号の数と等級（特別回の設定があればそれ、なければ既定の LOTTERY） */
 export function lotteryCfg(roundId) {
@@ -3091,7 +3092,7 @@ async function lotteryStatus(deps, uid, body) {
   const prev = await lotteryCachedGet(deps, `lotteryRounds/${prevId}`, lotteryDoneTtl);
   const done = prev && prev.status === "done";
   const ws = done && Array.isArray(prev.winners) ? prev.winners : [];
-  const topTiers = new Set(lotteryCfg(prevId).tiers.filter((t) => t.count <= 3).map((t) => t.name)); // 1等・前後賞・2等・3等は当選番号と当選者を表示
+  const topTiers = new Set(lotteryCfg(prevId).tiers.filter((t) => LOTTERY_SHOWN_TIERS.includes(t.name)).map((t) => t.name)); // 1等・前後賞・2等・3等は当選番号と当選者を表示（本数が多い回も）
   const pn = done && Array.isArray(prev.prizeNumbers) ? prev.prizeNumbers : [];
   const last = done ? {
     id: prevId, name: prev.name, big: prev.big === true, drawMs: prev.drawMs, tickets: prev.tickets, paid: prev.paid,
@@ -3104,7 +3105,9 @@ async function lotteryStatus(deps, uid, body) {
   const base = { ok: true, published, isTopAdmin: admin, serverNowMs: now, phase, last, prev: { id: prevId, drawMs: drawMs - LOTTERY_WEEK_MS } }; // prev＝前回の回（結果の集計待ちかどうかの判定用）
   if (phase === "preparing") {
     // 次の回の販売が始まるまでは「準備中」。名前・賞金は出さず、自分の番号や残高も読まない（読み取りなし）
-    return { ...base, open: false, event: { id: ev.id, drawMs: ev.drawMs, saleStartMs: ev.saleStartMs, closeMs: ev.closeMs, price: ev.price } };
+    // 管理者だけは、準備中でも次の回の名前・賞金・番号の数を先に見られる（抽選会ショーの試しにも使う）。読み取りは増えない
+    const peek = admin ? { name: ev.name, big: ev.big, scale: ev.scale } : {};
+    return { ...base, open: false, event: { id: ev.id, drawMs: ev.drawMs, saleStartMs: ev.saleStartMs, closeMs: ev.closeMs, price: ev.price, ...peek }, ...(admin ? { adminPeek: true, pool: ev.poolSize, tiers: lotteryTiersFor(ev.scale, ev) } : {}) };
   }
   let [round, entry, me] = await Promise.all([
     lotteryCachedGet(deps, `lotteryRounds/${ev.id}`, 30000),

@@ -682,3 +682,25 @@ test("2回目：売れた番号の表が1,500文字の回（設定が変わる�
   const r2 = await lotteryResizeRound(deps, "2026-10-30");
   assert.equal(r2.skipped, "ok", "何度呼んでも安全");
 });
+
+test("管理者だけは、準備中でも次の回の名前・賞金・番号の数を先に見られる。ふつうの人には出さない。3等10本の回も、3等の当選番号を1つずつ見せる", async () => {
+  const { fs, deps, state, buy } = setup({ random: rngOf(21) });
+  fs.put("users/かんりしゃ", encF({ uid: ADMIN, name: "かんりしゃ", coins: 500 }));
+  state.now = T + 3600000; // 初回の抽選のあと、販売開始前（準備中）
+  resetLotteryCacheForTest();
+  const adm = await handleYuslotAction(deps, ADMIN, { action: "lotteryStatus", username: "かんりしゃ" });
+  assert.equal(adm.phase, "preparing"); assert.equal(adm.open, false); assert.equal(adm.adminPeek, true);
+  assert.equal(adm.event.name, lotteryEventFor(T2).name); assert.equal(adm.pool, 2500);
+  assert.deepEqual(adm.tiers.filter((t) => ["2等", "3等"].includes(t.name)).map((t) => [t.count, t.prize]), [[3, 5000], [10, 1500]]);
+  assert.equal(adm.myNumbers, undefined, "準備中は自分の番号・残高は読まない");
+  const usr = await handleYuslotAction(deps, "uT", { action: "lotteryStatus", username: "たろう" });
+  assert.equal(usr.adminPeek, undefined); assert.equal(usr.event.name, undefined); assert.equal(usr.tiers, undefined); assert.equal(usr.pool, undefined);
+  // 3等10本の回（10/30）が終わったあとの前回の結果：3等の当選番号も、1つずつ入っている
+  const pn = [{ tier: "1等", number: 1 }, { tier: "前後賞", number: 0 }, { tier: "前後賞", number: 2 }, { tier: "2等", number: 5 }, { tier: "2等", number: 6 }, { tier: "2等", number: 7 },
+    ...Array.from({ length: 10 }, (_, i) => ({ tier: "3等", number: 100 + i })), { tier: "4等", number: 300 }];
+  fs.put("lotteryRounds/2026-10-30", encF({ status: "done", name: "x", scale: 1, big: true, drawMs: T2, tickets: 1, paid: 0, announced: true, prizeNumbers: pn, winners: [] }));
+  state.now = T2 + 3600000; resetLotteryCacheForTest();
+  const after = await handleYuslotAction(deps, "uT", { action: "lotteryStatus", username: "たろう" });
+  assert.equal(after.last.numbers.filter((n) => n.tier === "3等").length, 10);
+  assert.equal(after.last.numbers.filter((n) => n.tier === "4等").length, 0, "4等以下は1つずつは出さない");
+});
