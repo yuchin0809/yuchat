@@ -143,7 +143,7 @@ function fakePreviewLast(youWin1) {
   }
   const paid = tiers.reduce((sum, t) => sum + t.hit * t.prize, 0);
   return {
-    id: "preview", name: `${st.event?.name || "宝くじ"}（仮の結果）`, big: false, drawMs: 0, tickets: pool, paid, numbers,
+    id: "preview", name: st.event?.name || "宝くじ", big: false, drawMs: 0, tickets: pool, paid, numbers,
     winnerCount: tiers.reduce((sum, t) => sum + t.hit, 0), tiers, myWins, myWin: myWins.reduce((sum, w) => sum + w.amount, 0)
   };
 }

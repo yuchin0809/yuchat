@@ -231,7 +231,7 @@ export function playLotteryShow(ctx, last, opts = {}) {
       // 全部止まった！
       mask.classList.remove("tense"); mask.classList.add("boom", "gold", "shake");
       lights.classList.add("fast", "mega");
-      flash(); confetti(130); fireworks(5); coinRain(26); fanfare(true);
+      flash(); confetti(130); fireworks(5); coinRain(14); fanfare(true);
       cutin("👑 1等 当選番号！", 2800);
       setTimeout(() => mask.classList.remove("shake"), 1000 / speed);
       await sleep(3000);
@@ -245,7 +245,7 @@ export function playLotteryShow(ctx, last, opts = {}) {
       cell.querySelector(".yls-who.suspense")?.remove();
       mask.classList.add("shake");
       cell.insertAdjacentHTML("beforeend", `<div class="yls-winner"><span class="crown">👑</span><span class="nm">${esc(it.name)} さん</span><span class="sub">おめでとう！</span></div>`);
-      flash(); confetti(170); fireworks(8); coinRain(38); fanfare(true);
+      flash(); confetti(170); fireworks(8); coinRain(18); fanfare(true);
       cutin(`🎉 ${esc(it.name)} さん 1等 おめでとう！ 🎉`, 3200);
       setTimeout(() => mask.classList.remove("shake"), 1000 / speed);
       await sleep(5600);
@@ -277,7 +277,7 @@ export function playLotteryShow(ctx, last, opts = {}) {
           <div class="yls-mywins">${wins.map((w) => `<div class="yls-mywin${w.tier === "1等" ? " top" : ""}"><b>${esc(w.tier)}</b><span>${fmtNo(w.number)}</span><em>+${fmt(w.amount)}</em></div>`).join("")}</div>
           <div class="yls-total">合計 <span id="ylsTotal">0</span> <small>コイン</small></div><div class="yls-hint">賞金はもう あなたのコインに入っています。</div>`, "pop");
         flash(); confetti(mega ? 160 : 70);
-        if (mega) { mask.classList.add("gold", "boom"); lights.classList.add("fast"); fireworks(10); coinRain(40); fanfare(true); }
+        if (mega) { mask.classList.add("gold", "boom"); lights.classList.add("fast"); fireworks(10); coinRain(16); fanfare(true); }
         if (sfx.tone) { tone([523, 0.12], 0.06, "square"); tone([659, 0.12], 0.06, "square", 0.12); tone([784, 0.14], 0.06, "square", 0.24); tone([1047, 0.12], 0.06, "square", 0.36); tone([1319, 0.4], 0.07, "square", 0.48); }
         await countUp(box.querySelector("#ylsTotal"), total);
       } else {
@@ -387,7 +387,7 @@ function injectStyles() {
   .yls-megatitle { background: linear-gradient(90deg,#fff6a8,#ffd700,#fff,#ffb300,#fff6a8); background-size: 300% 100%; -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: transparent; animation: yls-shim 2s linear infinite; filter: drop-shadow(0 0 10px #ffb300); }
   .yls-spark { position: absolute; z-index: 6; width: 7px; height: 7px; margin: -3px 0 0 -3px; border-radius: 50%; pointer-events: none; box-shadow: 0 0 8px 2px currentColor; animation: yls-spark 1.3s ease-out forwards; }
   @keyframes yls-spark { 0% { transform: translate(0,0) scale(1); opacity: 1; } 100% { transform: translate(var(--dx), calc(var(--dy) + 40px)) scale(.2); opacity: 0; } }
-  .yls-coin { position: absolute; top: -40px; z-index: 5; pointer-events: none; animation: yls-fall 3.6s linear forwards; }
+  .yls-coin { position: absolute; top: -40px; z-index: 1; opacity: .8; pointer-events: none; animation: yls-fall 3.6s linear forwards; }
   @media (prefers-reduced-motion: reduce) { .yls-ring, .yls-burst, .yls-bulb, .yls-step.pop, .yls-row.in, .yls-confetti, .yls-d.lock, .yls-cutin, .yls-tease, .yls-winner, .yls-winner .crown, .yls-winner .nm, .yls-megatitle, .yls-mask.shake .yls-stage, .yls-dots i, .yls-spark, .yls-coin { animation: none; } .yls-cutin { transform: skewY(-4deg); } }
   `;
   const style = document.createElement("style");
