@@ -326,10 +326,11 @@ service cloud.firestore {
       function isGroupMember(g) {
         return myName() != '' && myName() in g.get('members', []);
       }
-      // メンバーが変えてよいのは、チャットの活動まわりの項目だけ（メンバー構成・名前・管理者は変えない）
+      // メンバーが変えてよいのは、チャットの活動まわりの項目だけ（メンバー構成・名前・管理者は変えない）。
+      // アプリは、メッセージを送るとき、同じ書き込みで「最新メッセージ（lastMessage〜）」と既読を更新する。管理者でないメンバーも送れるよう、その項目をここに含める
       function memberChatFieldsOnly() {
         return request.resource.data.diff(resource.data).affectedKeys()
-          .hasOnly(['lastMessage', 'lastMessageAt', 'lastMessageSenderUid', 'lastReadAt', 'updatedAt']);
+          .hasOnly(['lastMessage', 'lastMessageAt', 'lastMessageSenderUid', 'lastMessageId', 'lastMessageSender', 'lastMessagePreview', 'lastMessageHasImage', 'lastReadAt', 'updatedAt']);
       }
       // 自分だけを members から外す（他の人は増やさない・減らさない）。既読の記録も一緒に消す
       function memberSelfLeave() {
