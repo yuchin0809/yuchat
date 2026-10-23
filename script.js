@@ -36,7 +36,7 @@ import {
   initYuWorld, openYuWorldView, stopYuWorldView
 } from "./yuworld.js?v=20261023-yuworld46";
 import { renderYachtRoom } from "./yuyacht.js?v=20261023-yacht5";
-import { renderKeshiRoom } from "./yukeshi-room.js?v=20261023-keshi9";
+import { renderKeshiRoom } from "./yukeshi-room.js?v=20261023-keshi10";
 
 /* 💸 コインの送金（申請は本人・OK/却下は管理者）。中身の確定は Worker */
 import { transferInit, transferOpenUser, transferOpenAdmin, transferReset } from "./yutransfer.js?v=20261020-transfer1";

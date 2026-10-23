@@ -5,8 +5,8 @@
    ・すべてこの端末の中だけで動く（通信・コイン・記録はなし）。動きの計算は、試合と同じ（yukeshi-core.js の keshiSimStepper）。
    ・ショップで選んでいるパーツのまま試せるので、買う前に試せる。
 ========================================================= */
-import { createBattleStage } from "./yukeshi-room.js?v=20261023-keshi9";
-import { keshiSimStepper, keshiPhysView, keshiLaunchSpeedView, keshiStatsView, keshiPunchView, KESHI_DESK, KESHI_DT, eraserIcon } from "./yukeshi-core.js?v=20261023-keshi9";
+import { createBattleStage } from "./yukeshi-room.js?v=20261023-keshi10";
+import { keshiSimStepper, keshiPhysView, keshiLaunchSpeedView, keshiStatsView, keshiPunchView, KESHI_DESK, KESHI_DT, eraserIcon } from "./yukeshi-core.js?v=20261023-keshi10";
 
 const START_YAW = [Math.PI / 2, -Math.PI / 2];
 const yawOf = (dx, dz) => Math.atan2(-dz, dx);
