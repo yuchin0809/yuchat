@@ -13,7 +13,9 @@
 ========================================================= */
 
 /* 🎟 ゆう宝くじ売り場の画面（別ファイル。Worker の lottery* アクションを呼んで表示するだけ） */
-import { renderLottery, stopLottery } from "./yulottery.js?v=20261023-lottery8";
+import { renderLottery, stopLottery } from "./yulottery.js?v=20261023-lottery9";
+/* 🎊 ゆう番くじ（発売前のお知らせの画面） */
+import { renderBankuji, stopBankuji, bankujiRemain } from "./yubankuji.js?v=20261023-bankuji1";
 import { renderYacht, stopYacht } from "./yuyacht.js?v=20261023-yacht5";
 import { renderKeshi, stopKeshi } from "./yukeshi.js?v=20261023-keshi13";
 import { eraserIcon, keshiLeagueTag } from "./yukeshi-core.js?v=20261023-keshi13";
@@ -82,7 +84,7 @@ export function initYuWorld(options) {
 }
 export async function openYuWorldView() { if (!rootEl) return; if (state.screen !== "game") await loadConfigAndRender(); }
 export async function stopYuWorldView() {
-  stopFlushTimer(); stopFeverTimer(); stopLobbyTimer(); stopLottery(); stopYacht(); stopKeshi();
+  stopFlushTimer(); stopFeverTimer(); stopLobbyTimer(); stopLottery(); stopBankuji(); stopYacht(); stopKeshi();
   if (state.session) { try { await settle(); } catch (_) {} }
 }
 
@@ -136,6 +138,21 @@ function render() {
   if (state.screen === "lobby") return renderLobby();
   if (state.screen === "game") return renderGame();
   if (state.screen === "lottery") return openLotteryScreen();
+  if (state.screen === "kujihub") return renderKujiHub();
+  if (state.screen === "bankuji") return renderBankuji({ root: rootEl, esc, now: serverNow, onBack: () => { state.screen = "kujihub"; render(); } });
+}
+/* 🎟 ゆうくじ売り場：「宝くじ売り場」と「ゆう番くじ売り場」の2つの大きなボタン（横並び） */
+function renderKujiHub() {
+  stopLottery(); stopBankuji();
+  const r = bankujiRemain(serverNow());
+  rootEl.innerHTML = `<div class="yw-head"><button type="button" class="yw-back" id="ywKujiBack">← お店の一覧</button><h2>🎟 ゆうくじ売り場</h2><p>どちらのくじ売り場に行く？</p></div>
+    <div class="yw-kuji-grid">
+      <button type="button" class="yw-kuji-btn yw-kuji-taka" id="ywKujiTaka"><span class="yw-kuji-ico">🎟</span><b>宝くじ売り場</b><small>毎週金曜 14:30 抽選<br>1等は1万コイン！</small></button>
+      <button type="button" class="yw-kuji-btn yw-kuji-ban" id="ywKujiBan"><em class="yw-kuji-new">NEW</em><span class="yw-kuji-ico">🎊</span><b>ゆう番くじ売り場</b><small>${r ? `10/26（月）8:00 発売！` : "まもなく発売！"}<br>ちょっとだけ中身を公開中</small></button>
+    </div>`;
+  $("#ywKujiBack")?.addEventListener("click", () => { state.screen = "shop"; render(); });
+  $("#ywKujiTaka")?.addEventListener("click", () => { unlockAudio(); state.screen = "lottery"; render(); });
+  $("#ywKujiBan")?.addEventListener("click", () => { state.screen = "bankuji"; render(); });
 }
 function renderMessage(title, body) {
   rootEl.innerHTML = `<div class="yw-head"><h2>🎡 ゆうワールド</h2></div>
@@ -150,7 +167,8 @@ function openLotteryScreen() {
       win: () => playSeq([[523, 0.12], [659, 0.12], [784, 0.14], [1047, 0.12], [1319, 0.34]], 0.045, "square", 0.11),
       tone: (note, vol, type, when) => playTone(note, vol, type, when) // 抽選会ショー用（ドラムロール・止まる音など）
     },
-    onBack: () => { state.screen = "shop"; render(); }
+    backLabel: "← ゆうくじ売り場",
+    onBack: () => { state.screen = "kujihub"; render(); }
   });
 }
 
@@ -190,8 +208,8 @@ function renderShop() {
       </button>
       <button type="button" class="yw-shop-card${blocked ? " is-soon" : ""}" id="ywOpenLottery">
         <div class="yw-shop-banner yw-lottery-banner"><span>🎟</span></div>
-        <div class="yw-shop-body"><div class="yw-shop-name">ゆう宝くじ売り場${blocked ? " <span class=\"yw-badge\">準備中</span>" : ""}</div>
-          <div class="yw-shop-desc">毎週月曜8:00に発売、金曜14:30に抽選。連番・バラで買えて、1等は全体で1本・1万コイン！前後賞もあり、毎週名前と賞金が変わるよ。1枚10コイン。</div></div>
+        <div class="yw-shop-body"><div class="yw-shop-name">ゆうくじ売り場${blocked ? " <span class=\"yw-badge\">準備中</span>" : ""}</div>
+          <div class="yw-shop-desc">毎週金曜14:30に抽選の「宝くじ」と、10/26（月）に初登場する「ゆう番くじ」の売り場。1等は1万コイン！</div></div>
       </button>
       ${gameCards}
       <button type="button" class="yw-shop-card${state.yachtPublished ? "" : " is-soon"}" id="ywOpenYacht" ${state.yachtPublished || state.isTopAdmin ? "" : "disabled"}>
@@ -206,7 +224,7 @@ function renderShop() {
       </button>
     </div>`;
   $("#ywOpenSlot")?.addEventListener("click", () => { if (blocked) { state.screen = "preparing"; render(); return; } unlockAudio(); openLobby(); });
-  $("#ywOpenLottery")?.addEventListener("click", () => { if (blocked) { state.screen = "preparing"; render(); return; } unlockAudio(); state.screen = "lottery"; render(); });
+  $("#ywOpenLottery")?.addEventListener("click", () => { if (blocked) { state.screen = "preparing"; render(); return; } unlockAudio(); state.screen = "kujihub"; render(); });
   rootEl.querySelectorAll("[data-game]").forEach((el) => el.addEventListener("click", () => { if (typeof deps.openGame === "function") deps.openGame(el.dataset.game); }));
   $("#ywOpenYacht")?.addEventListener("click", () => { state.screen = "yacht"; render(); });
   $("#ywOpenKeshi")?.addEventListener("click", () => { state.screen = "keshi"; render(); });
@@ -872,6 +890,15 @@ function injectStyles() {
   .yw-shop-card { text-align: left; border: none; background: #fff; border-radius: 16px; overflow: hidden; box-shadow: 0 6px 24px rgba(0,0,0,.08); cursor: pointer; padding: 0; }
   .yw-shop-banner { height: 110px; display: flex; align-items: center; justify-content: center; font-size: 54px; }
   .yw-slot-banner { background: linear-gradient(135deg, #7b2ff7, #f107a3); }
+  .yw-kuji-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 8px; }
+  .yw-kuji-btn { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-height: 210px; padding: 18px 8px; border: none; border-radius: 18px; color: #fff; cursor: pointer; text-align: center; box-shadow: 0 8px 26px rgba(0,0,0,.18); }
+  .yw-kuji-btn:active { transform: scale(.98); }
+  .yw-kuji-taka { background: linear-gradient(135deg, #ff8a00, #ff2d78 55%, #7b2ff7); }
+  .yw-kuji-ban { background: linear-gradient(135deg, #17b6ff, #7b2ff7 55%, #ff2d78); }
+  .yw-kuji-ico { font-size: 56px; line-height: 1; filter: drop-shadow(0 3px 4px rgba(0,0,0,.3)); }
+  .yw-kuji-btn b { font-size: 18px; font-weight: 900; text-shadow: 0 2px 6px rgba(0,0,0,.35); }
+  .yw-kuji-btn small { font-size: 12px; line-height: 1.7; opacity: .95; }
+  .yw-kuji-new { position: absolute; top: 8px; right: 8px; font-style: normal; font-weight: 900; font-size: 11px; letter-spacing: .08em; background: #ffe14a; color: #7a3a00; padding: 2px 9px; border-radius: 999px; }
   .yw-lottery-banner { background: linear-gradient(135deg, #ff8a00, #ff2d78 55%, #7b2ff7); }
   .yw-shop-body { padding: 12px 14px 16px; }
   .yw-shop-name { font-weight: 800; font-size: 16px; margin-bottom: 4px; }
