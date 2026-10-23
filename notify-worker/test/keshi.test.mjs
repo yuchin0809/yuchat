@@ -272,7 +272,7 @@ test("リーグ戦：エントリーしていない状態・まだ始まって�
   const ctx = setup({ now: JST(2026, 10, 22, 17) });
   const st = await ctx.act(1, { action: "keshiLeagueState" });
   assert.deepEqual([st.ok, st.entered, st.count, st.started], [true, false, 0, false]);
-  assert.deepEqual(st.prizes, [1000, 700, 400]); assert.deepEqual(st.sets, [[10, 30], [12, 40], [15, 0]]);
+  assert.deepEqual(st.prizes, [1500, 1000, 300]); assert.deepEqual(st.sets, [[10, 30], [12, 40], [15, 0]]);
   assert.equal(st.week.startMs, JST(2026, 10, 26, 0));
   assert.equal(ctx.fs.plain("yuslotKeshi/_league"), null, "開くだけでは何も書かない");
   const closed = setup({ keshi: false });
