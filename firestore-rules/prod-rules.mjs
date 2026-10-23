@@ -122,6 +122,7 @@ function testCase(expectation, label, auth, method, docPath, { data, existing } 
   return { label, tc };
 }
 
+const groupBase = { name: "g", owner: "owner", ownerUid: "someoneElse", members: ["alice", "owner"] };   // 管理者（owner）でない alice がメンバー
 const TEST_CASES = [
   // 管理者は管理操作ができる
   testCase("ALLOW", "管理者：手動レースの作成", admin, "create", "derbyManualRaces/2030-01-01-m1200", { data: manualRace }),
@@ -193,8 +194,8 @@ const TEST_CASES = [
   testCase("ALLOW", "gameRooms：消しバトの部屋でも、参加者が status を更新できる（keshi には触れない）", userA, "update", "gameRooms/rk", { data: { status: "waiting" }, existing: { gameType: "keshi", ownerUid: userA.uid, owner: "a", members: ["a", "b"], memberUids: [userA.uid, "uidB"], status: "playing" } }),
   testCase("DENY", "gameRooms：消しバトの進み（keshi）つきで部屋を作る", userA, "create", "gameRooms/rk2", { data: { gameType: "keshi", ownerUid: userA.uid, owner: "a", members: ["a"], memberUids: [userA.uid], status: "waiting", keshi: { done: true } } }),
   testCase("ALLOW", "gameRooms：消しバトの部屋を、ふつうに作る", userA, "create", "gameRooms/rk3", { data: { gameType: "keshi", ownerUid: userA.uid, owner: "a", members: ["a"], memberUids: [userA.uid], status: "waiting" } }),
-  testCase("ALLOW", "groups：管理者でないメンバーが、メッセージ送信と同時に最新メッセージ・既読を更新（アプリの送信）", userA, "update", "groups/gm1", { data: { lastMessageSenderUid: userA.uid, lastMessageId: "m1", lastMessageSender: "a", lastMessagePreview: "こんにちは", lastMessageHasImage: false }, existing: { name: "g", owner: "owner", ownerUid: "someoneElse", members: ["a", "owner"] } }),
-  testCase("DENY", "groups：メンバーが最新メッセージの更新と一緒にグループ名を変える", userA, "update", "groups/gm2", { data: { lastMessageId: "m1", name: "勝手に変更" }, existing: { name: "g", owner: "owner", ownerUid: "someoneElse", members: ["a", "owner"] } }),
+  testCase("ALLOW", "groups：管理者でないメンバーが、メッセージ送信と同時に最新メッセージ・既読を更新（アプリの送信）", userAlice, "update", "groups/gm1", { data: { ...groupBase, lastMessageSenderUid: userAlice.uid, lastMessageId: "m1", lastMessageSender: "alice", lastMessagePreview: "こんにちは", lastMessageHasImage: false }, existing: groupBase }),
+  testCase("DENY", "groups：メンバーが最新メッセージの更新と一緒にグループ名を変える", userAlice, "update", "groups/gm2", { data: { ...groupBase, lastMessageId: "m1", name: "勝手に変更" }, existing: groupBase }),
   // 🧽 消しバト：買ったパーツ・付けているパーツはサーバー（通知 Worker）だけ
   testCase("DENY", "yuslotKeshiLeague：リーグの戦績を直接読めない", userA, "get", "yuslotKeshiLeague/2026-10-26", { existing: { setsDone: 3, p: {} } }),
   testCase("DENY", "yuslotKeshiLeague：自分の勝ち数を書き換える", userA, "update", "yuslotKeshiLeague/2026-10-26", { data: { p: { [userA.uid]: { w: 99 } } }, existing: { setsDone: 3, p: {} } }),
