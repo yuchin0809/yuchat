@@ -5,7 +5,7 @@
 const { initializeTestEnvironment, assertSucceeds, assertFails } = require("@firebase/rules-unit-testing");
 const fs = require("fs");
 const path = require("path");
-const { doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, collection, query, where, serverTimestamp } = require("firebase/firestore");
+const { doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, collection, query, where, serverTimestamp, runTransaction } = require("firebase/firestore");
 
 let pass = 0, fail = 0; const logs = [];
 async function ok(n, p) { try { await assertSucceeds(p); pass++; logs.push("PASS 許可 " + n); } catch (e) { fail++; logs.push("FAIL(許可されるべき) " + n + ": " + String(e.message).split("\n")[0]); } }
@@ -99,6 +99,13 @@ async function ng(n, p) { try { await assertFails(p); pass++; logs.push("PASS �
   await ng("招待を最初から accepted で作る", setDoc(doc(alice, "gameInvites/room1_uidB2"), { roomId: "room1", fromUid: "uidA", toUid: "uidB", status: "accepted" }));
   await ok("送られた carol が招待を辞退（status 更新）", updateDoc(doc(carol, "gameInvites/room1_uidC"), { status: "declined", respondedAt: serverTimestamp() }));
   await ng("当事者でない bob が carol あての招待を更新", updateDoc(doc(bob, "gameInvites/roomInvite_uidC"), { status: "declined" }));
+  await ok("まだ無い招待を調べる読み取り（招待を作る前の確認）", getDoc(doc(alice, "gameInvites/nothingYet_uidB")));
+  await ok("alice が、招待を作るトランザクション（まだ無い招待を確かめて、作って、ルームの招待中を更新）", runTransaction(alice, async (tx) => {
+    const ref = doc(alice, "gameInvites/roomPlay_uidB");
+    await tx.get(ref);
+    tx.set(ref, { roomId: "roomPlay", gameType: "keshi", from: "alice", fromUid: "uidA", to: "bob", toUid: "uidB", status: "pending", createdAt: serverTimestamp(), respondedAt: null });
+    tx.update(doc(alice, "gameRooms/roomPlay"), { invitedUsers: ["bob"], updatedAt: serverTimestamp() });
+  }));
   await ok("当事者（送り主 alice）が招待を削除", deleteDoc(doc(alice, "gameInvites/roomInvite_uidC")));
   await ng("当事者でない bob が招待を削除", deleteDoc(doc(bob, "gameInvites/room1_uidC")));
 

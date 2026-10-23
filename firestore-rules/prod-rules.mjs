@@ -196,6 +196,7 @@ const TEST_CASES = [
   testCase("ALLOW", "gameRooms：消しバトの部屋を、ふつうに作る", userA, "create", "gameRooms/rk3", { data: { gameType: "keshi", ownerUid: userA.uid, owner: "a", members: ["a"], memberUids: [userA.uid], status: "waiting" } }),
   testCase("ALLOW", "groups：管理者でないメンバーが、メッセージ送信と同時に最新メッセージ・既読を更新（アプリの送信）", userAlice, "update", "groups/gm1", { data: { ...groupBase, lastMessageSenderUid: userAlice.uid, lastMessageId: "m1", lastMessageSender: "alice", lastMessagePreview: "こんにちは", lastMessageHasImage: false }, existing: groupBase }),
   testCase("DENY", "groups：メンバーが最新メッセージの更新と一緒にグループ名を変える", userAlice, "update", "groups/gm2", { data: { ...groupBase, lastMessageId: "m1", name: "勝手に変更" }, existing: groupBase }),
+  testCase("ALLOW", "gameInvites：まだ無い招待を調べる読み取り（招待を作る前の確認）", userAlice, "get", "gameInvites/roomX_rulesTestUserC"),
   // 🧽 消しバト：買ったパーツ・付けているパーツはサーバー（通知 Worker）だけ
   testCase("DENY", "yuslotKeshiLeague：リーグの戦績を直接読めない", userA, "get", "yuslotKeshiLeague/2026-10-26", { existing: { setsDone: 3, p: {} } }),
   testCase("DENY", "yuslotKeshiLeague：自分の勝ち数を書き換える", userA, "update", "yuslotKeshiLeague/2026-10-26", { data: { p: { [userA.uid]: { w: 99 } } }, existing: { setsDone: 3, p: {} } }),
