@@ -4902,15 +4902,15 @@ async function keshiLeagueEntry(deps, uid, body) {
 /* ----- 🥊 2人対戦（ゲームルーム gameRooms/{roomId} の keshi フィールド。Worker だけが書く：消しゴムの位置・勝敗をブラウザが書き換えられないように） -----
    ・ルームの作成・参加・退出は、オセロ・将棋・ヨットと同じ（ブラウザが gameRooms を書く）。ゲームの進み（弾く・時間切れ）だけ Worker を通る。
    ・ルールは、机の上で交互に消しゴムを弾いて、先に机から落とした人が1本。3本勝負（2本先取）。
-     どちらも落ちないまま 1本で合計8回弾いたら、机のふちから遠い（真ん中に近い）ほうが勝ち。持ち時間は1回30秒で、続けて2回放置した人は負け。
+     どちらも落ちないまま 1本で合計10回弾いたら、机のふちから遠い（真ん中に近い）ほうが勝ち。持ち時間は1回30秒で、続けて2回放置した人は負け。
    ・弾いた結果（どこへ動くか・落ちたか）は、Worker が物理シミュレーションで決める。ブラウザは「どの向きに、どれだけの強さで」を頼むだけ。
      動きの絵は、ブラウザが同じ計算で再生する（最後の位置は Worker の結果に合わせる）。そのため、ルームの書類には最後の位置と弾いた速さだけを書く。
    ・1回の操作で、ルームの書類を1回読んで1回書く。はじめの1回だけ、2人の消しゴムの書類も読む。
    ・準備中のあいだは最上位管理者だけ。ただし、最上位管理者の入っているルームなら、招待された友達も遊べる（動作確認のため）。 */
-export const KESHI_DESK = { hw: 3.6, hd: 5.6, startZ: 2.6, startX: 1.1 };   // はじめは、たがいに少しずれた位置（まっすぐ弾いても当たらない。狙って弾く）
+export const KESHI_DESK = { hw: 4.4, hd: 7.4, startZ: 3.0, startX: 1.2 };   // はじめは、たがいに少しずれた位置（まっすぐ弾いても当たらない。狙って弾く）
 const KESHI_TURN_MS = 30000;
 const KESHI_MISS_LIMIT = 2;
-const KESHI_BOUT_FLICKS = 8;
+const KESHI_BOUT_FLICKS = 10;
 const KESHI_VMAX = 12.5;
 const KESHI_DT = 1 / 120;
 const KESHI_MAX_STEPS = 1200;
@@ -4920,9 +4920,14 @@ const keshiStartPos = () => [[-KESHI_DESK.startX, KESHI_DESK.startZ], [KESHI_DES
 /* 強さ（重さ・すべり・反発・大きさ）から、動きの計算に使う数字へ。足し算・かけ算・割り算・平方根だけで作る（どの端末でも同じ答えになる） */
 export function keshiPhys(st) {
   const clamp = (x, lo, hi) => (x < lo ? lo : x > hi ? hi : x);
-  return { m: r4(st.m / 50), a: r4(8 * (1 - 0.55 * clamp((st.s - 50) / 60, -0.3, 1))), e: r4(clamp(0.5 + (st.b - 50) / 120, 0.3, 0.95)), r: r4(0.78 * (1 + (st.z - 50) / 300)) };
+  /* 2人対戦では、パーツの差がはっきり出るようにしてある（リーグ戦の勝ち負けは、総合力から別の計算なので、これとは関係しない）：
+     重さは「重さの数字の2乗」（重いと、当たり負けせず、相手を大きくふっとばす）、反発は数字が上がるほど大きく変わる */
+  /* お金をかけたら必ず強くなるように、2人対戦では、重さ・すべり・反発の「下がる分」は使わない（初期装備より弱くはならない）。
+     すべりは、弾いたときの速さが上がる（k）。摩擦（a）は、みんな同じ */
+  const w = Math.max(st.m, 50) / 50, sl = clamp((Math.max(st.s, 50) - 50) / 60, 0, 1), bo = Math.max(st.b, 50);
+  return { m: r4(w * w), a: 9, e: r4(clamp(0.45 + (bo - 50) / 60, 0.3, 0.85)), r: r4(0.7 * (1 + (st.z - 50) / 300)), k: r4(1 + 0.2 * sl) };
 }
-export const keshiLaunchSpeed = (P, power) => KESHI_VMAX * power / Math.sqrt(Math.sqrt(P.m));
+export const keshiLaunchSpeed = (P, power) => KESHI_VMAX * power * (P.k || 1);
 /* 机の上の動き。pos：[[x,z],[x,z]]、who：弾いた人（0/1）、(vx,vz)：弾いた速さ。
    戻り値：to（止まった位置。落ちた消しゴムは、ふちを越えた位置）、first（最初に落ちた人。落ちなければ -1。同時なら弾いた人）、out（落ちたか）、steps */
 export function keshiSim(P, pos, who, vx, vz) {
@@ -4942,7 +4947,7 @@ export function keshiSim(P, pos, who, vx, vz) {
       if (d2 < rr * rr) {
         const d = Math.sqrt(d2), nx = d > 1e-9 ? dx / d : 0, nz = d > 1e-9 ? dz / d : 1;
         const vn = (vX[1] - vX[0]) * nx + (vZ[1] - vZ[0]) * nz, ia = 1 / P[0].m, ib = 1 / P[1].m;
-        if (vn < 0) { const e = (P[0].e + P[1].e) / 2, j = -(1 + e) * vn / (ia + ib); vX[0] -= j * ia * nx; vZ[0] -= j * ia * nz; vX[1] += j * ib * nx; vZ[1] += j * ib * nz; moving = true; }
+        if (vn < 0) { const e = vX[0] * vX[0] + vZ[0] * vZ[0] >= vX[1] * vX[1] + vZ[1] * vZ[1] ? P[0].e : P[1].e, j = -(1 + e) * vn / (ia + ib);   /* 反発は、勢いのあるほう（当てたほう）の消しゴムの数字 */ vX[0] -= j * ia * nx; vZ[0] -= j * ia * nz; vX[1] += j * ib * nx; vZ[1] += j * ib * nz; moving = true; }
         const s = (rr - d) / (ia + ib); x[0] -= s * ia * nx; z[0] -= s * ia * nz; x[1] += s * ib * nx; z[1] += s * ib * nz;
       }
     }
@@ -4987,7 +4992,7 @@ function keshiRoomBoutEnd(y, winner, how, now, steps) {
   y.bout += 1; y.starter = 1 - y.starter; y.cur = y.starter; y.flicks = 0; y.pos = keshiStartPos();
   y.deadline = keshiTurnDeadline(now, steps); y.at = now;
 }
-/* 8回弾いても落ちなかったときの勝ち負け：机のふちから遠いほうが勝ち（同じなら、先に弾いた人の負け） */
+/* 10回弾いても落ちなかったときの勝ち負け：机のふちから遠いほうが勝ち（同じなら、先に弾いた人の負け） */
 function keshiRoomEdgeWinner(y) {
   const a = keshiMargin(y.pos[0]), b = keshiMargin(y.pos[1]);
   return a > b ? 0 : b > a ? 1 : 1 - y.starter;
