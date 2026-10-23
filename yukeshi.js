@@ -4,8 +4,8 @@
      このファイルは、画面（3Dの消しゴム・強さ・パーツの一覧）を描いて、「買う」「付ける」を頼むだけ。
    ・ゆうワールド（yuworld.js）から renderKeshi({ root, api, esc, openRooms, onBack }) で開く。
 ========================================================= */
-import { keshiStatsView, eraserIcon } from "./yukeshi-core.js?v=20261023-keshi7";
-import { createEraserStage, SLEEVE_COLORS } from "./yukeshi3d.js?v=20261023-keshi7";
+import { keshiStatsView, keshiPunchView, eraserIcon } from "./yukeshi-core.js?v=20261023-keshi8";
+import { createEraserStage, SLEEVE_COLORS } from "./yukeshi3d.js?v=20261023-keshi8";
 
 const SLOT_NAMES = { body: "本体", edge: "ふち", sole: "そこ", weight: "おもり" };
 const STAT_NAMES = [["m", "重さ"], ["s", "すべり"], ["b", "反発"], ["z", "大きさ"]];
@@ -76,7 +76,7 @@ async function openPractice() {
   if (busy) return;
   const pl = plan(), eq = previewEq(), color = st.color, my = token;
   stopKeshi();
-  try { practice = practice || await import("./yukeshi-practice.js?v=20261023-keshi7"); }
+  try { practice = practice || await import("./yukeshi-practice.js?v=20261023-keshi8"); }
   catch (_) { alert("試し打ちを開けませんでした。通信環境をご確認のうえ、もう一度お試しください。"); drawShell(); return; }
   if (token !== my + 1) return;
   practice.renderPractice({ root: ctx.root, esc: ctx.esc, table, eq, color, title: pl.slots.length ? `選んでいるパーツ：${pl.slots.map((slot) => pl.part(slot).name).join("・")}（まだ買っていないものも試せます）` : "いま付けているパーツ", onBack: () => drawShell() });
@@ -92,7 +92,12 @@ function draw() {
   $("#ykStats").innerHTML = STAT_NAMES.map(([k, label]) => {
     const diff = pre[k] - cur[k];
     return `<div class="yk2-stat"><span class="n">${label}</span><span class="bar"><i style="width:${Math.max(4, Math.min(100, pre[k]))}%"></i></span><b>${pre[k]}</b><em class="${diff > 0 ? "up" : diff < 0 ? "down" : ""}">${diff ? (diff > 0 ? "▲" : "▼") + Math.abs(diff) : ""}</em></div>`;
-  }).join("");
+  }).join("") + (() => {
+    /* 2人対戦での強さ（初期装備の消しゴム＝×1.0）。買って付けたら、どれだけ強くなるかが分かる */
+    const a = keshiPunchView(table, st.eq), b = keshiPunchView(table, eq);
+    const row = (label, k) => { const d = Math.round((b[k] - a[k]) * 10) / 10; return `<div class="yk2-stat yk2-battle"><span class="n">${label}</span><span class="bar"><i style="width:${Math.max(6, Math.min(100, 16 + b[k] * 18))}%"></i></span><b>×${b[k].toFixed(1)}</b><em class="${d > 0 ? "up" : d < 0 ? "down" : ""}">${d ? (d > 0 ? "▲" : "▼") + Math.abs(d).toFixed(1) : ""}</em></div>`; };
+    return `<div class="yk2-battle-head">⚔ 2人対戦での強さ<small>初期装備の消しゴムを ×1.0 としたときの、ふっとばす力と、ふんばる力</small></div>${row("攻撃力", "atk")}${row("守り", "def")}`;
+  })();
   const pl = st ? plan() : null;
   $("#ykTabs").innerHTML = [...Object.entries(SLOT_NAMES), ["color", "カバーの色"]].map(([k, label]) => `<button type="button" class="yk2-tab${sel.tab === k ? " on" : ""}" data-tab="${k}">${label}${pl.slots.includes(k) ? " ●" : ""}</button>`).join("");
   if (sel.tab === "color") {
@@ -241,6 +246,8 @@ function injectStyles() {
   .yk2-desc { font-size: 12.5px; color: #555; line-height: 1.7; margin: 10px 0 8px; } .yk2-go { display: block; width: 100%; padding: 12px; font-size: 15px; } .yk2-buy { background: #e0902f; } .yw-btn:disabled { opacity: .5; cursor: default; }
   .yk2-colors { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; } .yk2-color { height: 54px; border: 3px solid transparent; border-radius: 12px; color: #fff; font-weight: 800; font-size: 11px; text-shadow: 0 1px 2px rgba(0,0,0,.6); cursor: pointer; } .yk2-color.on { border-color: #222; box-shadow: 0 0 0 2px #fff inset; }
   .yk2-league-btn { display: flex; align-items: center; gap: 10px; width: 100%; margin: 10px 0 2px; padding: 12px 14px; border: none; border-radius: 14px; cursor: pointer; text-align: left; color: #ffe9a8; background: linear-gradient(135deg, #1b2347, #3b2a6b); box-shadow: 0 4px 14px rgba(40,20,90,.35); }
+  .yk2-battle-head { margin: 10px 0 2px; padding-top: 8px; border-top: 1px dashed #d9d2b8; font-size: 12.5px; font-weight: 800; color: #14507a; } .yk2-battle-head small { display: block; font-weight: 500; color: #888; font-size: 11px; margin-top: 1px; }
+  .yk2-battle .bar i { background: linear-gradient(90deg, #4aa0e0, #7a5ad6 70%, #d6409a); } .yk2-battle b { font-size: 13px; } .yk2-stat.yk2-battle { grid-template-columns: 52px 1fr 44px 38px; }
   .yk2-prac-btn { margin-top: 8px; background: linear-gradient(135deg, #5b3a1a, #a8651f); box-shadow: 0 4px 14px rgba(120,70,20,.35); } .yk2-prac-btn em { background: #14507a; }
   .yk2-sum { background: #fff8e8; border: 1px solid #f0dc9a; border-radius: 10px; padding: 8px 10px; margin: 0 0 10px; font-size: 12.5px; } .yk2-sum > b { display: block; margin-bottom: 4px; } .yk2-sum div { display: flex; justify-content: space-between; gap: 8px; padding: 2px 0; } .yk2-sum em { font-style: normal; font-weight: 800; color: #b45309; } .yk2-sum .tot { border-top: 1px dashed #d9c27a; margin-top: 4px; padding-top: 5px; font-weight: 800; }
   .yk2-resetpick { margin-top: 6px; border: none; background: none; color: #14507a; font-size: 12px; text-decoration: underline; cursor: pointer; padding: 2px 0; }

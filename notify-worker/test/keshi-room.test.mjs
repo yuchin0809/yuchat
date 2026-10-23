@@ -2,7 +2,7 @@
    実行：node --test "notify-worker/test/*.test.mjs" */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { KESHI_DESK, KESHI_DEFAULT_EQ, keshiStats, keshiPhys, keshiSim, keshiLaunchSpeed, resetYuslotCacheForTest, handleYuslotAction } from "../worker.js";
+import { KESHI_DESK, KESHI_SLOTS, KESHI_PARTS, KESHI_DEFAULT_EQ, keshiStats, keshiPhys, keshiSim, keshiLaunchSpeed, resetYuslotCacheForTest, handleYuslotAction } from "../worker.js";
 
 console.warn = () => {};
 
@@ -82,13 +82,18 @@ const aimAt = (y) => ({ gid: y.gid, dx: y.pos[1 - y.cur][0] - y.pos[y.cur][0], d
 const who = (y) => (y.order[y.cur] === "id1" ? 1 : 2);
 
 test("動きの計算：強さの数字は、足し算・かけ算で作った決まった値。初期の消しゴムどうしは同じ", () => {
-  assert.deepEqual(keshiPhys(BASE), { m: 1, a: 8, e: 0.5, r: 0.78 });
+  assert.deepEqual(keshiPhys(BASE), { m: 1, a: 9, e: 0.45, r: 0.7, k: 1 });
   const heavy = keshiPhys(keshiStats({ ...KESHI_DEFAULT_EQ, body: "titan", weight: "lead" }));
   assert.ok(heavy.m > 1.5, "重い消しゴムは重い");
   const slick = keshiPhys(keshiStats({ ...KESHI_DEFAULT_EQ, sole: "air" }));
-  assert.ok(slick.a < 6.5, "すべる底は、止まりにくい");
+  assert.ok(slick.a === 9 && slick.k > 1.05, "すべる底は、弾いたときの速さが上がる（摩擦は、みんな同じ）");
   const top = keshiPhys(keshiStats({ body: "titan", edge: "crystal", sole: "air", weight: "gold" }));
-  assert.ok(top.e <= 0.95 && top.a > 1 && top.m < 3);
+  assert.ok(top.e <= 0.85 && top.a > 1 && top.m < 4);
+  /* お金をかけたら必ず強くなる：どのパーツを付けても、重さ・反発・弾く速さは、初期装備より下がらない */
+  for (const slot of KESHI_SLOTS) for (const part of KESHI_PARTS[slot]) {
+    const P = keshiPhys(keshiStats({ ...KESHI_DEFAULT_EQ, [slot]: part.id }));
+    assert.ok(P.m >= 1 && P.e >= 0.45 && P.k >= 1 && P.a <= 9, `${slot}:${part.id} は初期装備より弱くならない`);
+  }
 });
 
 test("動きの計算：まっすぐ弾いても当たらない。狙って弱く弾くと当たって動かすだけ、思いきり当てると机から落とせる", () => {
@@ -98,12 +103,14 @@ test("動きの計算：まっすぐ弾いても当たらない。狙って弱�
   assert.deepEqual(straight.to[1], START[1], "まっすぐ弾いても、相手には当たらない（はじめの位置がずれている）"); assert.equal(straight.first, -1);
   const weak = go(0.4, aim());
   assert.equal(weak.first, -1); assert.deepEqual(weak.to[1], START[1], "弱いと、相手に届かない");
-  const mid = go(0.8, aim());
-  assert.equal(mid.first, -1, "狙って当てても、1回では落ちない"); assert.ok(mid.to[1][1] < START[1][1] - 0.4, "相手は動く");
+  const mid = go(0.85, aim());
+  assert.equal(mid.first, -1, "狙って当てても、1回では落ちない"); assert.ok(Math.hypot(mid.to[1][0] - START[1][0], mid.to[1][1] - START[1][1]) > 0.3, "相手は動く");
   assert.equal(go(1, aim()).first, -1, "初期の消しゴムどうしは、全力で当てても1回では落ちない");
-  const strong = keshiPhys(keshiStats({ ...KESHI_DEFAULT_EQ, body: "pro", edge: "band" })), v = keshiLaunchSpeed(strong, 1), [ax, az] = aim();
-  const full = keshiSim([strong, strong], START, 0, ax * v, az * v);
-  assert.equal(full.first, 1, "反発の強いパーツで思いきり当てると、相手が落ちる"); assert.deepEqual(full.out, [false, true]);
+  const strong = keshiPhys(keshiStats({ ...KESHI_DEFAULT_EQ, body: "titan", edge: "metal", weight: "lead" })), v = keshiLaunchSpeed(strong, 1), [ax, az] = aim();
+  const full = keshiSim([strong, BP[1]], START, 0, ax * v, az * v);
+  assert.equal(full.first, 1, "重くて反発の強い消しゴムで思いきり当てると、初期装備の相手は落ちる"); assert.deepEqual(full.out, [false, true]);
+  const back = keshiSim([BP[0], strong], START, 0, ax * keshiLaunchSpeed(BP[0], 1), az * keshiLaunchSpeed(BP[0], 1));
+  assert.equal(back.first, -1, "初期装備で強い消しゴムに当てても、びくともしない"); assert.ok(Math.hypot(back.to[1][0] - START[1][0], back.to[1][1] - START[1][1]) < 1, "ほとんど動かない");
   const self = keshiSim(BP, START, 0, 0, keshiLaunchSpeed(BP[0], 1));
   assert.equal(self.first, 0, "相手のいない向きに強く弾くと、自分が落ちる");
 });
@@ -134,7 +141,8 @@ test("画面用の動きの計算（yukeshi-core.js）は、サーバーの計�
   for (let i = 0; i < 400; i++) {
     const mk = () => keshiPhys(keshiStats({ body: bodies[Math.floor(rnd() * 5)], edge: edges[Math.floor(rnd() * 5)], sole: sols[Math.floor(rnd() * 5)], weight: wts[Math.floor(rnd() * 5)] }));
     const P = [mk(), mk()], who0 = i % 2, pos = who0 === 0 ? START : [START[0], START[1]];
-    const a = (rnd() - .5) * 0.6 + (who0 === 0 ? Math.PI : 0), v = keshiLaunchSpeed(P[who0], 0.3 + rnd() * 0.7);
+    if (i % 3 === 0) P[who0] = keshiPhys(keshiStats({ body: "titan", edge: "crystal", sole: "air", weight: "gold" }));   // 強い消しゴムが思いきり当てる場面（落ちる場面）も入れる
+    const a = (rnd() - .5) * 0.2 + (who0 === 0 ? Math.PI : 0), v = keshiLaunchSpeed(P[who0], i % 3 === 0 ? 1 : 0.5 + rnd() * 0.5);
     const vx = Math.round(Math.sin(a) * v * 1000) / 1000, vz = Math.round(Math.cos(a) * v * 1000) / 1000;
     const server = keshiSim(P, pos, who0, vx, vz);
     const s = keshiSimStepper(P, pos, who0, vx, vz);
@@ -144,7 +152,7 @@ test("画面用の動きの計算（yukeshi-core.js）は、サーバーの計�
     assert.equal(s.first, server.first); assert.deepEqual(s.out, server.out); assert.equal(s.steps, server.steps);
     if (server.first >= 0) falls++; if (Math.hypot(server.to[0][0] - server.to[1][0], server.to[0][1] - server.to[1][1]) < 3) hits++;
   }
-  assert.ok(falls > 40 && hits > 40, "いろいろな場面を試せている");
+  assert.ok(falls > 10 && hits > 40, "いろいろな場面を試せている");
 });
 
 test("2人対戦：始める。机の上の位置・強さ・持ち時間。どちらの画面から呼んでも同じゲーム。読み書きは最小", async () => {
@@ -189,7 +197,7 @@ test("2人対戦：弾く。番の人だけ・正しい形だけ。弾くと、�
 
 test("2人対戦：3本勝負。相手を落とすと1本。先に2本取った人の勝ち。2本目は後ろの人から弾く", async () => {
   const ctx = setup();
-  const strong = { owned: ["body:pro", "edge:band"], eq: { body: "pro", edge: "band", sole: "bare", weight: "none" }, color: 0 };
+  const strong = { owned: ["body:titan", "edge:crystal", "sole:air", "weight:gold"], eq: { body: "titan", edge: "crystal", sole: "air", weight: "gold" }, color: 0 };
   ctx.fs.put("yuslotKeshi/id1", encF(strong)); ctx.fs.put("yuslotKeshi/id2", encF(strong));
   let y = (await ctx.r(1, "keshiRoomStart")).keshi;
   const flick = async (p) => { const r = await ctx.r(who(y), "keshiRoomFlick", { ...aimAt(y), p }); assert.equal(r.ok, true, JSON.stringify(r)); y = r.keshi; return y; };
@@ -215,10 +223,10 @@ test("2人対戦：自分で机から落ちたら、相手の1本（自滅）", 
   assert.deepEqual([r.wins, r.hist[0].how, r.last.first], [[0, 1], "self", 0]);
 });
 
-test("2人対戦：8回弾いても落ちなければ、机のふちから遠い（真ん中に近い）ほうが勝ち", async () => {
+test("2人対戦：10回弾いても落ちなければ、机のふちから遠い（真ん中に近い）ほうが勝ち", async () => {
   const ctx = setup();
   let y = (await ctx.r(1, "keshiRoomStart")).keshi;
-  for (let k = 0; k < 8; k++) {
+  for (let k = 0; k < 10; k++) {
     const mine = y.cur === 0;
     const r = await ctx.r(who(y), "keshiRoomFlick", { gid: y.gid, dx: 0, dz: mine ? 1 : 1, p: mine ? 0.2 : 0.03 });   // 先手は、後ろへ下がっていく（ふちに近づく）
     assert.equal(r.ok, true, JSON.stringify(r)); y = r.keshi;
@@ -285,4 +293,18 @@ test("画面用の動きの数字（yukeshi-core.js）は、サーバーの数�
     n++;
   }
   assert.equal(n, 625);
+});
+
+test("ショップの「攻撃力・守り」：初期装備が ×1.0。どのパーツを付けても下がらず、高いパーツほど大きくなる（買ったら強くなったのが数字で分かる）", async () => {
+  const { keshiPunchView } = await import("../../yukeshi-core.js");
+  const table = { slots: KESHI_SLOTS, parts: KESHI_PARTS, base: 50 };
+  assert.deepEqual(keshiPunchView(table, KESHI_DEFAULT_EQ), { atk: 1, def: 1 });
+  for (const slot of KESHI_SLOTS) for (const part of KESHI_PARTS[slot]) {
+    const r = keshiPunchView(table, { ...KESHI_DEFAULT_EQ, [slot]: part.id });
+    assert.ok(r.atk >= 1 && r.def >= 1 - 0.0001, `${slot}:${part.id} は初期装備より弱く見えない（${JSON.stringify(r)}）`);
+  }
+  const heavy = keshiPunchView(table, { ...KESHI_DEFAULT_EQ, weight: "gold" }), light = keshiPunchView(table, { ...KESHI_DEFAULT_EQ, weight: "coin" });
+  assert.ok(heavy.atk > light.atk && heavy.def > light.def, "重いおもりほど強い");
+  const mid = keshiPunchView(table, { ...KESHI_DEFAULT_EQ, body: "pro", edge: "band", sole: "wax" }), top = keshiPunchView(table, { body: "titan", edge: "crystal", sole: "air", weight: "gold" });
+  assert.ok(mid.atk >= 1.5 && top.atk >= 3 && top.def >= 3, "お金をかけるほど、はっきり強い");
 });

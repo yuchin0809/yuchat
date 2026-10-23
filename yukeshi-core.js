@@ -23,7 +23,7 @@ export const eraserIcon = (cls = "ker-svg") => `<svg class="${cls}" viewBox="0 0
    ・勝ち負け・最後の位置を決めるのはサーバー。ここは、サーバーが決めた動きを、画面で1コマずつ再生するためだけに使う。
    ・足し算・かけ算・割り算・平方根だけで作ってあるので、どの端末でも同じ答えになる。同じ答えになることは、notify-worker/test/keshi-room.test.mjs が確かめる。
 ========================================================= */
-export const KESHI_DESK = { hw: 3.6, hd: 5.6, startZ: 2.6, startX: 1.1 };
+export const KESHI_DESK = { hw: 4.4, hd: 7.4, startZ: 3.0, startX: 1.2 };
 export const KESHI_DT = 1 / 120;
 const KESHI_MAX_STEPS = 1200;
 /* 1コマずつ進める。pos：[[x,z],[x,z]]、who：弾いた人、(vx,vz)：弾いた速さ。
@@ -46,7 +46,7 @@ export function keshiSimStepper(P, pos, who, vx, vz) {
       if (d2 < rr * rr) {
         const d = Math.sqrt(d2), nx = d > 1e-9 ? dx / d : 0, nz = d > 1e-9 ? dz / d : 1;
         const vn = (vX[1] - vX[0]) * nx + (vZ[1] - vZ[0]) * nz, ia = 1 / P[0].m, ib = 1 / P[1].m;
-        if (vn < 0) { const e = (P[0].e + P[1].e) / 2, j = -(1 + e) * vn / (ia + ib); vX[0] -= j * ia * nx; vZ[0] -= j * ia * nz; vX[1] += j * ib * nx; vZ[1] += j * ib * nz; moving = true; }
+        if (vn < 0) { const e = vX[0] * vX[0] + vZ[0] * vZ[0] >= vX[1] * vX[1] + vZ[1] * vZ[1] ? P[0].e : P[1].e, j = -(1 + e) * vn / (ia + ib);   /* 反発は、勢いのあるほう（当てたほう）の消しゴムの数字 */ vX[0] -= j * ia * nx; vZ[0] -= j * ia * nz; vX[1] += j * ib * nx; vZ[1] += j * ib * nz; moving = true; }
         const k = (rr - d) / (ia + ib); x[0] -= k * ia * nx; z[0] -= k * ia * nz; x[1] += k * ib * nx; z[1] += k * ib * nz;
       }
     }
@@ -63,6 +63,24 @@ export function keshiSimStepper(P, pos, who, vx, vz) {
 const r4 = (x) => Math.round(x * 10000) / 10000;
 export function keshiPhysView(st) {
   const clamp = (x, lo, hi) => (x < lo ? lo : x > hi ? hi : x);
-  return { m: r4(st.m / 50), a: r4(8 * (1 - 0.55 * clamp((st.s - 50) / 60, -0.3, 1))), e: r4(clamp(0.5 + (st.b - 50) / 120, 0.3, 0.95)), r: r4(0.78 * (1 + (st.z - 50) / 300)) };
+  const w = Math.max(st.m, 50) / 50, sl = clamp((Math.max(st.s, 50) - 50) / 60, 0, 1), bo = Math.max(st.b, 50);
+  return { m: r4(w * w), a: 9, e: r4(clamp(0.45 + (bo - 50) / 60, 0.3, 0.85)), r: r4(0.7 * (1 + (st.z - 50) / 300)), k: r4(1 + 0.2 * sl) };
 }
-export const keshiLaunchSpeedView = (P, power) => 12.5 * power / Math.sqrt(Math.sqrt(P.m));
+export const keshiLaunchSpeedView = (P, power) => 12.5 * power * (P.k || 1);
+
+/* 買ったパーツで「どれくらい強くなったか」を、数字で見せる（ショップ用）。
+   ・攻撃力：初期装備の消しゴムに、同じ強さでまっすぐ当てたとき、どれだけふっとばせるか（初期装備の消しゴムが当てたときを ×1.0 とする）
+   ・守り：初期装備の消しゴムに当てられたとき、どれだけ動かされにくいか（初期装備の消しゴムが当てられたときを ×1.0 とする。大きいほど動かされない）
+   実際の2人対戦と同じ動きの計算（keshiSimStepper）で測るので、試合・試し打ちの手ごたえと同じになる。 */
+const PUNCH_DEFAULT = { body: "plain", edge: "paper", sole: "bare", weight: "none" };
+function punchMove(Pa, Pb) {   // aがbに、まっすぐ当てる。bがどれだけ動くか
+  const s = keshiSimStepper([Pa, Pb], [[0, 3], [0, 0]], 0, 0, -keshiLaunchSpeedView(Pa, 0.8));
+  while (s.step()) { /* 止まるまで */ }
+  return Math.hypot(s.x[1], s.z[1]);
+}
+export function keshiPunchView(table, eq) {
+  const P0 = keshiPhysView(keshiStatsView(table, PUNCH_DEFAULT)), P = keshiPhysView(keshiStatsView(table, eq));
+  const atk0 = punchMove(P0, P0), atk = punchMove(P, P0), def0 = punchMove(P0, P0), def = punchMove(P0, P);
+  const round = (x) => Math.round(Math.min(9.9, x) * 10) / 10;
+  return { atk: round(atk / Math.max(0.05, atk0)), def: round(def0 / Math.max(0.05, def)) };
+}

@@ -6,11 +6,11 @@
    ・3Dの机と消しゴムは three.js（ヨットと同じもの）。3D が使えない端末では、対戦できない（メッセージを出す）。
 ========================================================= */
 import { load3D, three } from "./yuyacht3d.js?v=20261023-3d1";
-import { eraserKit } from "./yukeshi3d.js?v=20261023-keshi7";
-import { keshiSimStepper, KESHI_DESK, KESHI_DT, eraserIcon } from "./yukeshi-core.js?v=20261023-keshi7";
+import { eraserKit } from "./yukeshi3d.js?v=20261023-keshi8";
+import { keshiSimStepper, KESHI_DESK, KESHI_DT, eraserIcon } from "./yukeshi-core.js?v=20261023-keshi8";
 
 const TOP_Y = -0.4;   // 机の上の面の高さ
-const ERASER_SCALE = 0.62;   // 机の上の消しゴムの大きさ（1人用の改造の画面の消しゴムを、この倍率に小さくする）
+const ERASER_SCALE = 0.57;   // 机の上の消しゴムの大きさ（1人用の改造の画面の消しゴムを、この倍率に小さくする）
 const START_YAW = [Math.PI / 2, -Math.PI / 2];   // はじめは、おたがいに向かい合う
 const yawOf = (dx, dz) => Math.atan2(-dz, dx);   // 消しゴムの長い辺（x）を、(dx,dz) の向きにそろえる回転
 
@@ -32,7 +32,7 @@ export async function createBattleStage(container, { me, eq, color }) {
   const camera = new T.PerspectiveCamera(32, 1, .5, 80);
   scene.add(new T.HemisphereLight(0xffffff, 0x9a7a52, 1.0));
   const sun = new T.DirectionalLight(0xffffff, 2.3); sun.position.set(-4, 11, 5); sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048); sun.shadow.radius = 4; sun.shadow.bias = -0.0006;
-  Object.assign(sun.shadow.camera, { left: -9, right: 9, top: 10, bottom: -10, near: 2, far: 40 }); scene.add(sun);
+  Object.assign(sun.shadow.camera, { left: -12, right: 12, top: 13, bottom: -13, near: 2, far: 60 }); scene.add(sun);
   { const env = kit.environment(renderer); if (env) scene.environment = env; }
 
   /* 机：木目 */
@@ -69,7 +69,7 @@ export async function createBattleStage(container, { me, eq, color }) {
     const r = container.getBoundingClientRect(), w = Math.max(1, Math.round(r.width)), h = Math.max(1, Math.round(r.height));
     if (w === W && h === H) return; W = w; H = h; renderer.setSize(w, h, false); canvas.style.width = w + "px"; canvas.style.height = h + "px";
     const aspect = w / h; camera.aspect = aspect; camera.fov = 32;
-    const half = Math.tan(16 * Math.PI / 180), dist = Math.max(10.4 / (2 * half), 8.6 / (2 * half * aspect)), el = 54 * Math.PI / 180, side = me === 1 ? -1 : 1;
+    const half = Math.tan(16 * Math.PI / 180), dist = Math.max(KESHI_DESK.hd * 1.86 / (2 * half), KESHI_DESK.hw * 2.39 / (2 * half * aspect)), el = 54 * Math.PI / 180, side = me === 1 ? -1 : 1;
     camera.position.set(0, TOP_Y + Math.sin(el) * dist, side * Math.cos(el) * dist + side * .4); camera.lookAt(0, TOP_Y, side * .35);
     camera.updateProjectionMatrix(); camera.updateMatrixWorld(); dirty = true;
   }
@@ -285,7 +285,7 @@ function boutText(y) {
   const me = myIdx(), h = y.hist[y.hist.length - 1];
   if (!h) return "";
   const who = h.w === me ? "あなたの勝ち！" : `${String(y.names[h.w] || "相手").slice(0, 8)}さんの勝ち`;
-  const how = h.how === "ko" ? "机から落とした！" : h.how === "self" ? "相手が自分で落ちた！" : "8回弾いて、ふちから遠いほうの勝ち";
+  const how = h.how === "ko" ? "机から落とした！" : h.how === "self" ? "相手が自分で落ちた！" : "10回弾いて、ふちから遠いほうの勝ち";
   const n = y.hist.length;
   return `${n}本目：${who}\n${how}`;
 }
@@ -310,7 +310,7 @@ function drawHud() {
   const y = kr.y, me = myIdx(), esc = kr.esc; if (!y) return;
   const pips = (w) => [0, 1].map((k) => `<i class="${k < w ? "on" : ""}"></i>`).join("");
   const side = (i) => `<div class="kb-p${me === i ? " me" : ""}${!y.done && y.cur === i ? " turn" : ""}"><span class="n">${esc(String(y.names[i] || "").slice(0, 8))}</span><span class="pips">${pips(y.wins[i])}</span><span class="rt">総合力 ${y.rt[i]}</span></div>`;
-  const top = $("#kbTop"); if (top) top.innerHTML = side(me === 1 ? 1 : 0) + `<div class="kb-mid">${y.done ? "終了" : `第${y.bout}本<small>${y.flicks}/8回</small>`}</div>` + side(me === 1 ? 0 : 1);
+  const top = $("#kbTop"); if (top) top.innerHTML = side(me === 1 ? 1 : 0) + `<div class="kb-mid">${y.done ? "終了" : `第${y.bout}本<small>${y.flicks}/10回</small>`}</div>` + side(me === 1 ? 0 : 1);
   const turn = $("#kbTurn"), mine = !y.done && y.cur === me;
   if (turn) { turn.classList.toggle("mine", mine); turn.innerHTML = y.done ? "対戦が終わりました" : mine ? `あなたの番です <span id="kbTimer" class="kb-timer"></span>` : `${esc(String(y.names[y.cur] || ""))}さんの番です <span id="kbTimer" class="kb-timer"></span>`; }
   const hint = $("#kbHint");
@@ -358,7 +358,7 @@ function injectStyles() {
   .kb-mid { display: flex; flex-direction: column; align-items: center; justify-content: center; font-weight: 800; font-size: 13px; padding: 0 4px; } .kb-mid small { font-weight: 600; color: #888; font-size: 10.5px; }
   .kb-turn { text-align: center; background: #3b3f46; color: #fff; border-radius: 10px; padding: 8px; font-weight: 800; margin-bottom: 8px; font-size: 14px; } .kb-turn.mine { background: #e0902f; }
   .kb-timer { margin-left: 8px; font-weight: 700; font-size: 13px; } .kb-timer.warn { color: #ff6b6b; }
-  .kb-stage { position: relative; width: 100%; max-width: 560px; margin: 0 auto; aspect-ratio: 4 / 5; max-height: 78vh; border-radius: 16px; overflow: hidden; background: radial-gradient(ellipse at 50% 40%, #b9cde0 0%, #8aa3bd 60%, #6a8099 100%); box-shadow: inset 0 0 30px rgba(0,0,0,.25); touch-action: none; }
+  .kb-stage { position: relative; width: 100%; max-width: 560px; margin: 0 auto; aspect-ratio: 5 / 7; max-height: 80vh; border-radius: 16px; overflow: hidden; background: radial-gradient(ellipse at 50% 40%, #b9cde0 0%, #8aa3bd 60%, #6a8099 100%); box-shadow: inset 0 0 30px rgba(0,0,0,.25); touch-action: none; }
   .kb-gl { position: absolute; left: 0; top: 0; touch-action: none; }
   .kb-loading { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; color: #fff; font-weight: 700; font-size: 13px; text-align: center; padding: 0 16px; }
   .kb-banner { position: absolute; left: 8%; right: 8%; top: 38%; background: rgba(20,20,28,.86); color: #fff; border-radius: 14px; padding: 14px 10px; text-align: center; font-weight: 900; font-size: 17px; line-height: 1.6; white-space: pre-line; opacity: 0; transform: scale(.85); transition: opacity .2s, transform .2s; pointer-events: none; z-index: 3; }
