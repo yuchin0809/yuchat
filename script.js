@@ -36,7 +36,7 @@ import {
   initYuWorld, openYuWorldView, stopYuWorldView
 } from "./yuworld.js?v=20261023-yuworld46";
 import { renderYachtRoom } from "./yuyacht.js?v=20261023-yacht5";
-import { renderKeshiRoom } from "./yukeshi-room.js?v=20261023-keshi10";
+import { renderKeshiRoom } from "./yukeshi-room.js?v=20261023-keshi11";
 
 /* 💸 コインの送金（申請は本人・OK/却下は管理者）。中身の確定は Worker */
 import { transferInit, transferOpenUser, transferOpenAdmin, transferReset } from "./yutransfer.js?v=20261020-transfer1";
@@ -3374,6 +3374,22 @@ async function updateFcmTokenUsername() {
 }
 
 /* メッセージを送ったあと、Worker に相手への通知を頼む（失敗してもメッセージ送信には影響しない） */
+/* 🎮 ゲームの招待の通知を、サーバーに頼む（失敗しても、招待そのものには影響しない） */
+async function requestGameInvitePush(inviteId) {
+  if (!NOTIFY_ENDPOINT || !currentUser || !inviteId) return;
+  try {
+    const idToken = await currentUser.getIdToken();
+    const response = await fetch(NOTIFY_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
+      body: JSON.stringify({ inviteId })
+    });
+    if (!response.ok) console.warn("招待の通知の依頼に失敗:", response.status);
+  } catch (error) {
+    console.warn("招待の通知の依頼エラー:", error);
+  }
+}
+
 async function requestPushNotification(messageId) {
   if (!NOTIFY_ENDPOINT || !currentUser || !messageId) return;
   try {
@@ -3448,7 +3464,7 @@ function parseNotificationTarget(search) {
     const params = new URLSearchParams(search || "");
     const open = params.get("open");
     /* 🏇 ゆうダービー開始前・📢 新しいお知らせの通知は、その画面を開く */
-    if (open === "derby" || open === "announcements") return { open };
+    if (open === "derby" || open === "announcements" || open === "games") return { open };   // games：ゲームの招待の通知（招待のバナーが出る画面）
     if (open !== "chat") return null;
     return { open: "chat", friendship: params.get("friendship") || null, group: params.get("group") || null };
   } catch (error) {
@@ -7711,6 +7727,7 @@ async function sendGameInvite(roomId, friendName) {
   const friendUserRef = doc(db, "users", friendName);
 
   try {
+    let createdInviteId = "";
     await runTransaction(db, async (transaction) => {
       const roomSnap = await transaction.get(roomRef);
       if (!roomSnap.exists()) throw new Error("ROOM_NOT_FOUND");
@@ -7747,9 +7764,11 @@ async function sendGameInvite(roomId, friendName) {
         respondedAt: null
       });
       transaction.update(roomRef, { invitedUsers, updatedAt: serverTimestamp() });
+      createdInviteId = inviteRef.id;
     });
 
     showAppToast("招待しました", `${friendName}さんを招待しました`);
+    requestGameInvitePush(createdInviteId);   // 相手のスマホ・iPad に通知を送る（通知を ON にしている人だけ）
   } catch (error) {
     console.error("ゲーム招待エラー:", error);
     const messages = {

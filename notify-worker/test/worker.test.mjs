@@ -3,7 +3,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { handleRequest, createDefaultDeps, verifyFirebaseIdToken, resetJwksCacheForTest } from "../worker.js";
+import { handleRequest, createDefaultDeps, verifyFirebaseIdToken, resetJwksCacheForTest, notifyForGameInvite } from "../worker.js";
 
 const PROJECT = "demo-yuuchat";
 const ORIGIN = "https://yuchin0809.github.io";
@@ -250,4 +250,42 @@ test("サービスアカウント：署名した JWT でアクセストークン
   assert.equal(seen.claims.iss, sa.client_email);
   assert.match(seen.claims.scope, /firebase\.messaging/);
   assert.equal(seen.auth, "Bearer AT-1");
+});
+
+/* ===== 🎮 ゲームの招待の通知 ===== */
+const inviteDocs = (over = {}) => ({
+  ...baseDocs(),
+  "gameInvites/room1_uB": { roomId: "room1", gameType: "keshi", from: "えー", fromUid: "uA", to: "びー", toUid: "uB", status: "pending", createdAt: "2026-10-08T02:59:30Z", ...over }
+});
+
+test("ゲームの招待：招待された相手の全端末にだけ通知する。招待した人には送らない。同じ招待は1回だけ", async () => {
+  const { deps, sent } = makeDeps(inviteDocs(), { invalidTokens: ["tokB2"] });
+  const r = await json(await handleRequest(request("/notify", { token: "uA", body: { inviteId: "room1_uB" } }), env, deps));
+  assert.equal(r.status, 200);
+  assert.deepEqual(sent.map((x) => x.token).sort(), ["tokB1", "tokB2"]);
+  assert.deepEqual([r.body.sent, r.body.failed, r.body.removed], [1, 1, 1]);
+  assert.equal(sent[0].data.title, "🎮 ゲームの招待"); assert.equal(sent[0].data.body, "えーさんから消しバトに招待されました");
+  assert.equal(sent[0].data.link, "./?open=games"); assert.equal(sent[0].data.kind, "gameInvite");
+  assert.equal(deps.firestore.store.has("fcmTokens/tokB2"), false, "無効なトークンは消す");
+  const again = await json(await handleRequest(request("/notify", { token: "uA", body: { inviteId: "room1_uB" } }), env, deps));
+  assert.equal(again.body.skipped, "duplicate"); assert.equal(sent.length, 2, "二重に送らない");
+});
+
+test("ゲームの招待：招待した本人以外・返事済み・古い招待・存在しない招待・形式が不正なものは送らない", async () => {
+  const none = async (docs, uid, id = "room1_uB") => { const m = makeDeps(docs); const r = await json(await handleRequest(request("/notify", { token: uid, body: { inviteId: id } }), env, m.deps)); return { r, sent: m.sent }; };
+  const other = await none(inviteDocs(), "uC"); assert.equal(other.r.status, 403); assert.equal(other.r.body.error, "not_sender"); assert.equal(other.sent.length, 0);
+  const to = await none(inviteDocs(), "uB"); assert.equal(to.r.status, 403, "招待された側も、招待の通知は出せない");
+  const done = await none(inviteDocs({ status: "accepted" }), "uA"); assert.equal(done.r.body.skipped, "not_pending"); assert.equal(done.sent.length, 0);
+  const old = await none(inviteDocs({ createdAt: "2026-10-08T02:00:00Z" }), "uA"); assert.equal(old.r.body.skipped, "too_old"); assert.equal(old.sent.length, 0);
+  const missing = await none(inviteDocs(), "uA", "nope_uB"); assert.equal(missing.r.status, 404);
+  const bad = await none(inviteDocs(), "uA", "../x"); assert.equal(bad.r.status, 400);
+  const self = await none(inviteDocs({ toUid: "uA" }), "uA"); assert.equal(self.r.body.skipped, "no_recipient");
+  assert.equal(typeof notifyForGameInvite, "function");
+});
+
+test("ゲームの招待：通知を ON にしていない相手（トークンなし）には、何も送らない（エラーにもしない）", async () => {
+  const docs = inviteDocs(); docs["fcmTokens/tokB1"] = { uid: "someone" }; delete docs["fcmTokens/tokB2"];
+  const { deps, sent } = makeDeps(docs);
+  const r = await json(await handleRequest(request("/notify", { token: "uA", body: { inviteId: "room1_uB" } }), env, deps));
+  assert.equal(r.status, 200); assert.deepEqual([r.body.sent, r.body.failed], [0, 0]); assert.equal(sent.length, 0);
 });

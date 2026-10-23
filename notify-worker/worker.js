@@ -128,6 +128,13 @@ export async function handleRequest(request, env = {}, deps = createDefaultDeps(
       return jsonResponse(result, result.status || 200, cors);
     }
 
+    /* 🎮 ゲームの招待の通知（招待した人の画面から、招待のあとに呼ぶ） */
+    if (typeof body?.inviteId === "string") {
+      if (!/^[A-Za-z0-9_-]{1,200}$/.test(body.inviteId)) return jsonResponse({ error: "invalid_invite_id" }, 400, cors);
+      const result = await notifyForGameInvite(deps, uid, body.inviteId);
+      return jsonResponse(result, result.status || 200, cors);
+    }
+
     const messageId = typeof body?.messageId === "string" ? body.messageId : "";
     if (!/^[A-Za-z0-9_-]{1,128}$/.test(messageId)) return jsonResponse({ error: "invalid_message_id" }, 400, cors);
 
@@ -194,6 +201,42 @@ export async function notifyForMessage(deps, uid, messageId) {
   console.log("notify sent", JSON.stringify({ messageId, chatType: target.chatType, recipients: recipientUids.length, tokens: tokens.length, sent, failed, removed: removed.length }));
 
   return { sent, failed, removed: removed.length, recipients: recipientUids.length };
+}
+
+/* ----- 🎮 ゲームの招待の通知 -----
+   ・招待（gameInvites/{ルームID}_{相手のuid}）を作った本人（fromUid）の画面から呼ばれ、招待された相手の全端末へ送る。
+   ・招待した本人でなければ送れない／まだ「返事待ち（pending）」の新しい招待だけ／同じ招待は1回だけ（notificationLogs）。
+   ・通知を ON にしている端末（fcmTokens がある人）だけに届く。アプリを開いているときは、画面の中のお知らせ（招待のバナー）で気づける。 */
+const GAME_NAMES = { othello: "オセロ", shogi: "将棋", daifugo: "大富豪", yacht: "ヨット", keshi: "消しバト" };
+export async function notifyForGameInvite(deps, uid, inviteId) {
+  const fs = deps.firestore;
+  const invite = await fs.get(`gameInvites/${inviteId}`);
+  if (!invite) return { status: 404, error: "invite_not_found" };
+  if (invite.fromUid !== uid) return { status: 403, error: "not_sender" };
+  if (invite.status !== "pending") return { skipped: "not_pending" };
+  const createdAt = invite.createdAt ? Date.parse(invite.createdAt) : NaN;
+  if (!Number.isFinite(createdAt) || deps.now() - createdAt > MAX_MESSAGE_AGE_MS) return { skipped: "too_old" };
+  if (!invite.toUid || invite.toUid === uid) return { skipped: "no_recipient" };
+
+  const claimed = await fs.createIfAbsent(`notificationLogs/invite-${inviteId}-${createdAt}`, { inviteId, senderUid: uid, createdAt: new Date(deps.now()) });
+  if (!claimed) return { skipped: "duplicate" };
+
+  const tokens = await getTokensForUids(fs, [invite.toUid]);
+  const gameName = GAME_NAMES[invite.gameType] || "ゲーム";
+  const data = {
+    kind: "gameInvite", inviteId, roomId: String(invite.roomId || ""), gameType: String(invite.gameType || ""),
+    title: "🎮 ゲームの招待", body: `${truncate(invite.from || "友達", 30)}さんから${gameName}に招待されました`,
+    link: "./?open=games", tag: `invite-${inviteId}`
+  };
+  let sent = 0, failed = 0, removed = 0;
+  await Promise.all(tokens.map(async (token) => {
+    const outcome = await deps.sendFcm(token, data);
+    if (outcome.ok) { sent++; return; }
+    failed++;
+    if (outcome.invalidToken) { removed++; await fs.delete(`fcmTokens/${token}`).catch(() => {}); }
+  }));
+  console.log("notify invite sent", JSON.stringify({ inviteId, tokens: tokens.length, sent, failed, removed }));
+  return { sent, failed, removed };
 }
 
 /* 友達チャット：friends ドキュメントに送信者の uid が含まれる場合だけ、もう一方へ

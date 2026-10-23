@@ -524,7 +524,8 @@ service cloud.firestore {
     // 作成：送り主が自分（fromUid が自分）で、はじめは pending
     // 更新・削除：当事者（fromUid か toUid が自分）だけ
     match /gameInvites/{inviteId} {
-      allow read: if signedIn() && (resource.data.get('toUid', '') == request.auth.uid || resource.data.get('fromUid', '') == request.auth.uid);
+      // resource == null：まだ無い招待を調べる読み取り（招待を作る前の確認）。これを許さないと、招待を作るトランザクションが必ず拒否される
+      allow read: if signedIn() && (resource == null || resource.data.get('toUid', '') == request.auth.uid || resource.data.get('fromUid', '') == request.auth.uid);
       allow create: if signedIn()
         && request.resource.data.get('fromUid', '') == request.auth.uid
         && request.resource.data.get('status', '') == 'pending';
