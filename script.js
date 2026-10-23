@@ -36,7 +36,7 @@ import {
   initYuWorld, openYuWorldView, stopYuWorldView
 } from "./yuworld.js?v=20261023-yuworld46";
 import { renderYachtRoom } from "./yuyacht.js?v=20261023-yacht5";
-import { renderKeshiRoom } from "./yukeshi-room.js?v=20261023-keshi12";
+import { renderKeshiRoom } from "./yukeshi-room.js?v=20261023-keshi13";
 
 /* 💸 コインの送金（申請は本人・OK/却下は管理者）。中身の確定は Worker */
 import { transferInit, transferOpenUser, transferOpenAdmin, transferReset } from "./yutransfer.js?v=20261020-transfer1";
@@ -44,6 +44,7 @@ import { transferInit, transferOpenUser, transferOpenAdmin, transferReset } from
 import { inviteInit } from "./yuinvite.js?v=20261021-invite1";
 /* 🌈 確変台の当選者（管理者だけ） */
 import { kakuWinnersInit, kakuWinnersOpen, kakuWinnersReset } from "./yukakuwinners.js?v=20261021-winners1";
+import { keshiEnrollInit, keshiEnrollOpen, keshiEnrollReset } from "./yukeshi-admin.js?v=20261023-keshi13";
 
 import {
   getFirestore, initializeFirestore, collection, addDoc, getDocs, getDoc, doc, setDoc,
@@ -3700,6 +3701,7 @@ inviteInit(document.getElementById("inviteButton"), (title, body) => showAppToas
 
 /* 🌈 確変台の当選者（管理者だけ） */
 kakuWinnersInit({ callAdmin: (action, payload) => callAdminApi(action, payload), isAdmin: () => isAdminUser(), esc: (v) => escapeHTML(v) });
+keshiEnrollInit({ callAdmin: (action, payload) => callAdminApi(action, payload), isAdmin: () => isAdminUser(), esc: (v) => escapeHTML(v) });
 
 /* 💸 コインの送金の画面 */
 transferInit({
@@ -3739,6 +3741,7 @@ logoutButton?.addEventListener("click", async () => {
     resetUserManageState();
     transferReset();
     kakuWinnersReset();
+    keshiEnrollReset();
     pendingGameInvites = [];
     gameInvitesInitialized = false;
     if (unsubscribeMyCoins) { unsubscribeMyCoins(); unsubscribeMyCoins = null; }
@@ -6006,6 +6009,7 @@ async function openUserManageView() {
   if (!isAdminUser()) { switchView("chat"); return; }
   transferOpenAdmin();
   kakuWinnersOpen();
+  keshiEnrollOpen();
   if (!userManageData && !userManageLoading) await loadUserManageList();
   else renderUserManageList();
 }

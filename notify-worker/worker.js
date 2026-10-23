@@ -520,7 +520,7 @@ export async function handleAdminAction(deps, callerUid, body) {
 
   const action = typeof body?.action === "string" ? body.action : "";
   const uid = typeof body?.uid === "string" ? body.uid : "";
-  const noUidActions = ["listUsers", "notifyAnnouncement", "renameUserRefs", "transferList", "transferApprove", "transferReject", "kakuWinners"];
+  const noUidActions = ["listUsers", "notifyAnnouncement", "renameUserRefs", "transferList", "transferApprove", "transferReject", "kakuWinners", "keshiLeagueEnroll"];
   if (!noUidActions.includes(action) && !UID_PATTERN.test(uid)) return { status: 400, error: "invalid_uid" };
 
   try {
@@ -539,6 +539,7 @@ export async function handleAdminAction(deps, callerUid, body) {
       case "renameUserRefs": return await adminRenameUserRefs(deps, body);
       case "lotteryRefund": return await adminLotteryRefund(deps, callerUid, uid, body);
       case "kakuWinners": return await adminKakuWinners(deps, body);
+      case "keshiLeagueEnroll": return await adminKeshiLeagueEnroll(deps, callerUid, body);
       case "transferList": return await adminTransferList(deps);
       case "transferApprove": return await adminTransferApprove(deps, callerUid, body);
       case "transferReject": return await adminTransferReject(deps, callerUid, body);
@@ -5101,6 +5102,48 @@ async function keshiRoomTimeout(deps, uid, body) {
   else { y.cur = 1 - y.cur; y.deadline = now + KESHI_TURN_MS; }
   if (!(await keshiRoomWrite(deps, cur, y))) { const again = await keshiRoomLoad(deps, uid, body.roomId); return again.error || keshiRoomView(again.data.keshi, now); }
   return keshiRoomView(y, now);
+}
+
+/* 管理者：最近ログインした人を、最強決定戦（消しバトのリーグ戦）に、まとめてエントリーさせる。
+   ・body：{ days（直近何日。1〜60。既定 7）, apply（true で実行。省略か false は「確認だけ」で、何も書かない） }
+   ・対象：Authentication の最後のログイン（ログインまたはトークンの更新）が直近 days 日以内で、停止されていなくて、users の名前がある人。すでにエントリー済みの人は数えるだけで、触らない。
+   ・実行：yuslotKeshi/{uid} に league: true・leagueAt（いま）・名前を書く（持っているパーツ・装備は変えない）。参加者の人数（_league の count）は、書き込んだ人数だけ足す。
+     本人は、あとからいつでも「エントリーをやめる」できる。第1回の最初のセットの前なら、最初のセットから参加する（leagueAt が、セットの時刻より前）。
+   ・何回実行しても、すでにエントリー済みの人は増えない。記録は adminAuditLogs（人数だけ。名前は残さない）。 */
+async function adminKeshiLeagueEnroll(deps, callerUid, body) {
+  const days = body?.days === undefined ? 7 : body.days;
+  if (!Number.isInteger(days) || days < 1 || days > 60) return { status: 400, error: "invalid_days" };
+  const fs = deps.firestore, now = deps.now();
+  const [userDocs, authUsers, entered, suspended] = await Promise.all([
+    fs.query("users", [], { select: ["uid", "name"] }),
+    deps.authAdmin.listAll(),
+    fs.query("yuslotKeshi", [["league", "EQUAL", true]], { select: ["league"] }),
+    fs.query("suspendedUsers", [])
+  ]);
+  const since = now - days * 86400000;
+  const nameByUid = new Map();
+  userDocs.slice().sort((a, b) => (a.id < b.id ? -1 : 1)).forEach((d) => { const u = typeof d.data.uid === "string" ? d.data.uid : ""; if (u && !d.id.startsWith("_") && !nameByUid.has(u)) nameByUid.set(u, d.id); });
+  const already = new Set(entered.map((d) => d.id));
+  const suspendedUids = new Set(suspended.map((d) => d.id));
+  const active = authUsers.filter((u) => {
+    const a = summarizeAuthUser(u);
+    return !a.disabled && !suspendedUids.has(u.localId) && Math.max(a.lastLoginAt || 0, a.lastRefreshAt || 0) >= since && nameByUid.has(u.localId);
+  });
+  const targets = active.filter((u) => !already.has(u.localId)).map((u) => ({ uid: u.localId, name: nameByUid.get(u.localId) }));
+  const summary = { ok: true, days, active: active.length, already: active.length - targets.length, willEnroll: targets.length, names: targets.map((t) => t.name).slice(0, 200) };
+  if (body?.apply !== true) return { ...summary, applied: false };
+
+  let enrolled = 0;
+  for (let i = 0; i < targets.length; i += 200) {
+    const chunk = targets.slice(i, i + 200);
+    const fields = (name) => encodeFields({ league: true, leagueAt: now, n: name });
+    const writes = chunk.map((t) => ({ update: { name: fs.docName(`yuslotKeshi/${t.uid}`), fields: fields(t.name) }, updateMask: { fieldPaths: ["league", "leagueAt", "n"] } }));
+    writes.push({ update: { name: fs.docName("yuslotKeshi/_league"), fields: {} }, updateMask: { fieldPaths: [] }, updateTransforms: [{ fieldPath: "count", increment: restInt(chunk.length) }] });
+    await fs.commit(writes);
+    enrolled += chunk.length;
+  }
+  await writeAuditLog(deps, { type: "keshiLeagueEnroll", byUid: callerUid, days, enrolled, active: active.length });
+  return { ...summary, applied: true, enrolled };
 }
 
 /* =========================================================
