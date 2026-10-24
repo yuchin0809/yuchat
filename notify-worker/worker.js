@@ -5584,7 +5584,7 @@ async function martOffer(deps, uid, body) {
   if (!L || !martLive(L, now)) return { status: 409, error: "gone" };
   if (L.au) return { status: 409, error: "auction_only" };
   if (L.u === uid) return { status: 409, error: "own_listing" };
-  if (!Number.isInteger(price) || price >= L.price || price < Math.ceil(L.price * 0.3)) return { status: 400, error: "bad_price", min: Math.ceil(L.price * 0.3), max: L.price - 1 };
+  if (!Number.isInteger(price) || price >= L.price || price < 1) return { status: 400, error: "bad_price", max: L.price - 1 };
   const me = await loadMyUser(deps.firestore, uid, body?.username);
   if (me.error) return me.error;
   if (Number(decodeFields(me.raw.fields).coins || 0) < price) return { status: 409, error: "insufficient_coins" };
