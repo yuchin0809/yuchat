@@ -7,10 +7,10 @@
    ・商品の画像：mart-img/{枠}-{パーツ}.png（例：mart-img/body-titan.png）。ファイルがなければ、パーツごとに描いた絵（yumart-art.js）を表示する。
 ========================================================= */
 
-import { partArt } from "./yumart-art.js?v=20261024-mart2";
+import { partArt, kakuArt, prizeArt } from "./yumart-art.js?v=20261024-mart3";
 
 let deps = null, root = null, stylesDone = false, token = 0;
-let S = null, M = null, tab = "buy", slotFilter = "all", sort = "new", busy = false, note = null, adminData = null;
+let S = null, M = null, SELL = null, sellBusy = false, tab = "buy", slotFilter = "all", sort = "new", busy = false, note = null, adminData = null;
 const fmt = (n) => Number(n || 0).toLocaleString("ja-JP");
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const $ = (s) => root && root.querySelector(s);
@@ -22,7 +22,8 @@ const ERR = {
   too_many: "出品は1人10件までです", mart_full: "出品がいっぱいで、いまは追加できません", bad_price: "その値段は出せません", bad_request: "出品できないパーツです", not_owned: "そのパーツを持っていません",
   already_offered: "この商品には、すでに値下げ依頼を出しています", offers_full: "この商品への値下げ依頼がいっぱいです", buyer_no_coins: "相手のコインが足りないため、売れませんでした（依頼は消えました）",
   buyer_busy: "相手がいまゆうスロの席に着いているため、売れませんでした", buyer_has_it: "相手はすでに同じ中古パーツを持っているため、売れませんでした（依頼は消えました）", already_sold: "すでに売れています。画面を開きなおしてください",
-  not_published: "ゆうマートはまだ公開されていません"
+  not_published: "ゆうマートはまだ公開されていません", too_late: "枠の始まりの10分前をすぎたので、出品できません", already_listed: "この枠はすでに出品しています", no_resale: "確変台の予約権は、買ったものをまた売ることはできません",
+  right_expired: "この予約権は、期限が近いか、すぎているので出品できません", company_exists: "すでに会社を作っているので、A賞は出品できません", slot_limit: "1日にもてる確変の枠は3つまでです"
 };
 
 async function api(action, payload = {}) {
@@ -42,6 +43,7 @@ export async function openYuMartView() {
   await refresh(my);
 }
 async function refresh(my = token) {
+  SELL = null;
   try {
     const [s, m] = await Promise.all([api("martStatus"), api("martMine")]);
     if (my !== token) return;
@@ -63,10 +65,25 @@ function effectText(slot, variant) {
   const t = STAT.map(([k, label]) => { const v = used ? usedStat(p[k]) : p[k]; return v ? `${label}${v > 0 ? "+" : ""}${v}` : ""; }).filter(Boolean);
   return t.join(" ") || "変化なし";
 }
-function thumb(slot, variant) {
-  const id = String(variant).replace(/~u$/, "");
-  return `<span class="ym-img">${partArt(slot, id)}<img src="mart-img/${esc(slot)}-${esc(id)}.png" alt="" loading="lazy" onerror="this.remove()"></span>`;
+const MACHINE = { yubasic: "ゆうベーシック", yurush: "ゆうラッシュ", yuchance: "ゆうチャンス", yutreasure: "ゆうトレジャー", yurainbow: "ゆうレインボー", yujackpot: "ゆうジャックポット" };
+const PRIZE = { A: "A賞　自分の会社を運営できる権利", C: "C賞　確変台の予約を3回とれる権利", D: "D賞　確変台の予約を優先で1回確定でとれる権利", E: "E賞　消しバトの限定改造品", F: "F賞　消しバトの限定カラー" };
+const GEAR = { body: "本体", edge: "ふち", sole: "そこ", weight: "おもり" }, COLOR = { gold: "金", silver: "銀", rainbow: "虹", blackgold: "黒金" };
+const jst = (ms) => new Date(ms + 9 * 3600000);
+const hm = (ms) => { const d = jst(ms); return `${d.getUTCHours()}:${String(d.getUTCMinutes()).padStart(2, "0")}`; };
+const md = (ms) => { const d = jst(ms); return `${d.getUTCMonth() + 1}/${d.getUTCDate()}（${"日月火水木金土"[d.getUTCDay()]}）`; };
+function img(file) { return `<img src="mart-img/${esc(file)}.png" alt="" loading="lazy" onerror="this.remove()">`; }
+/* 出品・持ち物の見せ方：{ name, sub, art, used } */
+function itemOf(x) {
+  if (x.k === "kaku") return { name: `🌈 確変台の枠（${MACHINE[x.machine] || "確変台"}）`, sub: `${md(x.ss)} ${hm(x.ss)}〜${hm(x.se)}（${Math.round((x.se - x.ss) / 60000)}分）`, art: kakuArt() + img("kaku"), used: false };
+  if (x.k === "prize") {
+    const z = x.prize || {}, extra = z.id === "E" ? `（${GEAR[z.code] || ""}）` : z.id === "F" ? `「${COLOR[z.code] || ""}」` : "";
+    return { name: `${PRIZE[x.pid] || x.pid}${extra}`, sub: `ゆう番くじの景品${z.until ? `　期限 ${md(z.until)}` : ""}`, art: prizeArt(x.pid, z.code) + img(`prize-${x.pid}`), used: false };
+  }
+  const p = partInfo(x.slot, x.part), id = String(x.part).replace(/~u$/, "");
+  return { name: p ? p.name : x.part, sub: `${SLOT[x.slot]}　${effectText(x.slot, x.part)}`, art: partArt(x.slot, id) + img(`${x.slot}-${id}`), used: String(x.part).endsWith("~u") };
 }
+const thumb = (it) => `<span class="ym-img">${it.art}</span>`;
+const nameHtml = (it) => `${esc(it.name)}${it.used ? `<span class="ym-used">中古</span>` : ""}`;
 function priceTag(price, ref) {
   if (!ref) return "";
   const r = price / ref;
@@ -81,7 +98,7 @@ function draw() {
   const tabs = [["buy", "🛒 買う"], ["sell", "📦 出品する"], ["mine", `👤 自分の出品${M.listings.length ? `（${M.listings.length}）` : ""}`]];
   const alerts = M.listings.reduce((a, l) => a + l.offers.length + (l.npcOffer ? 1 : 0), 0);
   root.innerHTML = `<div class="ym-head"><h2>🏪 ゆうマート</h2><div class="ym-coins">🪙 ${fmt(M.coins)}</div></div>
-    <p class="ym-lead">いらなくなった消しバトのパーツを、売ったり買ったり。売れたパーツは中古になります。手数料は ${S.feePct}%。</p>
+    <p class="ym-lead">いらなくなった消しバトのパーツ・確変台の枠・ゆう番くじの景品を、売ったり買ったり。売れたパーツは中古になります。手数料は ${S.feePct}%。</p>
     ${S.paused ? `<div class="ym-card ym-warn">⏸ いまゆうマートは一時お休み中です（買う・出品はできません）</div>` : ""}
     ${note ? `<div class="ym-note ${note.bad ? "bad" : "ok"}">${esc(note.text)}</div>` : ""}
     <div class="ym-tabs">${tabs.map(([k, label]) => `<button type="button" class="ym-tab${tab === k ? " on" : ""}" data-tab="${k}">${label}${k === "mine" && alerts ? ` <b class="ym-dot">${alerts}</b>` : ""}</button>`).join("")}</div>
@@ -90,73 +107,93 @@ function draw() {
   if (tab === "buy") drawBuy(); else if (tab === "sell") drawSell(); else drawMine();
   if (S.isTopAdmin) drawAdmin();
 }
+const KINDS = [["all", "すべて"], ["kaku", "🌈 確変台の枠"], ["prize", "🎁 番くじの景品"], ["body", "🧽 本体"], ["edge", "🔲 ふち"], ["sole", "👟 そこ"], ["weight", "⚖️ おもり"]];
 function drawBuy() {
-  let list = S.listings.filter((x) => slotFilter === "all" || x.slot === slotFilter);
+  let list = S.listings.filter((x) => slotFilter === "all" || (slotFilter === "kaku" || slotFilter === "prize" ? x.k === slotFilter : x.k === "part" && x.slot === slotFilter));
   list = [...list].sort(sort === "cheap" ? (a, b) => a.price - b.price : sort === "dear" ? (a, b) => b.price - a.price : (a, b) => b.t - a.t);
   const my = M.myOffers.reduce((o, x) => { o[x.id] = x.q; return o; }, {});
   $("#ymBody").innerHTML = `<div class="ym-filter">
-      <select id="ymSlot"><option value="all">すべての部位</option>${Object.entries(SLOT).map(([k, v]) => `<option value="${k}"${slotFilter === k ? " selected" : ""}>${v}</option>`).join("")}</select>
+      <select id="ymSlot">${KINDS.map(([k, v]) => `<option value="${k}"${slotFilter === k ? " selected" : ""}>${v}</option>`).join("")}</select>
       <select id="ymSort"><option value="new"${sort === "new" ? " selected" : ""}>新しい順</option><option value="cheap"${sort === "cheap" ? " selected" : ""}>安い順</option><option value="dear"${sort === "dear" ? " selected" : ""}>高い順</option></select>
       <button type="button" class="ym-btn ym-sub" id="ymReload">更新</button></div>
     <div class="ym-grid">${list.map((x) => {
-      const p = partInfo(x.slot, x.part);
-      return `<div class="ym-item">${thumb(x.slot, x.part)}<div class="ym-info"><b>${esc(p ? p.name : x.part)}<span class="ym-used">中古</span></b>
-        <small>${SLOT[x.slot]}　${esc(effectText(x.slot, x.part))}</small>
+      const it = itemOf(x);
+      return `<div class="ym-item">${thumb(it)}<div class="ym-info"><b>${nameHtml(it)}</b>
+        <small>${esc(it.sub)}</small>
         <div class="ym-price">🪙 ${fmt(x.price)} ${priceTag(x.price, x.ref)}</div><small class="ym-seller">出品：${esc(x.n)}${x.npc ? "" : ` ・${timeLeft(x.e - nowMs())}`}</small></div>
         <div class="ym-act">${x.mine ? `<span class="ym-small">自分の出品</span>` : `<button type="button" class="ym-btn" data-buy="${esc(x.id)}" ${busy || S.paused ? "disabled" : ""}>買う</button>${x.npc ? "" : my[x.id] ? `<span class="ym-small">依頼中 🪙${fmt(my[x.id])}</span>` : `<button type="button" class="ym-btn ym-sub" data-offer="${esc(x.id)}" ${busy || S.paused ? "disabled" : ""}>値下げ依頼</button>`}`}</div></div>`;
     }).join("") || `<div class="ym-card ym-msg">いま出品はありません</div>`}</div>
-    <p class="ym-small">買ったあとのキャンセルはできません。中古パーツは、消しバトの「パーツ」から付けられます。</p>`;
+    <p class="ym-small">買ったあとのキャンセルはできません。買った確変台の枠は、また売ることはできません。</p>`;
   $("#ymSlot").addEventListener("change", (e) => { slotFilter = e.target.value; drawBuy(); });
   $("#ymSort").addEventListener("change", (e) => { sort = e.target.value; drawBuy(); });
   $("#ymReload").addEventListener("click", () => { note = null; refresh(); });
   root.querySelectorAll("[data-buy]").forEach((b) => b.addEventListener("click", () => buy(b.dataset.buy)));
   root.querySelectorAll("[data-offer]").forEach((b) => b.addEventListener("click", () => offer(b.dataset.offer)));
 }
+/* 出品できるもの：パーツ（martMine）＋確変枠・番くじ景品（martSellable。この画面を開いたときだけ読む） */
+async function loadSell() {
+  if (sellBusy) return; sellBusy = true; const my = token;
+  try { const r = await api("martSellable"); if (my === token) { SELL = r; if (tab === "sell") drawSell(); } }
+  catch (_) { if (my === token) { SELL = { slots: [], prizes: [], failed: true }; if (tab === "sell") drawSell(); } }
+  sellBusy = false;
+}
 function drawSell() {
-  const items = M.sellable;
-  $("#ymBody").innerHTML = `<div class="ym-card"><h3>出品するパーツを選ぶ</h3>
-    ${items.length ? items.map((x, i) => {
-      const p = partInfo(x.slot, x.part), used = String(x.part).endsWith("~u");
-      return `<div class="ym-item ym-sellrow">${thumb(x.slot, x.part)}<div class="ym-info"><b>${esc(p ? p.name : x.part)}${used ? `<span class="ym-used">中古</span>` : ""}</b>
-        <small>${SLOT[x.slot]}　${esc(effectText(x.slot, x.part))}${x.equipped ? "　（いま付けている）" : ""}</small><small>相場の目安 🪙 ${fmt(x.ref)}</small></div>
-        <div class="ym-act"><input type="number" inputmode="numeric" min="1" step="1" class="ym-input" id="ymP${i}" placeholder="${fmt(x.ref)}" value="${x.ref}"><button type="button" class="ym-btn" data-list="${i}" ${busy || S.paused ? "disabled" : ""}>出品</button></div></div>`;
-    }).join("") : `<div class="ym-msg">出品できるパーツがありません。消しバトのショップでパーツを買うと、ここから売れます。</div>`}
-    <p class="ym-small">出品すると、そのパーツは「預かり」になります（出品中は付けられません。売れ残ったら、そのまま戻ります）。出品は ${S.maxOpen} 件・3日間まで。値段の上限はありません。売れたら ${S.feePct}% の手数料が引かれます。</p></div>`;
+  if (!SELL) { $("#ymBody").innerHTML = `<div class="ym-card ym-msg">読み込み中…</div>`; loadSell(); return; }
+  const rows = [
+    ...SELL.slots.map((x) => ({ item: { k: "kaku", ...x }, ref: x.ref, send: { kind: "kaku", day: x.day, si: x.si }, extra: "（始まる10分前まで）" })),
+    ...SELL.prizes.map((x) => ({ item: { k: "prize", ...x }, ref: x.ref, send: { kind: "prize", n: x.n }, extra: "" })),
+    ...M.sellable.map((x) => ({ item: { k: "part", ...x }, ref: x.ref, send: { kind: "part", slot: x.slot, part: x.part }, extra: x.equipped ? "（いま付けている）" : "" }))
+  ];
+  $("#ymBody").innerHTML = `<div class="ym-card"><h3>出品するものを選ぶ</h3>
+    ${rows.length ? rows.map((r, i) => {
+      const it = itemOf(r.item);
+      return `<div class="ym-item ym-sellrow">${thumb(it)}<div class="ym-info"><b>${nameHtml(it)}</b>
+        <small>${esc(it.sub)}${esc(r.extra)}</small><small>相場の目安 🪙 ${fmt(r.ref)}</small></div>
+        <div class="ym-act"><input type="number" inputmode="numeric" min="1" step="1" class="ym-input" id="ymP${i}" placeholder="${fmt(r.ref)}" value="${r.ref}"><button type="button" class="ym-btn" data-list="${i}" ${busy || S.paused ? "disabled" : ""}>出品</button></div></div>`;
+    }).join("") : `<div class="ym-msg">いま出品できるものがありません。消しバトのパーツを買う・確変台の枠に当たる・ゆう番くじで景品が当たると、ここから売れます。</div>`}
+    <p class="ym-small">パーツと番くじの景品は、出品すると「預かり」になります（売れ残ったら、そのまま戻ります）。確変台の枠は、自分が当てた枠だけ、始まる10分前まで出品できます（買った枠は売れません）。出品は ${S.maxOpen} 件・3日間まで。値段の上限はありません。売れたら ${S.feePct}% の手数料が引かれます。${SELL.failed ? "<br>（確変台の枠・番くじの景品は読み込めませんでした。開きなおしてください）" : ""}</p></div>`;
   root.querySelectorAll("[data-list]").forEach((b) => b.addEventListener("click", () => {
-    const x = items[Number(b.dataset.list)], price = Number($(`#ymP${b.dataset.list}`).value);
+    const r = rows[Number(b.dataset.list)], price = Number($(`#ymP${b.dataset.list}`).value);
     if (!Number.isInteger(price) || price < 1) { setNote("値段は1以上の整数で入れてください", true); return; }
-    const p = partInfo(x.slot, x.part);
-    if (!confirm(`${p ? p.name : x.part}（中古になって売られます）を 🪙${fmt(price)} で出品しますか？\n売れると手数料 ${S.feePct}% が引かれます。`)) return;
-    run(async () => { await api("martList", { slot: x.slot, part: x.part, price }); tab = "mine"; return "出品しました"; });
+    const it = itemOf(r.item);
+    if (!confirm(`「${it.name}」を 🪙${fmt(price)} で出品しますか？${r.item.k === "part" ? "\n（中古になって売られます）" : ""}\n売れると手数料 ${S.feePct}% が引かれます。`)) return;
+    run(async () => { await api("martList", { ...r.send, price }); tab = "mine"; return "出品しました"; });
   }));
 }
 function drawMine() {
   const L = M.listings;
   $("#ymBody").innerHTML = `${L.length ? L.map((x) => {
-    const p = partInfo(x.slot, x.part);
+    const it = itemOf(x);
     const offers = [...(x.npcOffer ? [{ u: "npc", n: x.npcOffer.n, q: x.npcOffer.q }] : []), ...x.offers];
-    return `<div class="ym-card ym-mine"><div class="ym-item">${thumb(x.slot, x.part)}<div class="ym-info"><b>${esc(p ? p.name : x.part)}${String(x.part).endsWith("~u") ? `<span class="ym-used">中古</span>` : ""}</b>
-      <div class="ym-price">🪙 ${fmt(x.price)}</div><small>${x.expired ? "期限切れ（取り下げてください）" : timeLeft(x.e - nowMs())}</small></div>
+    return `<div class="ym-card ym-mine"><div class="ym-item">${thumb(it)}<div class="ym-info"><b>${nameHtml(it)}</b>
+      <small>${esc(it.sub)}</small><div class="ym-price">🪙 ${fmt(x.price)}</div><small>${x.expired ? "期限切れ（取り下げてください）" : timeLeft(x.e - nowMs())}</small></div>
       <div class="ym-act"><button type="button" class="ym-btn ym-sub" data-cancel="${esc(x.id)}" ${busy ? "disabled" : ""}>取り下げる</button></div></div>
       ${offers.map((o) => `<div class="ym-offer"><span>💬 <b>${esc(o.n)}</b> さんが <b>🪙 ${fmt(o.q)}</b> で買いたいそうです（値下げ依頼）</span>
         <span><button type="button" class="ym-btn" data-ans="${esc(x.id)}" data-who="${esc(o.u)}" data-acc="1" ${busy ? "disabled" : ""}>受ける</button> <button type="button" class="ym-btn ym-sub" data-ans="${esc(x.id)}" data-who="${esc(o.u)}" data-acc="0" ${busy ? "disabled" : ""}>断る</button></span></div>`).join("")}</div>`;
-  }).join("") : `<div class="ym-card ym-msg">出品中のパーツはありません</div>`}
+  }).join("") : `<div class="ym-card ym-msg">出品中のものはありません</div>`}
     <div class="ym-card"><h3>最近の取引</h3>${M.done.length ? M.done.map((d) => {
-      const [slot, id] = d.i.split(":"), p = partInfo(slot, id), name = p ? p.name : d.i, me = deps.getUsername();
+      const name = keyName(d.i), me = deps.getUsername();
       const text = d.npc ? `${esc(d.b)} さんに売れました（手数料 ${fmt(d.fee)}）` : d.sn === me ? `${esc(d.bn || "")} さんに売れました（手数料 ${fmt(d.fee)}）` : `${esc(d.sn)} さんから買いました`;
       return `<div class="ym-log">${esc(name)}　🪙 ${fmt(d.q)}　<small>${text}</small></div>`;
     }).join("") : `<div class="ym-msg">まだ取引はありません</div>`}</div>`;
-  root.querySelectorAll("[data-cancel]").forEach((b) => b.addEventListener("click", () => { if (confirm("この出品を取り下げて、パーツを戻しますか？")) run(async () => { await api("martCancel", { id: b.dataset.cancel }); return "取り下げました。パーツは手元に戻りました"; }); }));
+  root.querySelectorAll("[data-cancel]").forEach((b) => b.addEventListener("click", () => { if (confirm("この出品を取り下げますか？（預かっているものは戻ります）")) run(async () => { await api("martCancel", { id: b.dataset.cancel }); return "取り下げました"; }); }));
   root.querySelectorAll("[data-ans]").forEach((b) => b.addEventListener("click", () => {
     const acc = b.dataset.acc === "1";
     run(async () => { const r = await api("martAnswer", { id: b.dataset.ans, who: b.dataset.who, accept: acc }); return acc ? `🪙 ${fmt(r.price)} で売れました！（手数料 ${fmt(r.fee)}）` : "断りました"; });
   }));
 }
+/* 取引の記録の「もの」の名前（part：枠:パーツ／kaku:日付:番号／prize:賞） */
+function keyName(key) {
+  const [a, b, c] = String(key).split(":");
+  if (a === "kaku") return `🌈 確変台の枠 ${b} #${c}`;
+  if (a === "prize") return PRIZE[b] || `${b}賞`;
+  const p = partInfo(a, b); return p ? p.name : key;
+}
 function buy(id) {
   const x = S.listings.find((l) => l.id === id); if (!x) return;
-  const p = partInfo(x.slot, x.part);
-  if (!confirm(`${p ? p.name : x.part}（中古）を 🪙${fmt(x.price)} で買いますか？\n買ったあとのキャンセルはできません。`)) return;
-  run(async () => { await api("martBuy", { id }); return `買いました！「${p ? p.name : ""}（中古）」は、消しバトのパーツから付けられます`; });
+  const it = itemOf(x);
+  if (!confirm(`「${it.name}」${it.used ? "（中古）" : ""}を 🪙${fmt(x.price)} で買いますか？\n買ったあとのキャンセルはできません。${x.k === "kaku" ? "\n（買った枠は、また売ることはできません）" : ""}`)) return;
+  run(async () => { await api("martBuy", { id }); return x.k === "kaku" ? "買いました！ゆうスロの確変台で、その時間に遊べます" : x.k === "prize" ? "買いました！ゆう番くじの「もちもの」に入ります" : `買いました！「${it.name}（中古）」は、消しバトのパーツから付けられます`; });
 }
 function offer(id) {
   const x = S.listings.find((l) => l.id === id); if (!x) return;
@@ -173,6 +210,7 @@ async function run(fn) {
   try { const text = await fn(); note = { text, bad: false }; }
   catch (e) { note = { text: ERR[e && e.code] || "うまくいきませんでした。もう一度お試しください", bad: true }; }
   busy = false;
+  SELL = null;
   if (my === token) await refresh(my);
 }
 
@@ -188,8 +226,8 @@ function drawAdmin() {
 }
 function adminHtml() {
   const d = adminData, t = (ms) => new Date(ms + 9 * 3600000).toISOString().slice(5, 16).replace("T", " ");
-  return `<h4>売れた記録（新しい順・印は目安。止めはしません）</h4>${d.log.slice(0, 60).map((e) => `<div class="ym-log${e.flags.length ? " flag" : ""}">${t(e.at)}　${esc(e.s)} → ${esc(e.b)}　${esc(e.i)}　🪙${fmt(e.q)}${e.ref ? `（相場 ${fmt(e.ref)}）` : ""}　${e.flags.map((f) => `<b>${esc(f)}</b>`).join(" ")}</div>`).join("") || "<div class='ym-msg'>まだありません</div>"}
-    <h4>出品中（${d.listings.length}件）</h4>${d.listings.map((l) => `<div class="ym-log">${esc(l.seller)}　${esc(l.slot)}:${esc(l.part)}　🪙${fmt(l.price)}　<button type="button" class="ym-btn ym-sub" data-rm="${esc(l.id)}">取り下げさせる</button></div>`).join("")}`;
+  return `<h4>売れた記録（新しい順・印は目安。止めはしません）</h4>${d.log.slice(0, 60).map((e) => `<div class="ym-log${e.flags.length ? " flag" : ""}">${t(e.at)}　${esc(e.s)} → ${esc(e.b)}　${esc(keyName(e.i))}　🪙${fmt(e.q)}${e.ref ? `（相場 ${fmt(e.ref)}）` : ""}　${e.flags.map((f) => `<b>${esc(f)}</b>`).join(" ")}</div>`).join("") || "<div class='ym-msg'>まだありません</div>"}
+    <h4>出品中（${d.listings.length}件）</h4>${d.listings.map((l) => `<div class="ym-log">${esc(l.seller)}　${esc(itemOf(l).name)}　🪙${fmt(l.price)}　<button type="button" class="ym-btn ym-sub" data-rm="${esc(l.id)}">取り下げさせる</button></div>`).join("")}`;
 }
 function bindAdmin() {
   root.querySelectorAll("[data-rm]").forEach((b) => b.addEventListener("click", () => { if (confirm("この出品を強制的に取り下げて、持ち主に戻しますか？")) run(async () => { await api("martAdmin", { op: "remove", id: b.dataset.rm }); adminData = null; return "取り下げさせました"; }); }));

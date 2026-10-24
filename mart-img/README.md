@@ -21,3 +21,10 @@
 | `weight-bolt.png` | ボルト |
 | `weight-lead.png` | 鉛のおもり |
 | `weight-gold.png` | 金のおもり |
+
+## 確変台の枠・番くじの景品
+
+| ファイル名 | 商品 |
+|---|---|
+| `kaku.png` | 確変台の枠 |
+| `prize-A.png` / `prize-C.png` / `prize-D.png` / `prize-E.png` / `prize-F.png` | ゆう番くじの A賞・C賞・D賞・E賞・F賞 |
