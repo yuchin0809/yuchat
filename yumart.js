@@ -7,7 +7,7 @@
    ・商品の画像：mart-img/{枠}-{パーツ}.png（例：mart-img/body-titan.png）。ファイルがなければ、パーツごとに描いた絵（yumart-art.js）を表示する。
 ========================================================= */
 
-import { partArt, kakuArt, prizeArt } from "./yumart-art.js?v=20261024-mart5";
+import { partArt, kakuArt, prizeArt } from "./yumart-art.js?v=20261024-mart6";
 
 let deps = null, root = null, stylesDone = false, token = 0;
 let sellMode = "fixed", sellHours = 24, negoOpen = null, negoMsg = {};
@@ -125,9 +125,10 @@ function drawBuy() {
         <small>${esc(it.sub)}</small>
         <div class="ym-price">${x.au ? `<span class="ym-au">🔨 オークション</span> 現在 ` : ""}🪙 ${fmt(x.price)} ${x.au ? "" : priceTag(x.price, x.ref)}</div>
         ${x.au ? `<small>入札 ${x.au.nb}件${x.au.top ? `　最高：${esc(x.au.top)}${x.au.top === deps.getUsername() ? "（あなた）" : ""}` : "　まだ入札なし"}</small>` : ""}
+        ${x.dutch ? `<small class="ym-deal">📉 値下がり中！ 🪙${fmt(x.dutch.start)} → 🪙${fmt(x.dutch.floor)}（${md(x.e)} ${hm(x.e)} の抽選結果の発表まで。待つほど安くなりますが、ほかの人に買われるかも）</small>` : ""}
         ${x.deal ? `<small class="ym-deal">🤝 交渉成立！ 🪙${fmt(x.deal.from)} → 🪙${fmt(x.price)}${x.dealMine && x.deal.until > nowMs() ? `（あなたが ${timeLeft(x.deal.until - nowMs()).replace("あと", "あと")} 優先で買えます）` : x.deal.until > nowMs() ? "（交渉したお客さんが優先中）" : ""}</small>` : ""}
         <small class="ym-seller">出品：${esc(x.n)} ・${timeLeft(x.e - nowMs())}</small></div>
-        <div class="ym-act">${x.mine ? `<span class="ym-small">自分の出品</span>` : x.au ? `<button type="button" class="ym-btn" data-bid="${esc(x.id)}" ${busy || S.paused ? "disabled" : ""}>入札する</button>${bidInfo[x.id] ? `<span class="ym-small">${bidInfo[x.id].top ? "最高額で入札中" : "追い越されました"}</span>` : ""}` : `<button type="button" class="ym-btn" data-buy="${esc(x.id)}" ${busy || S.paused ? "disabled" : ""}>買う</button>${!x.npc && my[x.id] ? `<span class="ym-small">依頼中 🪙${fmt(my[x.id])}</span>` : `<button type="button" class="ym-btn ym-sub" data-nego="${esc(x.id)}" ${busy || S.paused ? "disabled" : ""}>${x.npc ? "値下げ交渉" : "値下げ依頼"}</button>`}`}</div>
+        <div class="ym-act">${x.mine ? `<span class="ym-small">自分の出品</span>` : x.au ? `<button type="button" class="ym-btn" data-bid="${esc(x.id)}" ${busy || S.paused ? "disabled" : ""}>入札する</button>${bidInfo[x.id] ? `<span class="ym-small">${bidInfo[x.id].top ? "最高額で入札中" : "追い越されました"}</span>` : ""}` : `<button type="button" class="ym-btn" data-buy="${esc(x.id)}" ${busy || S.paused ? "disabled" : ""}>買う</button>${x.dutch ? "" : !x.npc && my[x.id] ? `<span class="ym-small">依頼中 🪙${fmt(my[x.id])}</span>` : `<button type="button" class="ym-btn ym-sub" data-nego="${esc(x.id)}" ${busy || S.paused ? "disabled" : ""}>${x.npc ? "値下げ交渉" : "値下げ依頼"}</button>`}`}</div>
         ${negoOpen === x.id ? negoPanel(x) : ""}</div>`;
     }).join("") || `<div class="ym-card ym-msg">いま出品はありません</div>`}</div>
     <p class="ym-small">買ったあとのキャンセルはできません。買った確変台の枠は、また売ることはできません。</p>`;
