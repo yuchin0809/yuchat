@@ -78,7 +78,7 @@ function setup({ now = TT.quickOpen, published = true, n = 6 } = {}) {
   const fs = fakeFs(base);
   const state = { now };
   const sent = [];
-  const deps = { firestore: fs, adminUid: ADMIN, random: Math.random, now: () => state.now, slotSecret: "s", sendFcm: async (token, data) => { sent.push({ token, data }); return { ok: true }; } };
+  const deps = { firestore: fs, adminUid: ADMIN, slotNpc: false, random: Math.random, now: () => state.now, slotSecret: "s", sendFcm: async (token, data) => { sent.push({ token, data }); return { ok: true }; } };
   const act = (uid, name, body) => handleYuslotAction(deps, uid, { ...body, username: name });
   return { fs, deps, state, act, sent };
 }
@@ -904,32 +904,36 @@ test("NPC：お客さんが座っている台と、今日の確変台は避け�
   assert.equal(slotNpcSeat(now, new Set(ids.filter((i) => i !== "yubasic")), "yubasic"), null, "空いている台が確変台だけなら、いない");
 });
 
-test("NPC：ロビーに NPC が1台だけ出る（npc: true）。お客さんが座るとその台からどく。NPC のいる台にも座れる（席をゆずる）。確変台には出ない", async () => {
-  const ctx = setup({ now: jst(3, 12, 10) });
+test("NPC：ロビーに NPC が1台だけ出る（npc: true）。NPC のいる台には座れない（席はゆずらない）。お客さんが座っている台には出ない。確変台には出ない", async () => {
+  const ctx = setup({ now: jst(3, 12, 10) }); ctx.deps.slotNpc = true;
   const lobby = async (i = 1) => (await ctx.act(`id${i}`, `u${i}`, { action: "lobby" })).seats;
   let seats = await lobby();
   const npcs = Object.entries(seats).filter(([, s]) => s.npc);
   assert.equal(npcs.length, 1, "NPC は1人だけ"); assert.equal(npcs[0][1].occupied, true); assert.equal(npcs[0][1].mine, false);
   assert.ok(SLOT_NPC_NAMES.includes(npcs[0][1].name));
   assert.equal(Object.values(seats).filter((s) => s.occupied && !s.npc).length, 0);
-  // NPC のいる台に、お客さんが座れる（NPC は席をゆずる）
+  // NPC のいる台には、お客さんは座れない（席はゆずらない）。コインも引かれない
   const machine = npcs[0][0];
   setUser(ctx, 1, { coins: 5000 });
-  const seat = await seatOn(ctx, 1, machine);
+  const denied = await seatOn(ctx, 1, machine);
+  assert.equal(denied.error, "npc_busy", JSON.stringify(denied)); assert.equal(denied.name, npcs[0][1].name);
+  assert.equal(ctx.fs.docs.has(`yuslotSeats/${machine}`), false, "座席の書類は作られない");
+  // ほかの台には座れる。座った台には NPC は来ない
+  const other = Object.keys(SLOT_MACHINES).find((id) => id !== machine && !(kakuMachineFor(kakuDayId(ctx.state.now)) === id));
+  const seat = await seatOn(ctx, 1, other);
   assert.equal(seat.ok, true, JSON.stringify(seat));
   ctx.state.now += 7000;   // ロビーの表示は数秒ためてある
   seats = await lobby(2);
-  assert.equal(seats[machine].npc, undefined, "座った台に NPC はいない"); assert.equal(seats[machine].name, "u1"); assert.equal(seats[machine].mine, false);
-  assert.equal(Object.values(seats).filter((s) => s.npc).length, 1, "NPC は別の台に移って、いつも1台");
+  assert.equal(seats[other].npc, undefined); assert.equal(seats[other].name, "u1");
+  assert.equal(seats[machine].npc, true, "NPC は、お客さんに席をゆずらず、そのまま同じ台");
+  assert.equal(Object.values(seats).filter((s) => s.npc).length, 1);
   // 営業時間外はいない
-  const off = setup({ now: jst(3, 3, 0) });
+  const off = setup({ now: jst(3, 3, 0) }); off.deps.slotNpc = true;
   const closed = (await off.act("id1", "u1", { action: "lobby" })).seats;
   assert.equal(Object.values(closed).filter((s) => s.npc).length, 0);
   // 今日の確変台には出ない（確変の枠の台は、枠をとった人だけのもの）
-  const day = kakuDayId(jst(8, 12));
-  const kaku = kakuMachineFor(day);
-  if (kaku) for (let k = 0; k < 20; k++) {
-    const c = setup({ now: jst(8, 8) + k * SLOT_NPC_BLOCK_MS });
+  for (let k = 0; k < 20; k++) {
+    const c = setup({ now: jst(8, 8) + k * SLOT_NPC_BLOCK_MS }); c.deps.slotNpc = true;
     const sv = (await c.act("id1", "u1", { action: "lobby" })).seats;
     const kd = kakuMachineFor(kakuDayId(c.state.now));
     if (kd && slotBusinessOpenForTest(c.state.now)) assert.equal(sv[kd].npc, undefined, "確変台には NPC を出さない");

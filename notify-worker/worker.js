@@ -2525,7 +2525,7 @@ async function slotSeatDocs(deps, now) {
 /* 🤖 ゆうスロの NPC（お店の人）：営業時間のあいだ、いつも1台だけ、NPC が遊んでいる（ロビーの表示だけ。Firestore には何も書かない）。
    ・日時から決まる計算（乱数なし）。40分ごとに、台と名前が変わる。数は1人だけ。
    ・本物のお客さんが座っている台は避ける。今日の確変台も避ける（確変の枠をとった人の台なので）。
-   ・NPC が座っている台でも、お客さんは座れる（NPC は席をゆずる＝次のロビーの更新で別の台に移る） */
+   ・NPC が座っている台には、お客さんは座れない（NPC は席をゆずらない。着席の処理でも「使用中」として断る）。お客さんが座っていた台を NPC が取ることはない */
 export const SLOT_NPC_NAMES = ["ゆうマート従業員", "ゆうマート店長", "ゆう銀行の行員", "ゆう宝くじの売り子", "ゆうダービー実況", "ゆうスロの案内係", "ゆう消しゴム職人", "ゆうChat運営さん", "ゆう株のトレーダー", "ゆうワールド警備員", "ゆうカフェ店員", "ゆう配達員"];
 export const SLOT_NPC_BLOCK_MS = 40 * 60000;
 export function slotNpcSeat(now, occupiedIds = new Set(), kakuMachine = "") {
@@ -2539,6 +2539,12 @@ export function slotNpcSeat(now, occupiedIds = new Set(), kakuMachine = "") {
   }
   return null;
 }
+/* いまの NPC（席の一覧 docs から、お客さんが座っている台を除いて決める。ロビーの表示と、着席の判定で同じ答えになる） */
+function slotNpcNow(docs, now, deps = {}) {
+  if (deps.slotNpc === false) return null;   // テストだけが false にする（本番の deps には無いので、いつも有効）
+  const occupied = new Set([...docs.entries()].filter(([id, d]) => SLOT_MACHINES[id] && d && Number(d.graceUntilMs || 0) > now && !slotSeatStale(d, id, now)).map(([id]) => id));
+  return slotNpcSeat(now, occupied, kakuMachineFor(kakuDayId(now)));
+}
 async function yuslotLobby(deps, uid) {
   const published = await slotGetPublished(deps);
   if (!published && !slotIsTopAdmin(deps, uid)) return { status: 403, error: "not_published" };
@@ -2549,7 +2555,7 @@ async function yuslotLobby(deps, uid) {
     const d = docs.get(id) || null;
     seats[id] = d && Number(d.graceUntilMs || 0) > now && !slotSeatStale(d, id, now) ? { name: d.name || "", occupied: true, mine: d.uid === uid } : { occupied: false };
   }
-  const npc = slotNpcSeat(now, new Set(Object.keys(seats).filter((id) => seats[id].occupied)), kakuMachineFor(kakuDayId(now)));
+  const npc = slotNpcNow(docs, now, deps);
   if (npc) seats[npc.machine] = { name: npc.name, occupied: true, mine: false, npc: true };
   return { ok: true, seats, open: slotBusinessOpen(now), serverNowMs: now };
 }
@@ -2585,6 +2591,10 @@ async function yuslotSeat(deps, uid, body) {
   // 🌈 確変台は、その時間の枠をとった人だけ（NPC・空き枠は誰も遊べない）
   const kakuRight = await kakuSeatRight(deps, uid, machine, now);
   if (kakuRight && kakuRight.locked) return { status: 409, error: "kaku_locked" };
+
+  // 🤖 NPC（お店の人）が遊んでいる台には座れない（NPC は席をゆずらない。お客さんが座っている台は NPC が避けるので、自分の席の続きは問題ない）
+  const npc = deps.slotNpc === false ? null : slotNpcNow(await slotSeatDocs(deps, now), now, deps);
+  if (npc && npc.machine === machine) return { status: 409, error: "npc_busy", name: npc.name };
 
   const me = await loadMyUser(deps.firestore, uid, body?.username);
   if (me.error) return me.error;

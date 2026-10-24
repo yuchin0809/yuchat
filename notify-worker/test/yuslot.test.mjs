@@ -61,7 +61,7 @@ const ADMIN = "adminUid";
 function deps(initial, { uid = "uT", now = Date.UTC(2026, 0, 2, 3, 0, 0), random = Math.random } = {}) {
   resetYuslotCacheForTest();
   const fs = fakeFirestore({ "users/たろう": { uid: "uT", name: "たろう", coins: 1000 }, "users/かんりしゃ": { uid: ADMIN, name: "かんりしゃ", coins: 50 }, ...initial });
-  return { fs, deps: { firestore: fs, adminUid: ADMIN, slotSecret: "test-secret", random, now: () => now } };
+  return { fs, deps: { firestore: fs, adminUid: ADMIN, slotNpc: false, slotSecret: "test-secret", random, now: () => now } };
 }
 // 狙った出目を出す乱数（値を順に返し、尽きたら 0）
 const seq = (...vals) => { let i = 0; return () => (i < vals.length ? vals[i++] : 0); };
