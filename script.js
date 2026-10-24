@@ -45,7 +45,7 @@ import { inviteInit } from "./yuinvite.js?v=20261021-invite1";
 /* 🌈 確変台の当選者（管理者だけ） */
 import { kakuWinnersInit, kakuWinnersOpen, kakuWinnersReset } from "./yukakuwinners.js?v=20261021-winners1";
 import { keshiEnrollInit, keshiEnrollOpen, keshiEnrollReset } from "./yukeshi-admin.js?v=20261023-keshi13";
-import { economyAdminInit, economyAdminOpen, economyAdminReset } from "./yueconomy-admin.js?v=20261024-econ1";
+import { economyAdminInit, economyAdminOpen, economyAdminReset } from "./yueconomy-admin.js?v=20261024-econ2";
 
 import {
   getFirestore, initializeFirestore, collection, addDoc, getDocs, getDoc, doc, setDoc,
@@ -9729,6 +9729,8 @@ function renderEconomyView() {
         <span class="econ-sub">利息 1日1%（上限${BANK_INTEREST_MAX}コイン）・毎日13:00${bank.deposit > 0 ? `／次回 +${formatCoins(expectedInterest)}コイン（見込み）` : ""}</span>
         ${bank.deposit > bank.interestBase ? `<span class="econ-sub">新しく預けた分は、次の13:00の処理のあとから利息の対象になります。</span>` : ""}
         ${bank.lastInterest > 0 && bank.interestDate ? `<span class="econ-sub">${escapeHTML(formatEconomyDate(bank.interestDate))} の利息 +${formatCoins(bank.lastInterest)}コイン</span>` : ""}
+        <span class="econ-sub">🏛 ゆう税：総資産が ${formatCoins(5000)} コインを超えた部分に、毎日13:00にかかります（5,000〜1万＝1%・1万〜3万＝2%・3万〜＝3%）。5,000以下の人はかかりません。</span>
+        ${bank.lastTax > 0 && bank.taxDate ? `<span class="econ-sub">${escapeHTML(formatEconomyDate(bank.taxDate))} のゆう税 −${formatCoins(bank.lastTax)}コイン</span>` : ""}
       </div>
       <label class="econ-field">
         <span>金額</span>
