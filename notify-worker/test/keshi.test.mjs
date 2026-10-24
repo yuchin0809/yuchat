@@ -128,7 +128,7 @@ test("はじめて開く：初期の消しゴム（コインと表を返す）�
   assert.deepEqual(st.stats, { m: 50, s: 50, b: 50, z: 50, rating: 50 });
   assert.deepEqual(st.have, { body: ["plain"], edge: ["paper"], sole: ["bare"], weight: ["none"] });
   assert.equal(st.table.parts.body.length, 5); assert.equal(st.table.colors.length, 8);
-  assert.deepEqual(st.league, { entered: false, prizes: [1500, 1000, 300], sets: [[10, 30], [12, 40], [15, 0]], firstMs: Date.UTC(2026, 9, 25, 15, 0) });   // 第1回：2026-10-26（月）0:00 JST
+  assert.deepEqual(st.league, { entered: false, prizes: [3000, 2000, 600], sets: [[10, 30], [12, 40], [15, 0]], firstMs: Date.UTC(2026, 9, 25, 15, 0) });   // 第1回：2026-10-26（月）0:00 JST
   assert.equal(ctx.fs.plain("yuslotKeshi/id1"), null);
 });
 
@@ -273,7 +273,7 @@ test("リーグ戦：エントリーしていない状態・まだ始まって�
   const ctx = setup({ now: JST(2026, 10, 22, 17) });
   const st = await ctx.act(1, { action: "keshiLeagueState" });
   assert.deepEqual([st.ok, st.entered, st.count, st.started], [true, false, 0, false]);
-  assert.deepEqual(st.prizes, [1500, 1000, 300]); assert.deepEqual(st.sets, [[10, 30], [12, 40], [15, 0]]);
+  assert.deepEqual(st.prizes, [3000, 2000, 600]); assert.deepEqual(st.sets, [[10, 30], [12, 40], [15, 0]]);
   assert.equal(st.week.startMs, JST(2026, 10, 26, 0));
   assert.equal(ctx.fs.plain("yuslotKeshi/_league"), null, "開くだけでは何も書かない");
   const closed = setup({ keshi: false });

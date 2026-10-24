@@ -213,7 +213,7 @@ test("画面用のデータ：自分の順位・日ごとの勝敗と順位・�
   assert.equal(out.me, null); assert.equal(out.total, 0);
 });
 
-test("金曜 15:10 の結果発表：上位3名に 1000・700・400 コイン。二重には払わない。お知らせ・通知は出さない。次の週の画面に先週の結果が出る", async () => {
+test("金曜 15:10 の結果発表：上位3名に 3000・2000・600 コイン。二重には払わない。お知らせ・通知は出さない。次の週の画面に先週の結果が出る", async () => {
   const ctx = setup({ users: 6 });
   for (const t of [[26], [27], [28], [29], [30]].flatMap(([d]) => [[d, 10, 30], [d, 12, 40], [d, 15, 0]])) await ctx.tick(JST(2026, 10, ...t));
   assert.equal(ctx.wk().setsDone, 15);
@@ -222,17 +222,17 @@ test("金曜 15:10 の結果発表：上位3名に 1000・700・400 コイン。
   await ctx.tick(JST(2026, 10, 30, 15, 10));
   const wk = ctx.wk();
   assert.equal(wk.settled, true); assert.equal(wk.top.length, 3);
-  assert.deepEqual(wk.top.map((t) => [t.rank, t.prize, t.paid]), [[1, 1500, true], [2, 1000, true], [3, 300, true]]);
+  assert.deepEqual(wk.top.map((t) => [t.rank, t.prize, t.paid]), [[1, 3000, true], [2, 2000, true], [3, 600, true]]);
   const gained = [0, 1, 2, 3, 4, 5].map((i) => ctx.coinsOf(i) - before[i]);
   wk.top.forEach((t) => assert.equal(gained[Number(t.uid.slice(2))], t.prize));
-  assert.equal(gained.reduce((a, b) => a + b, 0), 2800, "4位以下には渡さない");
+  assert.equal(gained.reduce((a, b) => a + b, 0), 5600, "4位以下には渡さない");
   const rows = Object.entries(wk.p).map(([uid, v]) => ({ uid, ...v })).sort((a, b) => b.w - a.w || a.l - b.l || b.r - a.r || (a.n < b.n ? -1 : 1));
   assert.deepEqual(wk.top.map((t) => t.uid), rows.slice(0, 3).map((r) => r.uid), "勝ち数の多い順");
   assert.ok(wk.top[0].w >= wk.top[1].w && wk.top[1].w >= wk.top[2].w);
   // 二重払いなし
   resetKeshiLeagueTickForTest();
   await ctx.tick(JST(2026, 10, 30, 15, 12)); await ctx.act(0, { action: "keshiLeagueState" });
-  assert.equal([0, 1, 2, 3, 4, 5].map((i) => ctx.coinsOf(i) - before[i]).reduce((a, b) => a + b, 0), 2800);
+  assert.equal([0, 1, 2, 3, 4, 5].map((i) => ctx.coinsOf(i) - before[i]).reduce((a, b) => a + b, 0), 5600);
   assert.ok([...ctx.fs.docs.keys()].every((p) => !p.startsWith("announcements/") && !p.startsWith("notificationLogs/")), "お知らせ・通知は出さない");
   // 次の週の画面に、先週の結果（自分が入賞したかも）
   const winnerIdx = Number(wk.top[0].uid.slice(2));
@@ -247,7 +247,7 @@ test("金曜の cron が動かなくても、あとで画面を開いた人が�
   ctx.state.now = JST(2026, 10, 31, 9, 0);
   await ctx.act(0, { action: "keshiLeagueState" });
   assert.equal(ctx.wk().setsDone, 15); assert.equal(ctx.wk().settled, true); assert.equal(ctx.wk().top.length, 3);
-  assert.equal([0, 1, 2, 3].map((i) => ctx.coinsOf(i) - 1000).reduce((a, b) => a + b, 0), 2800);
+  assert.equal([0, 1, 2, 3].map((i) => ctx.coinsOf(i) - 1000).reduce((a, b) => a + b, 0), 5600);
 });
 
 test("エントリー：途中から入った人は、いまのセットから参加。やめた人は次のセットから抜ける（戦績は残る）", async () => {

@@ -70,7 +70,7 @@ export default {
     ctx.waitUntil(runBattleWeekTick(env, event.scheduledTime).catch((error) => console.error("battle week error", String(error?.message || error).slice(0, 300))));
     /* 🎲 ヨットの週間ランキング：毎週金曜 15:10（日本時間）に結果発表（1位500・2位300・3位100コイン。お知らせ・通知は出さない）。それ以外の分は Firestore に触れずにすぐ戻る */
     ctx.waitUntil(runYachtWeekTick(env, event.scheduledTime).catch((error) => console.error("yacht week error", String(error?.message || error).slice(0, 300))));
-    /* 🧽 消しバトのリーグ戦：月〜金の 10:30・12:40・15:00 に5試合ずつ自動で行い、金曜 15:10 に結果発表（1位1500・2位1000・3位300コイン。お知らせは流さない）。それ以外の分は Firestore に触れずにすぐ戻る */
+    /* 🧽 消しバトのリーグ戦：月〜金の 10:30・12:40・15:00 に5試合ずつ自動で行い、金曜 15:10 に結果発表（1位3000・2位2000・3位600コイン。お知らせは流さない）。それ以外の分は Firestore に触れずにすぐ戻る */
     ctx.waitUntil(runKeshiLeagueTick(env, event.scheduledTime).catch((error) => console.error("keshi league error", String(error?.message || error).slice(0, 300))));
     /* 💸 コイン送金：3日たっても承認されない申請を、1日1回（日本時間 3:07）自動で却下して返金する。それ以外の分は Firestore に触れずにすぐ戻る */
     /* 🗓 予約公開：決まった時刻に、ヨット・消しバトの公開スイッチを入れる（1回だけ）。それ以外の分は Firestore に触れずにすぐ戻る */
@@ -5127,10 +5127,10 @@ async function keshiEquip(deps, uid, body) {
 /* ----- リーグ戦（最強決定戦） -----
    ・毎週：月曜〜金曜（金曜 15:10 の結果発表まで）。毎日 10:30・12:40・15:00 に5試合ずつ（1日15試合）、自動で行う。第1回は 2026-10-26（月）から。
    ・エントリー：一度エントリーすると、毎週自動で参加扱い。やめるまで続く。1人1件（yuslotKeshi/{uid} の league）。参加者の人数は yuslotKeshi/_league の count。
-   ・上位3名への賞金：1位1500・2位1000・3位300コイン（金曜 15:10・お知らせは流さない）。
+   ・上位3名への賞金：1位3000・2位2000・3位600コイン（金曜 15:10・お知らせは流さない）。
    ・Firestore：週の書類 yuslotKeshiLeague/{月曜の日付} に、全員の戦績をまとめて持つ（1セットにつき書き込み1回）。エントリー中の人は yuslotKeshi の league で探す。 */
 const KESHI_LEAGUE_FIRST_MS = Date.UTC(2026, 9, 26, 0, 0) - 9 * 3600000;   // 第1回の週の始まり：2026-10-26（月）0:00 JST
-const KESHI_LEAGUE_PRIZES = [1500, 1000, 300];
+const KESHI_LEAGUE_PRIZES = [3000, 2000, 600];
 const KESHI_LEAGUE_SETS = [[10, 30], [12, 40], [15, 0]];
 const KESHI_LEAGUE_ROUNDS = 5;                                    // 1セット＝5試合
 const KESHI_DAY = 86400000, KESHI_LEAGUE_FRI_END = 4 * KESHI_DAY + 15 * 3600000 + 10 * 60000;
