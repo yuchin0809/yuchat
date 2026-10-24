@@ -5333,7 +5333,7 @@ const martView = (L, now, bids) => {
   const head = { id: L.i || L.id, npc: L.npc === true, n: L.n, k: L.k || "part", price: L.price, t: L.t, e: L.e, ref: martRefOf(L) };
   if (L.deal) head.deal = { until: L.deal.until, from: L.deal.from };   // 交渉が成立している（だれが交渉したかは出さない）
   if (L.au) { const au = martAucView(L, L.na ? bids : L.au.bids || [], now); head.price = au.cur; head.au = au; }
-  if (L.k === "kaku") return { ...head, day: L.day, ss: L.ss, se: L.se, machine: kakuMachineFor(L.day) };
+  if (L.k === "kaku") return { ...head, day: L.day, ss: L.ss, se: L.se, machine: kakuMachineFor(L.day), ...(L.dutch ? { dutch: L.dutch } : {}) };
   if (L.k === "prize") return { ...head, pid: L.pid, prize: L.pz };
   return { ...head, slot: L.slot, part: `${keshiBaseId(L.part)}~u` };   // 売れたら中古になるので、中古の姿で見せる
 };
@@ -5349,7 +5349,8 @@ async function martStatus(deps, uid) {
   const list = [
     ...cur.m.L.filter((L) => martLive(L, now)).map((L) => ({ ...martView(L, now), mine: L.u === uid })),
     ...martNpcListings(now, cur.m.npcSold).map((L) => { const D = martNpcDeal(L, cur.m.ND, now); return { ...martView(D, now), ...(D.deal ? { dealMine: D.deal.u === uid } : {}) }; }),
-    ...martNpcAuctions(now).map((A) => martView(A, now, cur.m.NA[A.id] || []))
+    ...martNpcAuctions(now).map((A) => martView(A, now, cur.m.NA[A.id] || [])),
+    ...(await martKakuNpcListings(deps, now)).map((L) => martView(L, now))
   ].sort((a, b) => b.t - a.t);
   return { ok: true, serverNowMs: now, paused: cur.m.paused, isTopAdmin: admin, listings: list, mineCount: mine.length, table: martNames(), usedRate: KESHI_USED_RATE, feePct: MART.feePct, maxOpen: MART.maxOpen, auctionHours: MART.auc.hours };
 }
@@ -5496,9 +5497,9 @@ async function martExecute(deps, mcur, L, price, buyer) {
       buyerWrites = [userWrite, ...keshiWrite(deps, buyer.uid, k, { owned: [...k.owned, key], eq: k.eq, color: k.color, n: me.name })];
     } else if (kind === "kaku") {
       const kc = await kakuGetDay(deps, L.day, 0), slot = kc?.data?.slots?.find((x) => x.i === L.si);
-      if (!slot || slot.uid !== L.u || slot.npc || slot.bt || slot.s - now <= MART.kakuLeadMs) return { status: 409, error: "gone" };   // 出品した人が、もうその枠を持っていない
+      if (!slot || (L.kn ? slot.npc !== true || slot.uid : slot.uid !== L.u || slot.npc || slot.bt) || slot.s - now <= MART.kakuLeadMs) return { status: 409, error: "gone" };   // 出品した人が、もうその枠を持っていない（NPC の枠は、まだ NPC のもの）
       if (kc.data.slots.filter((x) => x.uid === buyer.uid).length >= MART.kakuMaxPerDay) return { status: 409, error: buyer.byOther ? "buyer_has_it" : "slot_limit" };
-      const slots = kc.data.slots.map((x) => (x.i === L.si ? { ...x, uid: buyer.uid, name: me.name, bt: 1 } : x));   // 買った枠は、また売れない（bt）
+      const slots = kc.data.slots.map((x) => (x.i === L.si ? { ...x, uid: buyer.uid, name: me.name, npc: false, bt: 1 } : x));   // 買った枠は、また売れない（bt）
       buyerWrites = [userWrite, { update: { name: fs.docName(`yuslotKaku/${L.day}`), fields: encodeFields({ slots }) }, updateMask: { fieldPaths: ["slots"] }, currentDocument: { updateTime: kc.updateTime } }];
     } else {
       const path = `bankujiEntries/${BANKUJI.round}_${buyer.uid}`, raw = await fs.getRaw(path), d = raw ? decodeFields(raw.fields) : {};
@@ -5516,7 +5517,7 @@ async function martExecute(deps, mcur, L, price, buyer) {
     sellerWrites = [martIncCoins(deps, sm.name, price - fee)];
   }
   const m = structuredClone(mcur.m), item = martItemKey(L);
-  if (L.na) delete m.NA[L.id]; else if (L.npc) m.npcSold.push(L.id); else m.L = m.L.filter((x) => x.i !== L.i);
+  if (L.na) delete m.NA[L.id]; else if (L.kn) { /* NPC の枠は、枠の持ち主が変わるので記録は要らない */ } else if (L.npc) m.npcSold.push(L.id); else m.L = m.L.filter((x) => x.i !== L.i);
   const sn = L.n;
   m.done.push({ at: now, su: L.npc ? "" : L.u, sn, bu: buyerUid, bn: buyerName, i: item, q: price, fee });
   m.log.push({ at: now, su: L.npc ? "" : L.u, s: sn, bu: buyerUid, b: buyerName, i: item, q: price, k: L.npc ? "npc-list" : buyer.npc ? "npc-buy" : "p2p", ref: martRefOf(L) });
@@ -5533,7 +5534,8 @@ async function martBuy(deps, uid, body) {
   const id = String(body?.id || ""), now = deps.now(), mcur = await martLoad(deps);
   if (mcur.m.paused && !slotIsTopAdmin(deps, uid)) return { status: 409, error: "paused" };
   let L;
-  if (/^n\d/.test(id)) {
+  if (id.startsWith("kn:")) L = await martKakuNpcById(deps, id, now);   // 前日の抽選で NPC が取った枠（時間とともに値下がり）
+  else if (/^n\d/.test(id)) {
     L = martNpcById(id, now, mcur.m.npcSold);
     if (L) { L = martNpcDeal(L, mcur.m.ND, now); if (L.deal && L.deal.u !== uid && now < L.deal.until) return { status: 409, error: "reserved", until: L.deal.until }; }   // 交渉が成立したお客さんが、10分のあいだ優先
   }
@@ -5822,6 +5824,45 @@ async function martNegotiate(deps, uid, body) {
   const err = await martCommit(deps, [idx.write]);
   if (err) return err;
   return { ok: true, npc: base.n, triesLeft: MART.nego.tries - tries - 1, ...reply };
+}
+
+
+/* =========================================================
+   🌈 前日の抽選で NPC が取った確変枠の販売（抽選のあと、結果の発表（当日 7:50）まで）
+   ・前日の抽選（21:00）で NPC が取った30分枠を、ゆうマートで売る。最初は高い値段（相場の2.6〜3.4倍）から、結果の発表まで、どんどん下がっていく（相場の0.4倍まで。なめらかに下がる）。
+   ・値段は時刻から決まる計算（保存しない）。買われたら、その枠の持ち主が買った人に変わる（買った枠なので、また売れない・1日3枠まで）。コインはどこにも入らない。
+   ・売れ残った枠は、発表のとき、いつも通り NPC の枠のまま。
+   ・Firestore：今日・明日の確変の書類を読む（この時間帯だけ。30秒メモリにためる）。買うとき、その書類と users・index を1回の commit で書く。
+========================================================= */
+MART.kakuNpc = { startLo: 2.6, startSpan: 0.8, floor: 0.4, ttl: 30000 };
+function martKakuNpcPrice(day, si, ss, se, now) {
+  const t = kakuTimes(day), ref = martRefOf({ k: "kaku", day, ss, se });
+  const start = Math.round((ref * (MART.kakuNpc.startLo + MART.kakuNpc.startSpan * martUnit(day, si, 111))) / 10) * 10, floor = Math.max(10, Math.round((ref * MART.kakuNpc.floor) / 10) * 10);
+  const frac = Math.min(1, Math.max(0, (now - t.preClose) / (t.resultAt - t.preClose)));
+  return { start, floor, price: Math.max(floor, Math.round((start * Math.pow(floor / start, frac)) / 10) * 10) };
+}
+function martKakuNpcListing(day, slot, now) {
+  const t = kakuTimes(day), p = martKakuNpcPrice(day, slot.i, slot.s, slot.e, now);
+  return { id: `kn:${day}:${slot.i}`, npc: true, kn: true, n: martNpcName(day, slot.i, 112), k: "kaku", day, si: slot.i, ss: slot.s, se: slot.e, price: p.price, t: t.preClose, e: t.resultAt, dutch: { start: p.start, floor: p.floor } };
+}
+const martKakuNpcOpen = (day, now) => { if (day < KAKU_EPOCH) return false; const t = kakuTimes(day); return now >= t.preClose && now < t.resultAt; };
+/* いま売っている枠（今日・明日の書類のうち、抽選のあと発表の前のもの） */
+async function martKakuNpcListings(deps, now, ttl = MART.kakuNpc.ttl) {
+  const today = kakuDayId(now), out = [];
+  for (const day of [today, kakuNextDay(today)]) {
+    if (!martKakuNpcOpen(day, now)) continue;
+    const cur = await kakuGetDay(deps, day, ttl);
+    if (!cur || cur.data.draw1Done !== true) continue;
+    for (const slot of cur.data.slots) if (slot.kind === "pre" && slot.npc === true && !slot.uid && !slot.cx) out.push(martKakuNpcListing(day, slot, now));
+  }
+  return out;
+}
+async function martKakuNpcById(deps, id, now) {
+  const m = /^kn:(\d{4}-\d{2}-\d{2}):(\d+)$/.exec(String(id));
+  if (!m || !martKakuNpcOpen(m[1], now)) return null;
+  const cur = await kakuGetDay(deps, m[1], 0), slot = cur?.data?.slots?.find((x) => x.i === Number(m[2]));
+  if (!slot || cur.data.draw1Done !== true || slot.kind !== "pre" || slot.npc !== true || slot.uid || slot.cx) return null;
+  return martKakuNpcListing(m[1], slot, now);
 }
 
 /* 管理者：監視の一覧・一時停止・強制取り下げ（止めはしない。見て、必要なときだけ動く） */

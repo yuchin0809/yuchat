@@ -639,3 +639,63 @@ test("NPC から買って NPC に売っても増えない：交渉で下げら�
     assert.ok(npcPays - Math.floor(npcPays / 10) < lowest, `${x.part}: NPC への売値（手数料後の最高 ${npcPays - Math.floor(npcPays / 10)}）より高い`);
   }
 });
+
+/* ---------- 前日の抽選で NPC が取った確変枠の販売 ---------- */
+import { kakuTimes } from "../worker.js";
+const knList = async (t, i = 1) => (await t.act(i, { action: "martStatus" })).listings.filter((x) => x.id.startsWith("kn:"));
+
+test("前日の抽選のあと・発表の前：NPC が取った30分枠が、ゆうマートで売られる。最初は高く（相場の2.6〜3.4倍）、発表に向けて、なめらかに安くなる", async () => {
+  const t = setupKaku();
+  const T = kakuTimes(DAY), ref = 1500;   // 10/26（月）の30分枠の相場
+  t.state.now = T.preClose + 60000;
+  let l = await knList(t);
+  assert.deepEqual(l.map((x) => x.id), [`kn:${DAY}:2`], "NPC の枠だけ（人の枠・空き枠・当日分は出ない）");
+  assert.equal(l[0].k, "kaku"); assert.equal(l[0].npc, true); assert.equal(l[0].e, T.resultAt);
+  assert.ok(l[0].price >= ref * 2.55 && l[0].price <= ref * 3.45, `最初は高い ${l[0].price}`);
+  let prev = l[0].price;
+  for (const frac of [0.2, 0.4, 0.6, 0.8, 0.97]) {
+    t.state.now = T.preClose + frac * (T.resultAt - T.preClose); resetYuslotCacheForTest(); resetKakuCacheForTest();
+    l = await knList(t); assert.ok(l[0].price < prev, `どんどん下がる ${prev} → ${l[0].price}`); prev = l[0].price;
+  }
+  assert.ok(prev >= ref * 0.4 - 5 && prev < ref * 0.8, `最後は相場の0.4倍に近づく ${prev}`);
+  t.state.now = T.resultAt; resetKakuCacheForTest();
+  assert.deepEqual(await knList(t), [], "発表のあとは売らない");
+  t.state.now = T.preClose - 60000; resetKakuCacheForTest();
+  assert.deepEqual(await knList(t), [], "抽選の前は売らない");
+});
+
+test("前日の抽選の NPC 枠を買う：その時の値段を払い、枠の持ち主が買った人になる。買った枠はまた売れない。コインは世の中から減るだけ", async () => {
+  const t = setupKaku();
+  const T = kakuTimes(DAY);
+  t.state.now = T.preClose + 5 * 3600000; resetKakuCacheForTest();
+  const x = (await knList(t))[0], before = t.total();
+  const r = await t.act(1, { action: "martBuy", id: x.id });
+  assert.equal(r.ok, true); assert.equal(r.price, x.price); assert.equal(r.fee, Math.floor(x.price / 10));
+  const s = slotsOf(t).find((v) => v.i === 2);
+  assert.deepEqual([s.uid, s.name, s.npc, s.bt], ["id1", "u1", false, 1]);
+  assert.equal(t.coinsOf(1), 20000 - x.price); assert.equal(t.total(), before - x.price);
+  assert.equal((await t.act(2, { action: "martBuy", id: x.id })).error, "gone");
+  assert.deepEqual(await knList(t), []);
+  assert.equal((await t.act(1, { action: "martList", kind: "kaku", day: DAY, si: 2, price: 5000 })).error, "not_owned", "買った枠はまた売れない");
+  assert.equal((await t.act(1, { action: "martNegotiate", id: x.id, price: 10 })).error, "bad_request");
+});
+
+test("前日の抽選の NPC 枠：1日3枠まで・コイン不足・席に着いている人は買えない。抽選が終わっていない・当日分の枠は売らない", async () => {
+  const t = setupKaku();
+  const T = kakuTimes(DAY); t.state.now = T.preClose + 3600000;
+  const slots = slotsOf(t).map((x) => (x.i === 3 ? { ...x, npc: true, name: "みかん" } : x.i === 9 ? { ...x, kind: "lot", npc: true, name: "ももん" } : x.i >= 4 && x.i <= 6 ? { ...x, uid: "id1", name: "u1" } : x));
+  t.fs.putP(`yuslotKaku/${DAY}`, { day: DAY, machine: "yubasic", mode: "full", slots, app1: [], app2: [], draw1Done: true, draw2Done: false });
+  resetKakuCacheForTest();
+  assert.deepEqual((await knList(t)).map((x) => x.id).sort(), [`kn:${DAY}:2`, `kn:${DAY}:3`], "当日分の抽選枠（lot）は売らない");
+  assert.equal((await t.act(1, { action: "martBuy", id: `kn:${DAY}:2` })).error, "slot_limit");
+  t.fs.putP("users/u2", { uid: "id2", name: "u2", coins: 50 });
+  assert.equal((await t.act(2, { action: "martBuy", id: `kn:${DAY}:2` })).error, "insufficient_coins");
+  t.fs.putP("users/u0", { uid: "id0", name: "u0", coins: 20000 });
+  t.fs.putP("yuslotSeats/m1", { uid: "id0", graceUntilMs: t.state.now + 3600000 });
+  assert.equal((await t.act(0, { action: "martBuy", id: `kn:${DAY}:2` })).error, "seated");
+  const t2 = setupKaku();
+  t2.state.now = T.preClose + 3600000;
+  t2.fs.putP(`yuslotKaku/${DAY}`, { day: DAY, machine: "yubasic", mode: "full", slots: slotsOf(t2), app1: [], app2: [], draw1Done: false, draw2Done: false });
+  resetKakuCacheForTest();
+  assert.deepEqual(await knList(t2), [], "抽選がまだなら売らない");
+});
