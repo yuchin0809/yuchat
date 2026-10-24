@@ -6,7 +6,8 @@ import {
   kakuTimes, kakuDayId, kakuDayStart, resetKakuCacheForTest, resetYuslotCacheForTest, resetBattleCacheForTest, handleYuslotAction,
   battleCard, battlePlan, battleProofOk, battleBoardMerge, battleOpenSlots, battleClosedList,
   resetBattleWeekCacheForTest, resetBattleWeekTickForTest, runBattleWeekTick, battleWeekEnsure, battleWeekAnnounce, rankWeekStart,
-  kakuCancelPlan, kakuCancelRun, kakuCancelExpire, runKakuCancelTick, resetKakuCancelTickForTest, SLOT_ASSET_MIN, kakuMachineFor, KAKU_EPOCH, kakuNextDay
+  kakuCancelPlan, kakuCancelRun, kakuCancelExpire, runKakuCancelTick, resetKakuCancelTickForTest, SLOT_ASSET_MIN, kakuMachineFor, KAKU_EPOCH, kakuNextDay,
+  slotNpcSeat, SLOT_NPC_NAMES, SLOT_NPC_BLOCK_MS, SLOT_MACHINES
 } from "../worker.js";
 
 console.warn = () => {};
@@ -838,7 +839,7 @@ test("ロビー：席を1回の問い合わせで読み、数秒はメモリか�
   const a = await ctx.act("id1", "u1", { action: "lobby" });
   assert.equal(ctx.fs.counts.getRaw, before.getRaw, "6台を1台ずつ読まない");
   assert.equal(ctx.fs.counts.query - before.query, 1, "席の一覧は1回の問い合わせ");
-  assert.ok(Object.values(a.seats).every((x) => x.occupied === false));
+  assert.ok(Object.values(a.seats).every((x) => x.occupied === false || x.npc === true), "お客さんが座っている台はない（NPC だけは、いつも1台遊んでいる）");
   // 何回開いても、数秒のあいだは読み直さない
   for (let i = 0; i < 5; i++) { ctx.state.now += 1000; await ctx.act(`id${1 + (i % 3)}`, `u${1 + (i % 3)}`, { action: "lobby" }); }
   assert.equal(ctx.fs.counts.query - before.query, 1, "6秒以内は、読み取りなし");
@@ -851,7 +852,8 @@ test("ロビー：席を1回の問い合わせで読み、数秒はメモリか�
   assert.equal(other.seats.yubasic.occupied, true); assert.equal(other.seats.yubasic.mine, false); assert.equal(other.seats.yubasic.name, "u1");
   // 退席すると、すぐ空きになる
   await leave(ctx, 1, seat);
-  assert.equal((await ctx.act("id2", "u2", { action: "lobby" })).seats.yubasic.occupied, false);
+  const after = (await ctx.act("id2", "u2", { action: "lobby" })).seats.yubasic;
+  assert.ok(after.occupied === false || after.npc === true, "お客さんは退席した（NPC がその台に来ることはある）"); assert.notEqual(after.name, "u1");
   // 数秒たてば、読み直す
   const q = ctx.fs.counts.query; ctx.state.now += 7000;
   await ctx.act("id2", "u2", { action: "lobby" });
@@ -870,3 +872,67 @@ test("先着ページの表：「キャンセルの通知」の設定は、15秒
   assert.equal((await ctx.act("id1", "u1", { action: "battleBoard" })).notify, true, "設定を変えたら、すぐ反映");
   assert.equal((await ctx.act("id2", "u2", { action: "battleBoard" })).notify, false, "ほかの人には影響しない");
 });
+
+
+/* ---- 🤖 ゆうスロの NPC（お店の人）：営業時間のあいだ、いつも1台だけ遊んでいる ---- */
+const jst = (d, h, m = 0) => Date.UTC(2026, 10, d, h - 9, m, 0);   // 2026-11-d の日本時間 h:m
+
+test("NPC：営業時間（7:00〜23:00）のあいだは、いつも1台。営業時間外はいない。40分ごとに変わり、同じ40分のあいだは同じ", () => {
+  const ids = Object.keys(SLOT_MACHINES);
+  for (let h = 7; h < 23; h++) for (const m of [0, 15, 30, 45]) {
+    const n = slotNpcSeat(jst(3, h, m));
+    assert.ok(n && ids.includes(n.machine) && SLOT_NPC_NAMES.includes(n.name), `${h}:${m}`);
+  }
+  for (const h of [0, 3, 6, 23]) assert.equal(slotNpcSeat(jst(3, h, 30)), null, `${h}時は営業時間外`);
+  assert.equal(slotNpcSeat(jst(3, 7, 0)) !== null, true); assert.equal(slotNpcSeat(jst(3, 23, 0)), null);
+  const t0 = Math.floor(jst(3, 10, 5) / SLOT_NPC_BLOCK_MS) * SLOT_NPC_BLOCK_MS;
+  assert.deepEqual(slotNpcSeat(t0 + 1000), slotNpcSeat(t0 + SLOT_NPC_BLOCK_MS - 1000), "同じ40分は同じ台・同じ名前");
+  const seen = new Set(); for (let k = 0; k < 24; k++) { const n = slotNpcSeat(t0 + k * SLOT_NPC_BLOCK_MS); if (n) seen.add(n.machine + n.name); }
+  assert.ok(seen.size >= 6, "時間がたつと、台も名前もいろいろ変わる");
+  assert.ok(SLOT_NPC_NAMES.length >= 8 && SLOT_NPC_NAMES.every((n) => n.length <= 12), "名前は、ゆうChatに関係のある短い名前");
+  assert.ok(SLOT_NPC_NAMES.includes("ゆうマート従業員"));
+});
+
+test("NPC：お客さんが座っている台と、今日の確変台は避ける。全部ふさがっていたらいない", () => {
+  const ids = Object.keys(SLOT_MACHINES), now = jst(3, 12, 10);
+  const base = slotNpcSeat(now);
+  const moved = slotNpcSeat(now, new Set([base.machine]));
+  assert.notEqual(moved.machine, base.machine, "お客さんが座ったら、NPC は別の台に移る");
+  assert.deepEqual([moved.name], [base.name], "名前は同じ（同じ時間帯のNPC）");
+  assert.equal(slotNpcSeat(now, new Set(ids)), null);
+  for (let k = 0; k < 40; k++) assert.notEqual(slotNpcSeat(now + k * SLOT_NPC_BLOCK_MS, new Set(), "yujackpot")?.machine, "yujackpot", "確変台は避ける");
+  assert.equal(slotNpcSeat(now, new Set(ids.filter((i) => i !== "yubasic")), "yubasic"), null, "空いている台が確変台だけなら、いない");
+});
+
+test("NPC：ロビーに NPC が1台だけ出る（npc: true）。お客さんが座るとその台からどく。NPC のいる台にも座れる（席をゆずる）。確変台には出ない", async () => {
+  const ctx = setup({ now: jst(3, 12, 10) });
+  const lobby = async (i = 1) => (await ctx.act(`id${i}`, `u${i}`, { action: "lobby" })).seats;
+  let seats = await lobby();
+  const npcs = Object.entries(seats).filter(([, s]) => s.npc);
+  assert.equal(npcs.length, 1, "NPC は1人だけ"); assert.equal(npcs[0][1].occupied, true); assert.equal(npcs[0][1].mine, false);
+  assert.ok(SLOT_NPC_NAMES.includes(npcs[0][1].name));
+  assert.equal(Object.values(seats).filter((s) => s.occupied && !s.npc).length, 0);
+  // NPC のいる台に、お客さんが座れる（NPC は席をゆずる）
+  const machine = npcs[0][0];
+  setUser(ctx, 1, { coins: 5000 });
+  const seat = await seatOn(ctx, 1, machine);
+  assert.equal(seat.ok, true, JSON.stringify(seat));
+  ctx.state.now += 7000;   // ロビーの表示は数秒ためてある
+  seats = await lobby(2);
+  assert.equal(seats[machine].npc, undefined, "座った台に NPC はいない"); assert.equal(seats[machine].name, "u1"); assert.equal(seats[machine].mine, false);
+  assert.equal(Object.values(seats).filter((s) => s.npc).length, 1, "NPC は別の台に移って、いつも1台");
+  // 営業時間外はいない
+  const off = setup({ now: jst(3, 3, 0) });
+  const closed = (await off.act("id1", "u1", { action: "lobby" })).seats;
+  assert.equal(Object.values(closed).filter((s) => s.npc).length, 0);
+  // 今日の確変台には出ない（確変の枠の台は、枠をとった人だけのもの）
+  const day = kakuDayId(jst(8, 12));
+  const kaku = kakuMachineFor(day);
+  if (kaku) for (let k = 0; k < 20; k++) {
+    const c = setup({ now: jst(8, 8) + k * SLOT_NPC_BLOCK_MS });
+    const sv = (await c.act("id1", "u1", { action: "lobby" })).seats;
+    const kd = kakuMachineFor(kakuDayId(c.state.now));
+    if (kd && slotBusinessOpenForTest(c.state.now)) assert.equal(sv[kd].npc, undefined, "確変台には NPC を出さない");
+  }
+});
+const slotBusinessOpenForTest = (now) => { const h = new Date(now + 9 * 3600000).getUTCHours(); return h >= 7 && h < 23; };
