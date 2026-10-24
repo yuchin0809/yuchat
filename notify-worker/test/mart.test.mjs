@@ -184,7 +184,7 @@ test("値下げ依頼を断る／買う人のコインが足りない・すで�
 test("NPC の出品：いつも14件ほど。値段は相場（ショップの値段×0.75）の1.0〜1.5倍で、NPC から買うとコインは減るだけ", async () => {
   const t = setup();
   const st = await t.act(1, { action: "martStatus" });
-  const npc = st.listings.filter((x) => x.npc);
+  const npc = st.listings.filter((x) => x.npc && !x.au);
   assert.equal(npc.length, MART.npcSlots);
   for (const x of npc) {
     const ref = Math.round(KESHI_PARTS[x.slot].find((p) => p.id === x.part.replace("~u", "")).price * 0.75);
@@ -193,7 +193,7 @@ test("NPC の出品：いつも14件ほど。値段は相場（ショップの�
     assert.ok(x.price <= MART.npcMaxPay);
   }
   const again = await t.act(2, { action: "martStatus" });
-  assert.deepEqual(again.listings.filter((x) => x.npc).map((x) => x.id), npc.map((x) => x.id), "同じ時刻なら誰が見ても同じ");
+  assert.deepEqual(again.listings.filter((x) => x.npc && !x.au).map((x) => x.id), npc.map((x) => x.id), "同じ時刻なら誰が見ても同じ");
   const reads = t.fs.counts.getRaw;
   await t.act(2, { action: "martStatus" });
   assert.equal(t.fs.counts.getRaw, reads, "一覧は数秒のあいだメモリから返す（読み取りなし）");
@@ -207,7 +207,7 @@ test("NPC の出品：いつも14件ほど。値段は相場（ショップの�
   assert.equal((await t.act(2, { action: "martStatus" })).listings.some((x) => x.id === target.id), false);
   t.state.now += 13 * 3600000;
   const later = await t.act(2, { action: "martStatus" });
-  assert.equal(later.listings.filter((x) => x.npc).length, MART.npcSlots, "時間がたつと入れ替わる");
+  assert.equal(later.listings.filter((x) => x.npc && !x.au).length, MART.npcSlots, "時間がたつと入れ替わる");
 });
 
 test("NPC の買い取り：相場の1.05倍以下の出品は約半分が買われる。受け取るのは売値−手数料。精算は出品者が開いたとき", async () => {
@@ -419,4 +419,156 @@ test("番くじ景品：期限切れの予約権は出せない。NPC が景品�
   for (const x of m.listings.filter((v) => v.npcOffer)) { assert.ok(x.npcOffer.q <= Math.min(4000, Math.round(REF[x.pid] * 0.65 / 10) * 10), `${x.pid} ${x.npcOffer.q}`); assert.ok(x.npcOffer.q >= Math.min(4000, Math.round(REF[x.pid] * 0.5 / 10) * 10)); }
   const lowId = (await t.act(0, { action: "martList", kind: "prize", n: 5, price: 100000 })).error;
   assert.ok(lowId === "not_owned", "出品中のものは出せない");
+});
+
+/* ---------- オークション ---------- */
+const H = 3600000;
+const idxOf = (t) => JSON.parse(t.fs.plain("martIndex/open").json);
+const aucList = (t, i, o = {}) => t.act(i, { action: "martList", kind: "part", slot: "body", part: "titan", price: 2000, auction: true, hours: 6, ...o });
+
+test("オークションの出品：期間は1・6・24・72時間だけ。確変枠はオークションにできない。固定価格の購入・値下げ依頼はできない", async () => {
+  const t = setupKaku({ owned: ["body:titan", "body:pro"] });
+  assert.equal((await aucList(t, 0, { hours: 5 })).error, "bad_request");
+  assert.equal((await t.act(0, { action: "martList", kind: "kaku", day: DAY, si: 0, price: 500, auction: true, hours: 6 })).error, "no_auction");
+  const a = await aucList(t, 0);
+  assert.equal(a.ok, true);
+  assert.equal((await t.act(1, { action: "martBuy", id: a.id })).error, "auction_only");
+  assert.equal((await t.act(1, { action: "martOffer", id: a.id, price: 1500 })).error, "auction_only");
+  const x = (await t.act(1, { action: "martStatus" })).listings.find((v) => v.id === a.id);
+  assert.equal(x.au.cur, 2000); assert.equal(x.au.nb, 0); assert.equal(x.au.min, 2000); assert.equal(x.e - x.t, 6 * H);
+  assert.equal((await t.act(0, { action: "martCancel", id: a.id })).ok, true, "入札がなければ取り下げられる");
+});
+
+test("入札：開始価格以上・最高額の5%以上上乗せ。自分の出品・最高入札中の人・コイン不足は不可。入札があると取り下げられない", async () => {
+  const t = setup({ owned: ["body:titan"] });
+  const a = await aucList(t, 0);
+  assert.equal((await t.act(0, { action: "martBid", id: a.id, price: 3000 })).error, "own_listing");
+  assert.deepEqual([(await t.act(1, { action: "martBid", id: a.id, price: 1999 })).error, (await t.act(1, { action: "martBid", id: a.id, price: 1999 })).min], ["bid_too_low", 2000]);
+  assert.equal((await t.act(1, { action: "martBid", id: a.id, price: 2000 })).ok, true);
+  assert.equal((await t.act(1, { action: "martBid", id: a.id, price: 2500 })).error, "already_top");
+  assert.equal((await t.act(2, { action: "martBid", id: a.id, price: 2099 })).error, "bid_too_low", "2000 の5%＝100 以上");
+  t.fs.putP("users/u2", { uid: "id2", name: "u2", coins: 2000 });
+  assert.equal((await t.act(2, { action: "martBid", id: a.id, price: 2100 })).error, "insufficient_coins");
+  t.fs.putP("users/u2", { uid: "id2", name: "u2", coins: 20000 });
+  assert.equal((await t.act(2, { action: "martBid", id: a.id, price: 2100 })).ok, true);
+  const x = (await t.act(1, { action: "martStatus" })).listings.find((v) => v.id === a.id);
+  assert.deepEqual([x.au.cur, x.au.nb, x.au.top, x.au.min], [2100, 2, "u2", 2205]);
+  assert.equal((await t.act(1, { action: "martMine" })).myBids[0].top, false, "追い越された");
+  assert.equal((await t.act(0, { action: "martCancel", id: a.id })).error, "has_bids");
+  assert.equal(t.coinsOf(1), 20000, "入札では、コインは引かれない");
+});
+
+test("終了の5分前以降の入札は、終了が5分のびる", async () => {
+  const t = setup({ owned: ["body:titan"] });
+  const a = await aucList(t, 0, { hours: 1 });
+  const e0 = t.state.now + H;
+  t.state.now = e0 - 30 * MIN; await t.act(1, { action: "martBid", id: a.id, price: 2000 });
+  assert.equal((await t.act(2, { action: "martStatus" })).listings.find((v) => v.id === a.id).e, e0, "まだ早い");
+  t.state.now = e0 - 2 * MIN; await t.act(2, { action: "martBid", id: a.id, price: 2200 });
+  assert.equal((await t.act(1, { action: "martStatus" })).listings.find((v) => v.id === a.id).e, e0 - 2 * MIN + 5 * MIN);
+});
+
+test("落札：終わったら、いちばん高い人が自分の入札額を払う。手数料10%。パーツは中古で届く。精算は誰かが開いたときに行う", async () => {
+  const t = setup({ owned: ["body:titan"] });
+  const a = await aucList(t, 0, { hours: 1 });
+  await t.act(1, { action: "martBid", id: a.id, price: 2000 });
+  await t.act(2, { action: "martBid", id: a.id, price: 2500 });
+  const before = t.total();
+  t.state.now += H + MIN;
+  const st = await t.act(1, { action: "martStatus" });
+  assert.equal(st.listings.some((v) => v.id === a.id), false);
+  assert.equal(t.coinsOf(2), 17500); assert.equal(t.coinsOf(1), 20000); assert.equal(t.coinsOf(0), 20000 + 2250);
+  assert.ok(t.ownedOf(2).includes("body:titan~u")); assert.equal(t.ownedOf(0).length, 0);
+  assert.equal(t.total(), before - 250);
+  const mine = await t.act(2, { action: "martMine" });
+  assert.equal(mine.done[0].q, 2500);
+  assert.equal(idxOf(t).L.length, 0);
+});
+
+test("落札：払えない人・すでに同じ中古を持っている人は飛ばして、次の人へ。誰も払えなければ出品者に戻る。入札がなければそのまま戻る", async () => {
+  const t = setup({ owned: ["body:titan", "body:pro", "edge:metal"] });
+  const a = await aucList(t, 0, { hours: 1 });
+  await t.act(1, { action: "martBid", id: a.id, price: 2000 });
+  await t.act(2, { action: "martBid", id: a.id, price: 2500 });
+  t.fs.putP("users/u2", { uid: "id2", name: "u2", coins: 100 });
+  t.state.now += H + MIN;
+  await t.act(1, { action: "martStatus" });
+  assert.ok(t.ownedOf(1).includes("body:titan~u")); assert.equal(t.coinsOf(1), 18000, "次に高い人が、自分の入札額を払う");
+  const b = await t.act(0, { action: "martList", kind: "part", slot: "body", part: "pro", price: 500, auction: true, hours: 1 });
+  await t.act(1, { action: "martBid", id: b.id, price: 500 });
+  t.fs.putP("users/u1", { uid: "id1", name: "u1", coins: 10 });
+  const c = await t.act(0, { action: "martList", kind: "part", slot: "edge", part: "metal", price: 500, auction: true, hours: 1 });
+  t.state.now += H + MIN;
+  await t.act(2, { action: "martStatus" });
+  assert.ok(t.ownedOf(0).includes("body:pro"), "誰も払えなかった：戻る");
+  assert.ok(t.ownedOf(0).includes("edge:metal"), "入札なし：戻る");
+  assert.equal(idxOf(t).L.length, 0);
+  assert.ok(b.ok && c.ok);
+});
+
+test("落札：ゆうスロの席に着いている人は、少し待つ（1時間まで）。それをすぎたら次の人へ", async () => {
+  const t = setup({ owned: ["body:titan"] });
+  const a = await aucList(t, 0, { hours: 1 });
+  await t.act(1, { action: "martBid", id: a.id, price: 2500 });
+  await t.act(2, { action: "martBid", id: a.id, price: 3000 });
+  t.state.now += H + MIN;
+  t.fs.putP("yuslotSeats/m1", { uid: "id2", graceUntilMs: t.state.now + 3 * H });
+  await t.act(0, { action: "martStatus" });
+  assert.equal(idxOf(t).L.length, 1, "まだ精算しない");
+  t.state.now += 61 * MIN;
+  await t.act(0, { action: "martStatus" });
+  assert.equal(idxOf(t).L.length, 0); assert.ok(t.ownedOf(1).includes("body:titan~u"));
+});
+
+test("人のオークションへの NPC の入札：小さく1〜2回、相場の1.1倍・4,000コインまで。NPC が落札したら、出品者に払われる", async () => {
+  const t = setup({ owned: ALL_OWNED });
+  const ids = [];
+  for (const o of ALL_OWNED.slice(0, MART.maxOpen)) { const [slot, part] = o.split(":"); const r = await t.act(0, { action: "martList", kind: "part", slot, part, price: 10, auction: true, hours: 24 }); ids.push([r.id, slot, part]); }
+  t.state.now += 25 * H;
+  const before = t.coinsOf(0), totalBefore = t.total();
+  await t.act(1, { action: "martStatus" });
+  const m = await t.act(0, { action: "martMine" });
+  const sold = m.done.filter((d) => d.bu === "" && d.bn);
+  assert.ok(sold.length >= 5 && sold.length <= ids.length, `約8割に NPC が入札（${sold.length}/10）`);
+  for (const d of sold) {
+    const [slot, id] = d.i.split(":"), ref = Math.round(KESHI_PARTS[slot].find((p) => p.id === id).price * 0.75);
+    assert.ok(d.q <= MART.npcMaxPay && d.q <= Math.round(ref * 1.1 / 10) * 10, `${d.i} ${d.q} / 相場 ${ref}`);
+  }
+  assert.equal(t.coinsOf(0), before + sold.reduce((a, d) => a + d.q - d.fee, 0));
+  assert.equal(m.listings.length, 0, "落札されなかったものも、戻っている");
+  assert.equal(t.ownedOf(0).length + sold.length, ALL_OWNED.length);
+  assert.ok(t.total() > totalBefore, "NPC が払うぶん、コインが増える（相場の範囲）");
+});
+
+test("NPC どうしのオークション：いつも4件。NPC がどんどん釣り上げる（上限なし）。人は、最後の NPC の入札のあとに高く入れれば落札できる", async () => {
+  const t = setup();
+  const st = await t.act(1, { action: "martStatus" });
+  const na = st.listings.filter((x) => x.au && x.npc);
+  assert.equal(na.length, MART.auc.npcSlots);
+  assert.ok(na.every((x) => x.price >= 10 && x.id.startsWith("na")));
+  const x = na[0], start = x.au.s;
+  t.state.now = x.e - 1000;
+  const late = (await t.act(1, { action: "martStatus" })).listings.find((v) => v.id === x.id);
+  assert.ok(late.au.cur >= start && late.au.nb >= 3, "NPC の入札が重なる");
+  assert.ok(late.au.cur >= start * 1.12 ** 2, `釣り上げ ${start} → ${late.au.cur}`);
+  const earlyId = x.id;
+  const bid = await t.act(1, { action: "martBid", id: earlyId, price: late.au.min });
+  assert.equal(bid.ok, true);
+  assert.equal((await t.act(1, { action: "martMine" })).myBids[0].top, true);
+  t.state.now = x.e + MIN;
+  await t.act(2, { action: "martStatus" });
+  assert.equal(t.coinsOf(1), 20000 - late.au.min);
+  assert.ok(t.ownedOf(1).some((o) => o.endsWith("~u")), "中古パーツが届く");
+  assert.equal(Object.keys(idxOf(t).NA).length, 0, "精算したら、入札の記録は消える");
+  assert.equal((await t.act(1, { action: "martBid", id: earlyId, price: 999999 })).error, "gone", "終わったオークションには入札できない");
+});
+
+test("NPC どうしのオークション：早めに入れても、あとから NPC に追い越される（落札できない。コインも引かれない）", async () => {
+  const t = setup();
+  const x = (await t.act(1, { action: "martStatus" })).listings.find((v) => v.au && v.npc);
+  assert.equal((await t.act(1, { action: "martBid", id: x.id, price: x.au.min })).ok, true);
+  t.state.now = x.e + MIN;
+  await t.act(2, { action: "martStatus" });
+  assert.equal(t.coinsOf(1), 20000); assert.equal(t.ownedOf(1).length, 0);
+  assert.equal(Object.keys(idxOf(t).NA).length, 0);
 });
