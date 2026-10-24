@@ -49,6 +49,7 @@ async function ng(n, p) { try { await assertFails(p); pass++; logs.push("PASS �
     await setDoc(doc(d, "bankujiEntries/r1_uidA"), { uid: "uidA", name: "alice", round: "r1", tickets: [1], prizes: [] });
     await setDoc(doc(d, "bankujiPasses/r1_2026-10-27"), { round: "r1", day: "2026-10-27", winners: [] });
     await setDoc(doc(d, "bankujiApply/r1_2026-10-27_uidA"), { round: "r1", day: "2026-10-27", uid: "uidA" });
+    await setDoc(doc(d, "martIndex/open"), { json: "{}" });
     await setDoc(doc(d, "economyStats/history"), { points: [{ date: "2026-10-27", total: 100 }] });
     // 🌈 ゆうスロ確変台：枠・申込（yuslotKaku）と通知の好み（yuslotPrefs）は Worker（サービスアカウント）だけが書く
     await setDoc(doc(d, "yuslotKaku/2026-10-21"), { day: "2026-10-21", machine: "yubasic", slots: [], app1: [], app2: [] });
@@ -161,6 +162,9 @@ async function ng(n, p) { try { await assertFails(p); pass++; logs.push("PASS �
   await ng("ゆう番くじ：整理券の抽選結果（bankujiPasses）を直接読めない", getDoc(doc(alice, "bankujiPasses/r1_2026-10-27")));
   await ng("ゆう番くじ：自分を整理券の当選にする", updateDoc(doc(alice, "bankujiPasses/r1_2026-10-27"), { winners: ["uidA"] }));
   await ng("ゆう番くじ：整理券の申込（bankujiApply）を直接作る", setDoc(doc(bob, "bankujiApply/r1_2026-10-27_uidB"), { round: "r1", day: "2026-10-27", uid: "uidB" }));
+  await ng("ゆうマート：出品の一覧（martIndex）を直接読めない", getDoc(doc(alice, "martIndex/open")));
+  await ng("ゆうマート：出品を勝手に書き換える", updateDoc(doc(alice, "martIndex/open"), { json: "{\"L\":[]}" }));
+  await ng("ゆうマート：最上位管理者でもブラウザから書けない", updateDoc(doc(admin, "martIndex/open"), { json: "{}" }));
   await ng("ゆう番くじ：最上位管理者でもブラウザから書けない", updateDoc(doc(admin, "bankujiRounds/r1"), { status: "done" }));
   await ng("経済の状態：コインの総量・分布の記録（economyStats）を直接読めない", getDoc(doc(alice, "economyStats/history")));
   await ng("経済の状態：最上位管理者でもブラウザから読めない（Worker 経由だけ）", getDoc(doc(admin, "economyStats/history")));

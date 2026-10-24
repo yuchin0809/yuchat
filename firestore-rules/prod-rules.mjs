@@ -179,6 +179,10 @@ const TEST_CASES = [
   testCase("DENY", "bankujiPasses：自分を整理券の当選にする", userA, "create", "bankujiPasses/r1_2030-01-04", { data: { round: "r1", winners: [userA.uid] } }),
   testCase("DENY", "bankujiApply：整理券の申込を直接作る", userA, "create", `bankujiApply/r1_2030-01-04_${userA.uid}`, { data: { round: "r1", day: "2030-01-04", uid: userA.uid } }),
   testCase("DENY", "bankujiRounds：最上位管理者でもブラウザから書けない", admin, "update", "bankujiRounds/r1", { data: { status: "done" }, existing: { round: "r1", status: "selling" } }),
+  // 🏪 ゆうマート：出品・売れた記録は、サーバーだけが書く
+  testCase("DENY", "martIndex：出品の一覧を直接読めない", userA, "get", "martIndex/open", { existing: { json: "{}" } }),
+  testCase("DENY", "martIndex：出品を勝手に書き換える", userA, "update", "martIndex/open", { data: { json: "{\"L\":[]}" }, existing: { json: "{}" } }),
+  testCase("DENY", "martIndex：最上位管理者でもブラウザから書けない", admin, "update", "martIndex/open", { data: { json: "{}" }, existing: { json: "{}" } }),
   // 📊 経済の状態：コインの総量・分布の記録は、サーバー（毎日13:00の処理）だけが書く。ブラウザからは読み書きできない
   testCase("DENY", "economyStats：ふつうの人がコインの総量・分布の記録を読めない", userA, "get", "economyStats/history", { existing: { points: [] } }),
   testCase("DENY", "economyStats：記録を書き換える", userA, "update", "economyStats/history", { data: { points: [{ date: "2030-01-04", total: 0 }] }, existing: { points: [] } }),

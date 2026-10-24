@@ -61,7 +61,7 @@ service cloud.firestore {
     //   gameInvites：送った人・送られた人だけ／fcmTokens：アプリからは読まない（通知サーバーだけが読む）
     //   gameRooms・gameRoomOwners：専用のルールで判定（gameRooms はロビー表示のため読み取りは今まで通り許可）
     function hasDedicatedReadRules(collection) {
-      return collection in ['messages', 'groups', 'fcmTokens', 'gameInvites', 'gameRooms', 'gameRoomOwners', 'yuslotSeats', 'lotteryEntries', 'lotteryRounds', 'bankujiRounds', 'bankujiEntries', 'bankujiPasses', 'bankujiApply', 'economyStats', 'yuslotKaku', 'yuslotPrefs', 'coinTransfers', 'yuslotRank', 'yuslotBattle', 'yuslotYacht', 'yuslotKeshi', 'yuslotKeshiLeague'];
+      return collection in ['messages', 'groups', 'fcmTokens', 'gameInvites', 'gameRooms', 'gameRoomOwners', 'yuslotSeats', 'lotteryEntries', 'lotteryRounds', 'bankujiRounds', 'bankujiEntries', 'bankujiPasses', 'bankujiApply', 'economyStats', 'martIndex', 'yuslotKaku', 'yuslotPrefs', 'coinTransfers', 'yuslotRank', 'yuslotBattle', 'yuslotYacht', 'yuslotKeshi', 'yuslotKeshiLeague'];
     }
 
     // 下のコレクションは管理者だけが読める
@@ -88,6 +88,8 @@ service cloud.firestore {
         'bankujiRounds', 'bankujiEntries', 'bankujiPasses', 'bankujiApply',
         // 📊 経済の状態の毎日の記録（economyStats）は、毎日13:00の処理（GitHub Actions）が書く。管理者は Worker 経由で見る（ブラウザからは読み書きできない）
         'economyStats',
+        // 🏪 ゆうマート：出品・売れた記録・監視ログ（martIndex）は Worker だけが書く
+        'martIndex',
         // 🌈 ゆうスロ確変台：その日の枠・申込（yuslotKaku）と通知の好み（yuslotPrefs）は通知 Worker（サービスアカウント）だけが書く
         'yuslotKaku', 'yuslotPrefs',
         // 💸 コインの送金（管理者の承認制）：申請と状態は通知 Worker（サービスアカウント）だけが書く
@@ -442,6 +444,12 @@ service cloud.firestore {
       allow read: if false;
     }
     match /bankujiApply/{applyId} {
+      allow read: if false;
+    }
+
+    // ===== 🏪 ゆうマート（martIndex） =====
+    // 出品・値下げ依頼・売れた記録・監視ログは通知 Worker（サービスアカウント）だけ。ブラウザからは読み書きできない（Worker 経由で表示する）
+    match /martIndex/{docId} {
       allow read: if false;
     }
 

@@ -6,7 +6,13 @@ export function keshiStatsView(table, eq) {
   const d = { m: 0, s: 0, b: 0, z: 0 };
   table.slots.forEach((slot) => {
     const list = table.parts[slot];
-    const p = list.find((x) => x.id === eq[slot]) || list[0];
+    let p = list.find((x) => x.id === eq[slot]);
+    if (!p && /~u$/.test(String(eq[slot]))) {   // 中古（ゆうマートで買ったパーツ）：新品より、増える点数がほんの少しだけ低い。サーバーの keshiPartOf と同じ計算
+      const b = list.find((x) => x.id === String(eq[slot]).replace(/~u$/, ""));
+      const rate = table.usedRate || 0.92, dn = (v) => (v > 0 ? Math.round(v * rate) : v);
+      if (b && b.price !== 0) p = { m: dn(b.m), s: dn(b.s), b: dn(b.b), z: dn(b.z) };
+    }
+    p = p || list[0];
     d.m += p.m; d.s += p.s; d.b += p.b; d.z += p.z;
   });
   const base = table.base;
