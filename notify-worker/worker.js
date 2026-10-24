@@ -2813,7 +2813,7 @@ const LOTTERY_OVERRIDES = {
   "2026-10-23": { name: "🎊 グランドオープン記念！ゆうミリオンジャンボ", scale: 1, big: true }, // 最初の回：1等 10,000
   // 2回目：1等は同じ。2等・3等の本数と賞金を増やし、そのぶん番号の数を 2,500（25組）にした回（tiers・pool を持つ回は、その回だけこの設定を使う）
   "2026-10-30": {
-    name: "🎊 ゆうミリオンジャンボ 第2弾！", scale: 1, big: true, pool: 2500,
+    name: "🌟 ゆうミリオンジャンボ 大感謝祭！", scale: 1, big: true, pool: 2500,
     tiers: [
       { name: "1等", count: 1, prize: 10000 },
       { name: "前後賞", count: 2, prize: 2500, adjacent: true },
