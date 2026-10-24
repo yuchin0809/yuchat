@@ -7,9 +7,10 @@
    ・商品の画像：mart-img/{枠}-{パーツ}.png（例：mart-img/body-titan.png）。ファイルがなければ、パーツごとに描いた絵（yumart-art.js）を表示する。
 ========================================================= */
 
-import { partArt, kakuArt, prizeArt } from "./yumart-art.js?v=20261024-mart3";
+import { partArt, kakuArt, prizeArt } from "./yumart-art.js?v=20261024-mart4";
 
 let deps = null, root = null, stylesDone = false, token = 0;
+let sellMode = "fixed", sellHours = 24;
 let S = null, M = null, SELL = null, sellBusy = false, tab = "buy", slotFilter = "all", sort = "new", busy = false, note = null, adminData = null;
 const fmt = (n) => Number(n || 0).toLocaleString("ja-JP");
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -23,7 +24,8 @@ const ERR = {
   already_offered: "この商品には、すでに値下げ依頼を出しています", offers_full: "この商品への値下げ依頼がいっぱいです", buyer_no_coins: "相手のコインが足りないため、売れませんでした（依頼は消えました）",
   buyer_busy: "相手がいまゆうスロの席に着いているため、売れませんでした", buyer_has_it: "相手はすでに同じ中古パーツを持っているため、売れませんでした（依頼は消えました）", already_sold: "すでに売れています。画面を開きなおしてください",
   not_published: "ゆうマートはまだ公開されていません", too_late: "枠の始まりの10分前をすぎたので、出品できません", already_listed: "この枠はすでに出品しています", no_resale: "確変台の予約権は、買ったものをまた売ることはできません",
-  right_expired: "この予約権は、期限が近いか、すぎているので出品できません", company_exists: "すでに会社を作っているので、A賞は出品できません", slot_limit: "1日にもてる確変の枠は3つまでです"
+  right_expired: "この予約権は、期限が近いか、すぎているので出品できません", company_exists: "すでに会社を作っているので、A賞は出品できません", slot_limit: "1日にもてる確変の枠は3つまでです",
+  auction_only: "これはオークションです。「入札」から参加してください", bid_too_low: "入札額が低すぎます", already_top: "あなたがいま最高額で入札中です", has_bids: "入札があるので、取り下げられません", bids_full: "このオークションは、これ以上入札できません", no_auction: "確変台の枠はオークションにできません"
 };
 
 async function api(action, payload = {}) {
@@ -112,6 +114,7 @@ function drawBuy() {
   let list = S.listings.filter((x) => slotFilter === "all" || (slotFilter === "kaku" || slotFilter === "prize" ? x.k === slotFilter : x.k === "part" && x.slot === slotFilter));
   list = [...list].sort(sort === "cheap" ? (a, b) => a.price - b.price : sort === "dear" ? (a, b) => b.price - a.price : (a, b) => b.t - a.t);
   const my = M.myOffers.reduce((o, x) => { o[x.id] = x.q; return o; }, {});
+  const bidInfo = (M.myBids || []).reduce((o, x) => { o[x.id] = x; return o; }, {});
   $("#ymBody").innerHTML = `<div class="ym-filter">
       <select id="ymSlot">${KINDS.map(([k, v]) => `<option value="${k}"${slotFilter === k ? " selected" : ""}>${v}</option>`).join("")}</select>
       <select id="ymSort"><option value="new"${sort === "new" ? " selected" : ""}>新しい順</option><option value="cheap"${sort === "cheap" ? " selected" : ""}>安い順</option><option value="dear"${sort === "dear" ? " selected" : ""}>高い順</option></select>
@@ -120,8 +123,10 @@ function drawBuy() {
       const it = itemOf(x);
       return `<div class="ym-item">${thumb(it)}<div class="ym-info"><b>${nameHtml(it)}</b>
         <small>${esc(it.sub)}</small>
-        <div class="ym-price">🪙 ${fmt(x.price)} ${priceTag(x.price, x.ref)}</div><small class="ym-seller">出品：${esc(x.n)}${x.npc ? "" : ` ・${timeLeft(x.e - nowMs())}`}</small></div>
-        <div class="ym-act">${x.mine ? `<span class="ym-small">自分の出品</span>` : `<button type="button" class="ym-btn" data-buy="${esc(x.id)}" ${busy || S.paused ? "disabled" : ""}>買う</button>${x.npc ? "" : my[x.id] ? `<span class="ym-small">依頼中 🪙${fmt(my[x.id])}</span>` : `<button type="button" class="ym-btn ym-sub" data-offer="${esc(x.id)}" ${busy || S.paused ? "disabled" : ""}>値下げ依頼</button>`}`}</div></div>`;
+        <div class="ym-price">${x.au ? `<span class="ym-au">🔨 オークション</span> 現在 ` : ""}🪙 ${fmt(x.price)} ${x.au ? "" : priceTag(x.price, x.ref)}</div>
+        ${x.au ? `<small>入札 ${x.au.nb}件${x.au.top ? `　最高：${esc(x.au.top)}${x.au.top === deps.getUsername() ? "（あなた）" : ""}` : "　まだ入札なし"}</small>` : ""}
+        <small class="ym-seller">出品：${esc(x.n)} ・${timeLeft(x.e - nowMs())}</small></div>
+        <div class="ym-act">${x.mine ? `<span class="ym-small">自分の出品</span>` : x.au ? `<button type="button" class="ym-btn" data-bid="${esc(x.id)}" ${busy || S.paused ? "disabled" : ""}>入札する</button>${bidInfo[x.id] ? `<span class="ym-small">${bidInfo[x.id].top ? "最高額で入札中" : "追い越されました"}</span>` : ""}` : `<button type="button" class="ym-btn" data-buy="${esc(x.id)}" ${busy || S.paused ? "disabled" : ""}>買う</button>${x.npc ? "" : my[x.id] ? `<span class="ym-small">依頼中 🪙${fmt(my[x.id])}</span>` : `<button type="button" class="ym-btn ym-sub" data-offer="${esc(x.id)}" ${busy || S.paused ? "disabled" : ""}>値下げ依頼</button>`}`}</div></div>`;
     }).join("") || `<div class="ym-card ym-msg">いま出品はありません</div>`}</div>
     <p class="ym-small">買ったあとのキャンセルはできません。買った確変台の枠は、また売ることはできません。</p>`;
   $("#ymSlot").addEventListener("change", (e) => { slotFilter = e.target.value; drawBuy(); });
@@ -129,6 +134,7 @@ function drawBuy() {
   $("#ymReload").addEventListener("click", () => { note = null; refresh(); });
   root.querySelectorAll("[data-buy]").forEach((b) => b.addEventListener("click", () => buy(b.dataset.buy)));
   root.querySelectorAll("[data-offer]").forEach((b) => b.addEventListener("click", () => offer(b.dataset.offer)));
+  root.querySelectorAll("[data-bid]").forEach((b) => b.addEventListener("click", () => bid(b.dataset.bid)));
 }
 /* 出品できるもの：パーツ（martMine）＋確変枠・番くじ景品（martSellable。この画面を開いたときだけ読む） */
 async function loadSell() {
@@ -145,19 +151,24 @@ function drawSell() {
     ...M.sellable.map((x) => ({ item: { k: "part", ...x }, ref: x.ref, send: { kind: "part", slot: x.slot, part: x.part }, extra: x.equipped ? "（いま付けている）" : "" }))
   ];
   $("#ymBody").innerHTML = `<div class="ym-card"><h3>出品するものを選ぶ</h3>
+    <div class="ym-mode"><button type="button" class="ym-tab${sellMode === "fixed" ? " on" : ""}" data-mode="fixed">💰 値段を決めて売る</button><button type="button" class="ym-tab${sellMode === "auction" ? " on" : ""}" data-mode="auction">🔨 オークション</button>
+      ${sellMode === "auction" ? `<select id="ymHours">${S.auctionHours.map((h) => `<option value="${h}"${sellHours === h ? " selected" : ""}>${h >= 24 ? `${h / 24}日` : `${h}時間`}</option>`).join("")}</select>` : ""}</div>
+    ${sellMode === "auction" ? `<p class="ym-small">入力する金額は<b>開始価格</b>です。入札は5%以上ずつ上がり、終わりの5分前以降の入札で、終了が5分のびます。入札があると、取り下げられません。確変台の枠はオークションにできません。</p>` : ""}
     ${rows.length ? rows.map((r, i) => {
       const it = itemOf(r.item);
       return `<div class="ym-item ym-sellrow">${thumb(it)}<div class="ym-info"><b>${nameHtml(it)}</b>
         <small>${esc(it.sub)}${esc(r.extra)}</small><small>相場の目安 🪙 ${fmt(r.ref)}</small></div>
-        <div class="ym-act"><input type="number" inputmode="numeric" min="1" step="1" class="ym-input" id="ymP${i}" placeholder="${fmt(r.ref)}" value="${r.ref}"><button type="button" class="ym-btn" data-list="${i}" ${busy || S.paused ? "disabled" : ""}>出品</button></div></div>`;
+        <div class="ym-act"><input type="number" inputmode="numeric" min="1" step="1" class="ym-input" id="ymP${i}" placeholder="${fmt(r.ref)}" value="${sellMode === "auction" ? Math.max(1, Math.round(r.ref * 0.5)) : r.ref}"><button type="button" class="ym-btn" data-list="${i}" ${busy || S.paused || (sellMode === "auction" && r.item.k === "kaku") ? "disabled" : ""}>${sellMode === "auction" ? "オークションに出す" : "出品"}</button></div></div>`;
     }).join("") : `<div class="ym-msg">いま出品できるものがありません。消しバトのパーツを買う・確変台の枠に当たる・ゆう番くじで景品が当たると、ここから売れます。</div>`}
     <p class="ym-small">パーツと番くじの景品は、出品すると「預かり」になります（売れ残ったら、そのまま戻ります）。確変台の枠は、自分が当てた枠だけ、始まる10分前まで出品できます（買った枠は売れません）。出品は ${S.maxOpen} 件・3日間まで。値段の上限はありません。売れたら ${S.feePct}% の手数料が引かれます。${SELL.failed ? "<br>（確変台の枠・番くじの景品は読み込めませんでした。開きなおしてください）" : ""}</p></div>`;
+  root.querySelectorAll("[data-mode]").forEach((b) => b.addEventListener("click", () => { sellMode = b.dataset.mode; drawSell(); }));
+  $("#ymHours")?.addEventListener("change", (e) => { sellHours = Number(e.target.value); });
   root.querySelectorAll("[data-list]").forEach((b) => b.addEventListener("click", () => {
-    const r = rows[Number(b.dataset.list)], price = Number($(`#ymP${b.dataset.list}`).value);
+    const r = rows[Number(b.dataset.list)], price = Number($(`#ymP${b.dataset.list}`).value), auc = sellMode === "auction";
     if (!Number.isInteger(price) || price < 1) { setNote("値段は1以上の整数で入れてください", true); return; }
     const it = itemOf(r.item);
-    if (!confirm(`「${it.name}」を 🪙${fmt(price)} で出品しますか？${r.item.k === "part" ? "\n（中古になって売られます）" : ""}\n売れると手数料 ${S.feePct}% が引かれます。`)) return;
-    run(async () => { await api("martList", { ...r.send, price }); tab = "mine"; return "出品しました"; });
+    if (!confirm(auc ? `「${it.name}」を、開始価格 🪙${fmt(price)}・${sellHours >= 24 ? `${sellHours / 24}日間` : `${sellHours}時間`}のオークションに出しますか？${r.item.k === "part" ? "\n（中古になって売られます）" : ""}\n入札があると取り下げられません。落札されたら手数料 ${S.feePct}% が引かれます。` : `「${it.name}」を 🪙${fmt(price)} で出品しますか？${r.item.k === "part" ? "\n（中古になって売られます）" : ""}\n売れると手数料 ${S.feePct}% が引かれます。`)) return;
+    run(async () => { await api("martList", { ...r.send, price, ...(auc ? { auction: true, hours: sellHours } : {}) }); tab = "mine"; return auc ? "オークションに出しました" : "出品しました"; });
   }));
 }
 function drawMine() {
@@ -166,8 +177,10 @@ function drawMine() {
     const it = itemOf(x);
     const offers = [...(x.npcOffer ? [{ u: "npc", n: x.npcOffer.n, q: x.npcOffer.q }] : []), ...x.offers];
     return `<div class="ym-card ym-mine"><div class="ym-item">${thumb(it)}<div class="ym-info"><b>${nameHtml(it)}</b>
-      <small>${esc(it.sub)}</small><div class="ym-price">🪙 ${fmt(x.price)}</div><small>${x.expired ? "期限切れ（取り下げてください）" : timeLeft(x.e - nowMs())}</small></div>
-      <div class="ym-act"><button type="button" class="ym-btn ym-sub" data-cancel="${esc(x.id)}" ${busy ? "disabled" : ""}>取り下げる</button></div></div>
+      <small>${esc(it.sub)}</small><div class="ym-price">${x.au ? `<span class="ym-au">🔨 オークション</span> 現在 ` : ""}🪙 ${fmt(x.price)}</div>
+      ${x.au ? `<small>開始価格 🪙 ${fmt(x.au.s)}　入札 ${x.au.nb}件${x.au.top ? `　最高：${esc(x.au.top)}` : ""}</small>` : ""}
+      <small>${x.expired ? "期限切れ（取り下げてください）" : timeLeft(x.e - nowMs())}</small></div>
+      <div class="ym-act"><button type="button" class="ym-btn ym-sub" data-cancel="${esc(x.id)}" ${busy || (x.au && x.au.nb > 0 && !x.expired) ? "disabled" : ""}>${x.au && x.au.nb > 0 && !x.expired ? "入札あり" : "取り下げる"}</button></div></div>
       ${offers.map((o) => `<div class="ym-offer"><span>💬 <b>${esc(o.n)}</b> さんが <b>🪙 ${fmt(o.q)}</b> で買いたいそうです（値下げ依頼）</span>
         <span><button type="button" class="ym-btn" data-ans="${esc(x.id)}" data-who="${esc(o.u)}" data-acc="1" ${busy ? "disabled" : ""}>受ける</button> <button type="button" class="ym-btn ym-sub" data-ans="${esc(x.id)}" data-who="${esc(o.u)}" data-acc="0" ${busy ? "disabled" : ""}>断る</button></span></div>`).join("")}</div>`;
   }).join("") : `<div class="ym-card ym-msg">出品中のものはありません</div>`}
@@ -195,6 +208,14 @@ function buy(id) {
   if (!confirm(`「${it.name}」${it.used ? "（中古）" : ""}を 🪙${fmt(x.price)} で買いますか？\n買ったあとのキャンセルはできません。${x.k === "kaku" ? "\n（買った枠は、また売ることはできません）" : ""}`)) return;
   run(async () => { await api("martBuy", { id }); return x.k === "kaku" ? "買いました！ゆうスロの確変台で、その時間に遊べます" : x.k === "prize" ? "買いました！ゆう番くじの「もちもの」に入ります" : `買いました！「${it.name}（中古）」は、消しバトのパーツから付けられます`; });
 }
+function bid(id) {
+  const x = S.listings.find((l) => l.id === id); if (!x || !x.au) return;
+  const v = prompt(`いくらで入札しますか？（🪙 ${fmt(x.au.min)} 以上）\n入札のときコインは引かれません。終わったとき、いちばん高い人が、自分の入札額を払います（払えないときは次の人へ）。`, String(x.au.min));
+  if (v === null) return;
+  const price = Number(v);
+  if (!Number.isInteger(price)) { setNote("金額は整数で入れてください", true); return; }
+  run(async () => { await api("martBid", { id, price }); return `🪙 ${fmt(price)} で入札しました。追い越されたら、もう一度入札できます`; });
+}
 function offer(id) {
   const x = S.listings.find((l) => l.id === id); if (!x) return;
   const min = Math.ceil(x.price * 0.3), v = prompt(`いくらなら買いますか？（${fmt(min)}〜${fmt(x.price - 1)} コイン）\n出品者が受けると、その値段で買うことになります。`, String(Math.max(min, Math.floor(x.price * 0.85))));
@@ -208,7 +229,7 @@ async function run(fn) {
   if (busy) return;
   busy = true; const my = token;
   try { const text = await fn(); note = { text, bad: false }; }
-  catch (e) { note = { text: ERR[e && e.code] || "うまくいきませんでした。もう一度お試しください", bad: true }; }
+  catch (e) { note = { text: (ERR[e && e.code] || "うまくいきませんでした。もう一度お試しください") + (e && e.code === "bid_too_low" && e.detail && e.detail.min ? `（🪙 ${fmt(e.detail.min)} 以上）` : ""), bad: true }; }
   busy = false;
   SELL = null;
   if (my === token) await refresh(my);
@@ -260,6 +281,8 @@ function injectStyles() {
   .ym-btn { border: none; border-radius: 10px; padding: 9px 12px; font-weight: 900; font-size: 13px; cursor: pointer; color: #fff; background: linear-gradient(135deg, #ff7a18, #ff4d6d); } .ym-btn[disabled] { opacity: .45; cursor: default; } .ym-sub { background: #eee; color: #444; }
   .ym-input { width: 96px; padding: 7px; border-radius: 9px; border: 1px solid #ccc; font-size: 14px; text-align: right; }
   .ym-sellrow { margin-bottom: 8px; }
+  .ym-mode { display: flex; gap: 6px; margin: 6px 0; flex-wrap: wrap; } .ym-mode .ym-tab { padding: 8px 6px; } .ym-mode select { padding: 8px; border-radius: 10px; border: 1px solid #ddd; background: #fff; }
+  .ym-au { background: #2f4bd0; color: #fff; border-radius: 6px; font-size: 10.5px; padding: 1px 6px; vertical-align: 2px; }
   .ym-offer { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: space-between; background: #fff7e6; border-radius: 10px; padding: 8px 10px; margin-top: 8px; font-size: 13px; }
   .ym-log { font-size: 12.5px; padding: 6px 0; border-bottom: 1px solid #f0f0f0; line-height: 1.6; } .ym-log.flag { background: #fff3f0; } .ym-log b { color: #c0392b; font-size: 11px; }
   .ym-adminbox h4 { margin: 12px 0 4px; font-size: 13px; }

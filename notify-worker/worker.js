@@ -2447,6 +2447,7 @@ export async function handleYuslotAction(deps, uid, body) {
       case "martSellable": return await martSellable(deps, uid);
       case "martCancel": return await martCancel(deps, uid, body);
       case "martBuy": return await martBuy(deps, uid, body);
+      case "martBid": return await martBid(deps, uid, body);
       case "martOffer": return await martOffer(deps, uid, body);
       case "martAnswer": return await martAnswer(deps, uid, body);
       case "martAdmin": return await martAdmin(deps, uid, body);
@@ -5265,7 +5266,7 @@ function martNpcById(id, now, sold) {
 
 /* NPC が、人の出品にどうするか（すべて出品の id と時刻だけで決まる）。買い取り：buyAt を過ぎたら売れる。値下げ依頼：offerAt〜offerAt+24時間に出る */
 function martNpcPlan(L) {
-  if (L.k === "kaku") return null;   // 確変枠は NPC は売り買いしない
+  if (L.k === "kaku" || L.au) return null;   // 確変枠・オークションは、NPC は固定価格で買わない（オークションは入札で参加する）
   const ref = martRefOf(L);
   if (!ref) return null;
   const P = L.k === "prize" ? MART.prizeNpc : { buyMax: MART.npcBuyMax, lo: 0.8, span: 0.2 };
@@ -5285,12 +5286,12 @@ const martNpcOffer = (L, now) => { const p = martNpcPlan(L); return p && p.type 
 /* ----- 保存（martIndex/open） ----- */
 let martCache = { at: 0, cur: null };
 export function resetMartCacheForTest() { martCache = { at: 0, cur: null }; }
-const martBlank = () => ({ L: [], done: [], log: [], npcSold: [], paused: false });
+const martBlank = () => ({ L: [], done: [], log: [], npcSold: [], NA: {}, paused: false });
 function martParse(raw) {
   let m = {};
   try { m = JSON.parse(decodeFields(raw.fields).json || "{}"); } catch (_) { m = {}; }
   const arr = (v) => (Array.isArray(v) ? v : []);
-  return { L: arr(m.L), done: arr(m.done), log: arr(m.log), npcSold: arr(m.npcSold), paused: m.paused === true };
+  return { L: arr(m.L), done: arr(m.done), log: arr(m.log), npcSold: arr(m.npcSold), NA: m.NA && typeof m.NA === "object" && !Array.isArray(m.NA) ? m.NA : {}, paused: m.paused === true };
 }
 async function martLoad(deps, maxAgeMs = 0) {
   const now = deps.now();
@@ -5319,13 +5320,16 @@ async function martGate(deps, uid) {
   return g;
 }
 const martLive = (L, now) => now < L.e && !martNpcBought(L, now);
+/* 精算するオークションがあるか（人の出品が終わった・NPC どうしのオークションに人の入札があって終わった） */
+const martHasEnded = (m, now) => m.L.some((x) => x.au && now >= x.e) || Object.keys(m.NA).some((id) => { const r = martNpcAuctionById(id, now); return !r || r.ended; });
 const martNames = () => {
   const out = {};
   KESHI_SLOTS.forEach((slot) => { out[slot] = KESHI_PARTS[slot].filter((p) => p.price > 0).map((p) => ({ id: p.id, name: p.name, price: p.price, ref: martRef(slot, p.id), m: p.m, s: p.s, b: p.b, z: p.z })); });
   return out;
 };
-const martView = (L) => {
+const martView = (L, now, bids) => {
   const head = { id: L.i || L.id, npc: L.npc === true, n: L.n, k: L.k || "part", price: L.price, t: L.t, e: L.e, ref: martRefOf(L) };
+  if (L.au) { const au = martAucView(L, L.na ? bids : L.au.bids || [], now); head.price = au.cur; head.au = au; }
   if (L.k === "kaku") return { ...head, day: L.day, ss: L.ss, se: L.se, machine: kakuMachineFor(L.day) };
   if (L.k === "prize") return { ...head, pid: L.pid, prize: L.pz };
   return { ...head, slot: L.slot, part: `${keshiBaseId(L.part)}~u` };   // 売れたら中古になるので、中古の姿で見せる
@@ -5335,13 +5339,16 @@ const martView = (L) => {
 async function martStatus(deps, uid) {
   const g = await martGate(deps, uid);
   if (g) return g;
-  const now = deps.now(), cur = await martLoad(deps, 6000), admin = slotIsTopAdmin(deps, uid);
+  const now = deps.now(), admin = slotIsTopAdmin(deps, uid);
+  let cur = await martLoad(deps, 6000);
+  if (martHasEnded(cur.m, now)) { await martSettle(deps); cur = await martLoad(deps); }   // 終わったオークションを精算してから見せる
   const mine = cur.m.L.filter((L) => L.u === uid);
   const list = [
-    ...cur.m.L.filter((L) => martLive(L, now)).map((L) => ({ ...martView(L), mine: L.u === uid })),
-    ...martNpcListings(now, cur.m.npcSold).map((L) => martView(L))
+    ...cur.m.L.filter((L) => martLive(L, now)).map((L) => ({ ...martView(L, now), mine: L.u === uid })),
+    ...martNpcListings(now, cur.m.npcSold).map((L) => martView(L, now)),
+    ...martNpcAuctions(now).map((A) => martView(A, now, cur.m.NA[A.id] || []))
   ].sort((a, b) => b.t - a.t);
-  return { ok: true, serverNowMs: now, paused: cur.m.paused, isTopAdmin: admin, listings: list, mineCount: mine.length, table: martNames(), usedRate: KESHI_USED_RATE, feePct: MART.feePct, maxOpen: MART.maxOpen };
+  return { ok: true, serverNowMs: now, paused: cur.m.paused, isTopAdmin: admin, listings: list, mineCount: mine.length, table: martNames(), usedRate: KESHI_USED_RATE, feePct: MART.feePct, maxOpen: MART.maxOpen, auctionHours: MART.auc.hours };
 }
 
 /* 自分の画面：残高・出品できるパーツ・自分の出品（来ている値下げ依頼）・売れた記録。NPC に売れた出品は、ここで精算する */
@@ -5353,6 +5360,7 @@ async function martMine(deps, uid, body) {
   const now = deps.now();
   for (let attempt = 0; attempt < 3; attempt++) {
     const cur = await martLoad(deps);
+    if (martHasEnded(cur.m, now)) { await martSettle(deps); continue; }   // 終わったオークションを先に精算する
     const sold = cur.m.L.filter((L) => L.u === uid && martNpcBought(L, now));
     if (sold.length) {
       const m = structuredClone(cur.m); let gain = 0;
@@ -5372,13 +5380,18 @@ async function martMine(deps, uid, body) {
     const coins = Number(decodeFields(me.raw.fields).coins || 0);
     const sellable = k.owned.filter((o) => /^(body|edge|sole|weight):/.test(o)).map((o) => { const [slot, id] = o.split(":"); return { slot, part: id }; }).filter((x) => { const p = KESHI_PART_BY[x.slot]?.[keshiBaseId(x.part)]; return p && p.price > 0; }).map((x) => ({ ...x, equipped: k.eq[x.slot] === x.part, ref: martRef(x.slot, x.part) }));
     const listings = cur.m.L.filter((L) => L.u === uid).map((L) => ({
-      ...martView(L), expired: now >= L.e,
+      ...martView(L, now), expired: now >= L.e,
       offers: (L.of || []).filter((o) => now - o.t < MART.offerMs).map((o) => ({ u: o.u, n: o.n, q: o.q, t: o.t })),
       npcOffer: (() => { const p = martNpcOffer(L, now); return p ? { n: p.name, q: p.q, until: p.until } : null; })()
     }));
     const myOffers = cur.m.L.filter((L) => (L.of || []).some((o) => o.u === uid && now - o.t < MART.offerMs)).map((L) => ({ id: L.i, q: L.of.find((o) => o.u === uid).q }));
     const done = cur.m.done.filter((d) => d.su === uid || d.bu === uid).slice(-20).reverse();
-    return { ok: true, serverNowMs: now, coins, sellable, listings, myOffers, done };
+    /* 自分が入札しているオークション（いちばん高いか、追い越されたか） */
+    const myBids = [
+      ...cur.m.L.filter((L) => L.au && now < L.e && (L.au.bids || []).some((b) => b.u === uid)).map((L) => ({ id: L.i, st: martAucOf(L, now), bids: L.au.bids })),
+      ...Object.keys(cur.m.NA).filter((id) => martNpcAuctionById(id, now)?.live && cur.m.NA[id].some((b) => b.u === uid)).map((id) => ({ id, st: martNaStateOf(martNpcAuctionById(id, now).A, cur.m.NA[id], now), bids: cur.m.NA[id] }))
+    ].map((x) => ({ id: x.id, q: Math.max(...x.bids.filter((b) => b.u === uid).map((b) => b.q)), top: x.st.top?.u === uid }));
+    return { ok: true, serverNowMs: now, coins, sellable, listings, myOffers, myBids, done };
   }
   return { status: 409, error: "busy" };
 }
@@ -5387,8 +5400,10 @@ async function martMine(deps, uid, body) {
 async function martList(deps, uid, body) {
   const g = await martGate(deps, uid);
   if (g) return g;
-  const kind = String(body?.kind || "part"), price = Number(body?.price);
+  const kind = String(body?.kind || "part"), price = Number(body?.price), auction = body?.auction === true, hours = Number(body?.hours);
   if (!["part", "kaku", "prize"].includes(kind)) return { status: 400, error: "bad_request" };
+  if (auction && kind === "kaku") return { status: 409, error: "no_auction" };   // 確変枠はオークションにしない（精算が遅れると、枠が始まってしまうため）
+  if (auction && !MART.auc.hours.includes(hours)) return { status: 400, error: "bad_request" };
   if (kind === "part") { const base = KESHI_PART_BY[String(body?.slot || "")]?.[keshiBaseId(String(body?.part || ""))]; if (!base || base.price === 0 || !keshiPartOf(String(body.slot), String(body.part))) return { status: 400, error: "bad_request" }; }
   if (!Number.isInteger(price) || price < 1 || price > 100000000) return { status: 400, error: "bad_price" };
   const me = await loadMyUser(deps.firestore, uid, body?.username);
@@ -5425,6 +5440,7 @@ async function martList(deps, uid, body) {
     writes = [{ update: { name: deps.firestore.docName(path), fields: encodeFields({ prizes: prizes.filter((x) => x.n !== n) }) }, updateMask: { fieldPaths: ["prizes"] }, currentDocument: { updateTime: raw.updateTime } }];
     Object.assign(L, { k: "prize", pid: rec.id, pz: rec, e: rec.until ? Math.min(now + MART.listMs, rec.until) : now + MART.listMs });
   }
+  if (auction) { L.e = Math.min(now + hours * 3600000, L.e); L.au = { s: price, d: hours * 3600000, e0: L.e, bids: [] }; }   // 開始価格は price。終了は期間（予約権の期限があればそれまで）
   const m = structuredClone(mcur.m);
   m.L.push(L);
   const idx = martIndexWrite(deps, mcur, m, now);
@@ -5497,7 +5513,7 @@ async function martExecute(deps, mcur, L, price, buyer) {
     sellerWrites = [martIncCoins(deps, sm.name, price - fee)];
   }
   const m = structuredClone(mcur.m), item = martItemKey(L);
-  if (L.npc) m.npcSold.push(L.id); else m.L = m.L.filter((x) => x.i !== L.i);
+  if (L.na) delete m.NA[L.id]; else if (L.npc) m.npcSold.push(L.id); else m.L = m.L.filter((x) => x.i !== L.i);
   const sn = L.n;
   m.done.push({ at: now, su: L.npc ? "" : L.u, sn, bu: buyerUid, bn: buyerName, i: item, q: price, fee });
   m.log.push({ at: now, su: L.npc ? "" : L.u, s: sn, bu: buyerUid, b: buyerName, i: item, q: price, k: L.npc ? "npc-list" : buyer.npc ? "npc-buy" : "p2p", ref: martRefOf(L) });
@@ -5514,9 +5530,10 @@ async function martBuy(deps, uid, body) {
   const id = String(body?.id || ""), now = deps.now(), mcur = await martLoad(deps);
   if (mcur.m.paused && !slotIsTopAdmin(deps, uid)) return { status: 409, error: "paused" };
   let L;
-  if (id.startsWith("n")) L = martNpcById(id, now, mcur.m.npcSold);
+  if (/^n\d/.test(id)) L = martNpcById(id, now, mcur.m.npcSold);
   else { L = mcur.m.L.find((x) => x.i === id); if (L && !martLive(L, now)) L = null; }
   if (!L) return { status: 409, error: "gone" };
+  if (L.au) return { status: 409, error: "auction_only" };
   if (!L.npc && L.u === uid) return { status: 409, error: "own_listing" };
   return await martExecute(deps, mcur, L, L.price, { uid, name: body?.username });
 }
@@ -5544,6 +5561,7 @@ async function martCancel(deps, uid, body) {
   const L = mcur.m.L.find((x) => x.i === id && x.u === uid);
   if (!L) return { status: 409, error: "gone" };
   if (martNpcBought(L, now)) return { status: 409, error: "already_sold" };   // もう NPC が買っている（画面を開きなおすと精算される）
+  if (L.au && (L.au.bids || []).length) return { status: 409, error: "has_bids" };   // 入札があるオークションは取り下げられない
   const err = await martReturn(deps, mcur, L);
   return err || { ok: true };
 }
@@ -5556,6 +5574,7 @@ async function martOffer(deps, uid, body) {
   if (mcur.m.paused && !slotIsTopAdmin(deps, uid)) return { status: 409, error: "paused" };
   const L = mcur.m.L.find((x) => x.i === id);
   if (!L || !martLive(L, now)) return { status: 409, error: "gone" };
+  if (L.au) return { status: 409, error: "auction_only" };
   if (L.u === uid) return { status: 409, error: "own_listing" };
   if (!Number.isInteger(price) || price >= L.price || price < Math.ceil(L.price * 0.3)) return { status: 400, error: "bad_price", min: Math.ceil(L.price * 0.3), max: L.price - 1 };
   const me = await loadMyUser(deps.firestore, uid, body?.username);
@@ -5596,6 +5615,161 @@ async function martAnswer(deps, uid, body) {
   return r;
 }
 
+
+/* =========================================================
+   🔨 ゆうマートのオークション（出品を「オークション」にできる。パーツ・番くじの景品。確変枠はなし）
+   ・出品者が開始価格と期間（1・6・24時間・3日）を決める。入札は、いまの最高額より5%以上（最低1）高く。自分の出品には入札できない。
+   ・終了の5分前以降に入札があったら、終了が5分のびる（NPC の自動入札は、のばさない）。入札があるオークションは、取り下げられない。
+   ・入札のときコインは引かない（預けない）。終わったとき、いちばん高い人から順に、払えるかを確かめて、払えた最初の人が落札（自分の入札額を払う）。
+     払えない・すでに同じ中古を持っている人は飛ばして、次の人へ。ゆうスロの席に着いている人は、少し待つ（1時間まで）。誰も落札できなければ、出品者に戻る。
+   ・手数料・中古・記録は、ふつうの売買（martExecute）と同じ。
+   ・精算は、ゆうマートを誰かが開いたとき（martStatus／martMine）に、終わったものをまとめて行う（毎分の cron は使わない）。
+   ・NPC：
+       ・人のオークションには、約8割に、1〜2回だけ小さく入札（相場の1.1倍・4,000コインまで。景品は景品の額まで）。時刻は出品の id から決まる。
+       ・NPC どうしのオークション（いつも4件。6〜24時間）は、NPC が、いまの最高額の1.12〜1.6倍（ときどき「人気」で1.4〜2.2倍）を、何回も入札して釣り上げる。上限なし。
+         人が入札すると martIndex の NA に入札だけ保存。終わったとき、人の入札がいちばん高ければ、その人が払って、中古パーツが届く（コインは世の中から消える）。NPC が最高なら、何も起きない。
+   ・入札の流れは、人の入札（保存）と NPC の入札（出品の id から決まる時刻）を、時刻順に並べて再現する（martAucState）。人の入札は、入札したときに通っているので、再現しても同じになる。
+========================================================= */
+MART.auc = { hours: [1, 6, 24, 72], raisePct: 5, snipeMs: 5 * 60000, extendMs: 5 * 60000, maxBids: 100, deferMs: 3600000, npcSlots: 4, npcPeriodsH: [6, 8, 12, 24], npcStartRatio: 0.5, npcOnPlayer: 0.8, npcOnPlayerCap: 1.1 };
+const martAucInc = (high) => Math.max(1, Math.ceil((high * MART.auc.raisePct) / 100));
+const martAucNext = (start, high) => (high > 0 ? high + martAucInc(high) : start);
+
+/* 入札の流れを時刻順に再現する。bids：人の入札、ev：NPC の入札の予定。cap：NPC が入札できる上限（Infinity＝上限なし）。ev の g があれば、いまの最高額の g 倍（NPC どうし）、なければ最低の上乗せ */
+export function martAucState(start, bids, ev, cap, now) {
+  const all = [...bids.map((b) => ({ ...b, npc: false })), ...ev.filter((x) => x.t <= now).map((x) => ({ ...x, npc: true }))].map((x, i) => ({ ...x, o: i })).sort((a, b) => a.t - b.t || Number(a.npc) - Number(b.npc) || a.o - b.o);   // 同じ時刻なら、人が先・入札した順
+  let high = 0, top = null;
+  const acc = [];
+  for (const x of all) {
+    const next = martAucNext(start, high);
+    let q = x.q;
+    if (x.npc) { q = x.g ? Math.max(next, Math.ceil((high * x.g) / 10) * 10) : next; if (q > cap) continue; }
+    else if (q < next) continue;
+    high = q; top = x.npc ? { npc: true, n: x.name } : { u: x.u, n: x.n };
+    acc.push({ q, t: x.t, ...top });
+  }
+  return { high, top, acc, next: martAucNext(start, high) };
+}
+/* 落札の順番（高い順。同じ人は1回）。いちばん上が落札者 */
+const martAucChain = (acc) => { const seen = new Set(), out = []; for (const a of [...acc].reverse()) { const k = a.npc ? `npc:${a.n}` : a.u; if (!seen.has(k)) { seen.add(k); out.push(a); } } return out; };
+const martAucTimes = (t0, t1, n, ...salt) => Array.from({ length: n }, (_, k) => t0 + Math.floor((0.2 + 0.7 * martUnit(...salt, k)) * (t1 - t0))).sort((a, b) => a - b);
+/* 人のオークションに来る NPC の入札（予定） */
+function martAucPlayerNpc(L) {
+  if (L.k === "kaku") return { ev: [], cap: 0 };
+  const ref = martRefOf(L);
+  if (!ref || martUnit(L.i, 41) >= MART.auc.npcOnPlayer) return { ev: [], cap: 0 };
+  const cap = L.k === "prize" ? Math.min(MART.npcMaxPay, Math.round((ref * (MART.prizeNpc.lo + MART.prizeNpc.span)) / 10) * 10) : Math.min(MART.npcMaxPay, Math.round((ref * MART.auc.npcOnPlayerCap) / 10) * 10);
+  const n = martUnit(L.i, 42) < 0.5 ? 2 : 1;
+  return { ev: martAucTimes(L.t, L.au.e0, n, L.i, 43).map((t, k) => ({ t, name: martNpcName(L.i, 44 + k) })), cap };
+}
+const martAucOf = (L, now) => { const { ev, cap } = martAucPlayerNpc(L); return martAucState(L.au.s, L.au.bids || [], ev, cap, now); };
+
+/* NPC どうしのオークション */
+function martNpcAucBounds(j, e) { const period = MART.auc.npcPeriodsH[j % MART.auc.npcPeriodsH.length] * 3600000, off = martHash(j, 107) % period; return { startMs: e * period - off, endMs: (e + 1) * period - off, period, off }; }
+function martNpcAucEpoch(j, now) { const period = MART.auc.npcPeriodsH[j % MART.auc.npcPeriodsH.length] * 3600000, off = martHash(j, 107) % period; return Math.floor((now + off) / period); }
+function martNpcAuction(j, e) {
+  const { startMs, endMs } = martNpcAucBounds(j, e), parts = martParts(), pick = parts[martHash(j, e, 51) % parts.length];
+  const start = Math.max(10, Math.round((martRef(pick.slot, pick.id) * MART.auc.npcStartRatio) / 10) * 10);
+  const n = 3 + (martHash(j, e, 52) % 6), hot = martUnit(j, e, 53) < 0.1;
+  const ev = martAucTimes(startMs, endMs, n, j, e, 60).map((t, k) => ({ t, name: martNpcName(j, e, 70 + k), g: hot ? 1.4 + 0.8 * martUnit(j, e, 80 + k) : 1.12 + 0.48 * martUnit(j, e, 80 + k) }));
+  return { id: `na${j}-${e}`, npc: true, na: true, n: martNpcName(j, e, 3), k: "part", slot: pick.slot, part: `${pick.id}~u`, price: start, t: startMs, e: endMs, au: { s: start, ev } };
+}
+function martNpcAuctionById(id, now) {
+  const m = /^na(\d+)-(-?\d+)$/.exec(String(id));
+  if (!m) return null;
+  const j = Number(m[1]), e = Number(m[2]);
+  if (!(j >= 0 && j < MART.auc.npcSlots)) return null;
+  const A = martNpcAuction(j, e);
+  return { A, live: now >= A.t && now < A.e && martNpcAucEpoch(j, now) === e, ended: now >= A.e };
+}
+const martNpcAuctions = (now) => Array.from({ length: MART.auc.npcSlots }, (_, j) => martNpcAuction(j, martNpcAucEpoch(j, now)));
+const martNaStateOf = (A, bids, now) => martAucState(A.au.s, bids || [], A.au.ev, Infinity, now);
+/* 一覧用：オークションの「いま」の様子 */
+function martAucView(L, bids, now) {
+  const st = L.na ? martNaStateOf(L, bids, now) : martAucOf(L, now);
+  return { s: L.au.s, cur: st.high || L.au.s, nb: st.acc.length, top: st.top ? st.top.n : null, min: st.next };
+}
+
+/* 入札 */
+async function martBid(deps, uid, body) {
+  const g = await martGate(deps, uid);
+  if (g) return g;
+  const id = String(body?.id || ""), price = Number(body?.price), now = deps.now();
+  if (!Number.isInteger(price) || price < 1 || price > 100000000) return { status: 400, error: "bad_price" };
+  await martSettle(deps);   // 終わったものを先に精算する
+  const mcur = await martLoad(deps);
+  if (mcur.m.paused && !slotIsTopAdmin(deps, uid)) return { status: 409, error: "paused" };
+  let L, bids, na = null;
+  if (id.startsWith("na")) {
+    const r = martNpcAuctionById(id, now);
+    if (!r || !r.live) return { status: 409, error: "gone" };
+    L = r.A; na = id; bids = mcur.m.NA[id] || [];
+  } else {
+    L = mcur.m.L.find((x) => x.i === id && x.au);
+    if (!L || now >= L.e) return { status: 409, error: "gone" };
+    if (L.u === uid) return { status: 409, error: "own_listing" };
+    bids = L.au.bids || [];
+  }
+  if (bids.length >= MART.auc.maxBids) return { status: 409, error: "bids_full" };
+  const st = L.na ? martNaStateOf(L, bids, now) : martAucOf(L, now);
+  if (st.top && st.top.u === uid) return { status: 409, error: "already_top" };
+  if (price < st.next) return { status: 409, error: "bid_too_low", min: st.next };
+  const me = await loadMyUser(deps.firestore, uid, body?.username);
+  if (me.error) return me.error;
+  if (Number(decodeFields(me.raw.fields).coins || 0) < price) return { status: 409, error: "insufficient_coins" };
+  if (L.k !== "prize") { const k = await keshiLoad(deps, uid); if (k.owned.includes(`${L.slot}:${keshiBaseId(L.part)}~u`)) return { status: 409, error: "already_owned" }; }
+  const m = structuredClone(mcur.m), bid = { u: uid, n: me.name, q: price, t: now };
+  if (na) m.NA[na] = [...bids, bid];
+  else { const T = m.L.find((x) => x.i === id); T.au.bids = [...bids, bid]; if (T.e - now <= MART.auc.snipeMs) T.e = now + MART.auc.extendMs; }
+  const idx = martIndexWrite(deps, mcur, m, now);
+  if (idx.json.length > MART.maxJson) return { status: 409, error: "mart_full" };
+  return (await martCommit(deps, [idx.write])) || { ok: true, price, extended: !na && m.L.find((x) => x.i === id).e !== L.e };
+}
+
+/* 終わったオークションの精算（誰かがゆうマートを開いたとき）。1回の呼び出しで最大6件。戻り値：精算した件数 */
+async function martSettle(deps) {
+  let n = 0;
+  for (let round = 0; round < 6; round++) {
+    const now = deps.now(), mcur = await martLoad(deps);
+    const L = mcur.m.L.find((x) => x.au && now >= x.e);
+    const naId = L ? null : Object.keys(mcur.m.NA).find((id) => { const r = martNpcAuctionById(id, now); return !r || r.ended; });
+    if (!L && !naId) break;
+    const r = L ? await martSettleOne(deps, mcur, L, now) : await martSettleNa(deps, mcur, naId, now);
+    if (r === "defer" || r === "busy") break;
+    n++;
+  }
+  return n;
+}
+async function martPayChain(deps, mcur, L, chain, now, endMs) {
+  for (const c of chain) {
+    if (c.npc) {   // NPC どうしのオークションで NPC が勝ったら、何も起きない（"none"＝入札の記録だけ消す）
+      if (L.na) return "none";
+      const r = await martExecute(deps, mcur, L, c.q, { npc: c.n }); if (r.ok) return "ok"; if (r.error === "busy") return "busy"; continue;
+    }
+    const r = await martExecute(deps, mcur, L, c.q, { uid: c.u, name: c.n, byOther: true });
+    if (r.ok) return "ok";
+    if (r.error === "busy") return "busy";
+    if (r.error === "buyer_busy" && now < endMs + MART.auc.deferMs) return "defer";   // 席に着いている人は、少し待つ
+    if (r.error === "gone" || r.error === "seller_missing") return "gone";
+  }
+  return "none";
+}
+async function martSettleOne(deps, mcur, L, now) {
+  const chain = martAucChain(martAucState(L.au.s, L.au.bids || [], martAucPlayerNpc(L).ev, martAucPlayerNpc(L).cap, L.e).acc);
+  const r = await martPayChain(deps, mcur, L, chain, now, L.e);
+  if (r === "ok" || r === "defer" || r === "busy") return r;
+  const err = await martReturn(deps, mcur, L);   // 誰も落札できなかった：出品者に戻る
+  return err ? "busy" : "ok";
+}
+async function martSettleNa(deps, mcur, id, now) {
+  const m0 = /^na(\d+)-(-?\d+)$/.exec(id), bids = mcur.m.NA[id] || [];
+  const finish = async () => { const m = structuredClone(mcur.m); delete m.NA[id]; const idx = martIndexWrite(deps, mcur, m, now); return (await martCommit(deps, [idx.write])) ? "busy" : "ok"; };
+  if (!m0) return await finish();
+  const A = martNpcAuction(Number(m0[1]), Number(m0[2])), chain = martAucChain(martNaStateOf(A, bids, A.e).acc);
+  const r = await martPayChain(deps, mcur, A, chain, now, A.e);
+  if (r === "ok" || r === "defer" || r === "busy") return r;
+  return await finish();
+}
+
 /* 管理者：監視の一覧・一時停止・強制取り下げ（止めはしない。見て、必要なときだけ動く） */
 async function martAdmin(deps, uid, body) {
   if (!slotIsTopAdmin(deps, uid)) return { status: 403, error: "not_top_admin" };
@@ -5619,7 +5793,7 @@ async function martAdmin(deps, uid, body) {
     if (e.su && e.bu && pairs[`${e.su}>${e.bu}`] >= MART.repeatPair) flags.push("同じ2人の繰り返し");
     return { ...e, flags };
   }).reverse();
-  return { ok: true, paused: mcur.m.paused, log, listings: mcur.m.L.map((L) => ({ ...martView(L), seller: L.n, expired: now >= L.e, offers: (L.of || []).length })) };
+  return { ok: true, paused: mcur.m.paused, log, listings: mcur.m.L.map((L) => ({ ...martView(L, now), seller: L.n, expired: now >= L.e, offers: (L.of || []).length })) };
 }
 
 
