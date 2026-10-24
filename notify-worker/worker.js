@@ -2448,6 +2448,7 @@ export async function handleYuslotAction(deps, uid, body) {
       case "martCancel": return await martCancel(deps, uid, body);
       case "martBuy": return await martBuy(deps, uid, body);
       case "martBid": return await martBid(deps, uid, body);
+      case "martNegotiate": return await martNegotiate(deps, uid, body);
       case "martOffer": return await martOffer(deps, uid, body);
       case "martAnswer": return await martAnswer(deps, uid, body);
       case "martAdmin": return await martAdmin(deps, uid, body);
@@ -5286,12 +5287,12 @@ const martNpcOffer = (L, now) => { const p = martNpcPlan(L); return p && p.type 
 /* ----- 保存（martIndex/open） ----- */
 let martCache = { at: 0, cur: null };
 export function resetMartCacheForTest() { martCache = { at: 0, cur: null }; }
-const martBlank = () => ({ L: [], done: [], log: [], npcSold: [], NA: {}, paused: false });
+const martBlank = () => ({ L: [], done: [], log: [], npcSold: [], NA: {}, ND: {}, paused: false });
 function martParse(raw) {
   let m = {};
   try { m = JSON.parse(decodeFields(raw.fields).json || "{}"); } catch (_) { m = {}; }
   const arr = (v) => (Array.isArray(v) ? v : []);
-  return { L: arr(m.L), done: arr(m.done), log: arr(m.log), npcSold: arr(m.npcSold), NA: m.NA && typeof m.NA === "object" && !Array.isArray(m.NA) ? m.NA : {}, paused: m.paused === true };
+  return { L: arr(m.L), done: arr(m.done), log: arr(m.log), npcSold: arr(m.npcSold), NA: m.NA && typeof m.NA === "object" && !Array.isArray(m.NA) ? m.NA : {}, ND: m.ND && typeof m.ND === "object" && !Array.isArray(m.ND) ? m.ND : {}, paused: m.paused === true };
 }
 async function martLoad(deps, maxAgeMs = 0) {
   const now = deps.now();
@@ -5303,6 +5304,7 @@ async function martLoad(deps, maxAgeMs = 0) {
 }
 function martIndexWrite(deps, cur, m, now) {
   m.npcSold = m.npcSold.filter((id) => martNpcById(id, now, []) !== null);   // もう入れ替わった棚の分は忘れる
+  Object.keys(m.ND).forEach((id) => { if (martNpcById(id, now, []) === null) delete m.ND[id]; });   // 交渉の記録も同じ
   m.L = m.L.filter((L) => !(L.k === "kaku" && now > L.e + 86400000));   // 確変枠の期限切れ（預かりがない）は、1日たったら消す
   m.done = m.done.slice(-MART.doneMax); m.log = m.log.slice(-MART.logMax);
   const json = JSON.stringify(m);
@@ -5329,6 +5331,7 @@ const martNames = () => {
 };
 const martView = (L, now, bids) => {
   const head = { id: L.i || L.id, npc: L.npc === true, n: L.n, k: L.k || "part", price: L.price, t: L.t, e: L.e, ref: martRefOf(L) };
+  if (L.deal) head.deal = { until: L.deal.until, from: L.deal.from };   // 交渉が成立している（だれが交渉したかは出さない）
   if (L.au) { const au = martAucView(L, L.na ? bids : L.au.bids || [], now); head.price = au.cur; head.au = au; }
   if (L.k === "kaku") return { ...head, day: L.day, ss: L.ss, se: L.se, machine: kakuMachineFor(L.day) };
   if (L.k === "prize") return { ...head, pid: L.pid, prize: L.pz };
@@ -5345,7 +5348,7 @@ async function martStatus(deps, uid) {
   const mine = cur.m.L.filter((L) => L.u === uid);
   const list = [
     ...cur.m.L.filter((L) => martLive(L, now)).map((L) => ({ ...martView(L, now), mine: L.u === uid })),
-    ...martNpcListings(now, cur.m.npcSold).map((L) => martView(L, now)),
+    ...martNpcListings(now, cur.m.npcSold).map((L) => { const D = martNpcDeal(L, cur.m.ND, now); return { ...martView(D, now), ...(D.deal ? { dealMine: D.deal.u === uid } : {}) }; }),
     ...martNpcAuctions(now).map((A) => martView(A, now, cur.m.NA[A.id] || []))
   ].sort((a, b) => b.t - a.t);
   return { ok: true, serverNowMs: now, paused: cur.m.paused, isTopAdmin: admin, listings: list, mineCount: mine.length, table: martNames(), usedRate: KESHI_USED_RATE, feePct: MART.feePct, maxOpen: MART.maxOpen, auctionHours: MART.auc.hours };
@@ -5530,7 +5533,10 @@ async function martBuy(deps, uid, body) {
   const id = String(body?.id || ""), now = deps.now(), mcur = await martLoad(deps);
   if (mcur.m.paused && !slotIsTopAdmin(deps, uid)) return { status: 409, error: "paused" };
   let L;
-  if (/^n\d/.test(id)) L = martNpcById(id, now, mcur.m.npcSold);
+  if (/^n\d/.test(id)) {
+    L = martNpcById(id, now, mcur.m.npcSold);
+    if (L) { L = martNpcDeal(L, mcur.m.ND, now); if (L.deal && L.deal.u !== uid && now < L.deal.until) return { status: 409, error: "reserved", until: L.deal.until }; }   // 交渉が成立したお客さんが、10分のあいだ優先
+  }
   else { L = mcur.m.L.find((x) => x.i === id); if (L && !martLive(L, now)) L = null; }
   if (!L) return { status: 409, error: "gone" };
   if (L.au) return { status: 409, error: "auction_only" };
@@ -5768,6 +5774,54 @@ async function martSettleNa(deps, mcur, id, now) {
   const r = await martPayChain(deps, mcur, A, chain, now, A.e);
   if (r === "ok" || r === "defer" || r === "busy") return r;
   return await finish();
+}
+
+
+/* =========================================================
+   🤝 NPC との値下げ交渉（NPC の出品に、買いたい値段を伝える）
+   ・NPC は出品ごとに「ここまでなら下げてもいい」下限（th）を持っている（出品の id から決まる）：相場 〜 出品価格の間のどこか（相場から出品価格との差の 20〜70%）。相場より安くはならない（NPC から買って NPC に売るだけで増えることがない）。
+   ・伝えた値段が下限以上なら、NPC が納得して、出品の値段がその値段に変わる（みんなの画面でも）。交渉した人は10分のあいだ、その値段で優先して買える。
+   ・下限に届かないときは、下限の85%以上なら「この値段ならどう？」と下限の値段を返す。それより安いと断られる。
+   ・交渉は、1人1つの出品に3回まで。Firestore：成立・回数は martIndex/open の ND（出品が入れ替わったら消える）。
+========================================================= */
+MART.nego = { tries: 3, holdMs: 10 * 60000, floorRatio: 0.85, lo: 0.2, span: 0.5 };
+export function martNpcFloor(L) {
+  const ref = martRefOf(L), f = MART.nego.lo + MART.nego.span * martUnit(L.id, 91);
+  return Math.min(L.price, Math.ceil((ref + (L.price - ref) * f) / 10) * 10);
+}
+/* 成立している交渉があれば、その値段にする */
+function martNpcDeal(L, ND, now) {
+  const d = ND && ND[L.id];
+  if (!d || !d.q) return L;
+  return { ...L, price: d.q, deal: { u: d.u, until: d.until, from: L.price } };
+}
+async function martNegotiate(deps, uid, body) {
+  const g = await martGate(deps, uid);
+  if (g) return g;
+  const id = String(body?.id || ""), price = Number(body?.price), now = deps.now(), mcur = await martLoad(deps);
+  if (mcur.m.paused && !slotIsTopAdmin(deps, uid)) return { status: 409, error: "paused" };
+  if (!/^n\d/.test(id)) return { status: 400, error: "bad_request" };
+  const base = martNpcById(id, now, mcur.m.npcSold);
+  if (!base) return { status: 409, error: "gone" };
+  const d0 = mcur.m.ND[id] || {}, L = martNpcDeal(base, mcur.m.ND, now);
+  if (!Number.isInteger(price) || price < 1 || price >= L.price) return { status: 400, error: "bad_price", max: L.price - 1 };
+  if (L.deal && L.deal.u !== uid && now < L.deal.until) return { status: 409, error: "reserved", until: L.deal.until };
+  const tries = (d0.tries && d0.tries[uid]) || 0;
+  if (tries >= MART.nego.tries) return { status: 409, error: "no_more" };
+  const me = await loadMyUser(deps.firestore, uid, body?.username);
+  if (me.error) return me.error;
+  if (Number(decodeFields(me.raw.fields).coins || 0) < price) return { status: 409, error: "insufficient_coins" };
+  const floor = martNpcFloor(base), m = structuredClone(mcur.m);   // 下限は、元の出品価格から決まる
+  const d = m.ND[id] = { ...d0, tries: { ...(d0.tries || {}), [uid]: tries + 1 } };
+  let reply;
+  if (floor >= L.price && !L.deal) reply = { accepted: false, counter: null, limit: true };   // もう下げられない
+  else if (price >= floor) { d.q = price; d.u = uid; d.until = now + MART.nego.holdMs; reply = { accepted: true, price, until: d.until }; }
+  else if (price >= Math.floor(floor * MART.nego.floorRatio)) reply = { accepted: false, counter: floor };
+  else reply = { accepted: false, counter: null, near: price >= Math.floor(floor * 0.7) };   // near：もう少し上ならいけそう（金額は教えない）
+  const idx = martIndexWrite(deps, mcur, m, now);
+  const err = await martCommit(deps, [idx.write]);
+  if (err) return err;
+  return { ok: true, npc: base.n, triesLeft: MART.nego.tries - tries - 1, ...reply };
 }
 
 /* 管理者：監視の一覧・一時停止・強制取り下げ（止めはしない。見て、必要なときだけ動く） */

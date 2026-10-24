@@ -7,10 +7,10 @@
    ・商品の画像：mart-img/{枠}-{パーツ}.png（例：mart-img/body-titan.png）。ファイルがなければ、パーツごとに描いた絵（yumart-art.js）を表示する。
 ========================================================= */
 
-import { partArt, kakuArt, prizeArt } from "./yumart-art.js?v=20261024-mart4";
+import { partArt, kakuArt, prizeArt } from "./yumart-art.js?v=20261024-mart5";
 
 let deps = null, root = null, stylesDone = false, token = 0;
-let sellMode = "fixed", sellHours = 24;
+let sellMode = "fixed", sellHours = 24, negoOpen = null, negoMsg = {};
 let S = null, M = null, SELL = null, sellBusy = false, tab = "buy", slotFilter = "all", sort = "new", busy = false, note = null, adminData = null;
 const fmt = (n) => Number(n || 0).toLocaleString("ja-JP");
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -24,7 +24,7 @@ const ERR = {
   already_offered: "この商品には、すでに値下げ依頼を出しています", offers_full: "この商品への値下げ依頼がいっぱいです", buyer_no_coins: "相手のコインが足りないため、売れませんでした（依頼は消えました）",
   buyer_busy: "相手がいまゆうスロの席に着いているため、売れませんでした", buyer_has_it: "相手はすでに同じ中古パーツを持っているため、売れませんでした（依頼は消えました）", already_sold: "すでに売れています。画面を開きなおしてください",
   not_published: "ゆうマートはまだ公開されていません", too_late: "枠の始まりの10分前をすぎたので、出品できません", already_listed: "この枠はすでに出品しています", no_resale: "確変台の予約権は、買ったものをまた売ることはできません",
-  right_expired: "この予約権は、期限が近いか、すぎているので出品できません", company_exists: "すでに会社を作っているので、A賞は出品できません", slot_limit: "1日にもてる確変の枠は3つまでです",
+  right_expired: "この予約権は、期限が近いか、すぎているので出品できません", company_exists: "すでに会社を作っているので、A賞は出品できません", slot_limit: "1日にもてる確変の枠は3つまでです", no_more: "この商品では、もう交渉できません（1つの商品につき3回まで）", reserved: "別のお客さんが交渉中です。しばらくしてからどうぞ",
   auction_only: "これはオークションです。「入札」から参加してください", bid_too_low: "入札額が低すぎます", already_top: "あなたがいま最高額で入札中です", has_bids: "入札があるので、取り下げられません", bids_full: "このオークションは、これ以上入札できません", no_auction: "確変台の枠はオークションにできません"
 };
 
@@ -125,15 +125,18 @@ function drawBuy() {
         <small>${esc(it.sub)}</small>
         <div class="ym-price">${x.au ? `<span class="ym-au">🔨 オークション</span> 現在 ` : ""}🪙 ${fmt(x.price)} ${x.au ? "" : priceTag(x.price, x.ref)}</div>
         ${x.au ? `<small>入札 ${x.au.nb}件${x.au.top ? `　最高：${esc(x.au.top)}${x.au.top === deps.getUsername() ? "（あなた）" : ""}` : "　まだ入札なし"}</small>` : ""}
+        ${x.deal ? `<small class="ym-deal">🤝 交渉成立！ 🪙${fmt(x.deal.from)} → 🪙${fmt(x.price)}${x.dealMine && x.deal.until > nowMs() ? `（あなたが ${timeLeft(x.deal.until - nowMs()).replace("あと", "あと")} 優先で買えます）` : x.deal.until > nowMs() ? "（交渉したお客さんが優先中）" : ""}</small>` : ""}
         <small class="ym-seller">出品：${esc(x.n)} ・${timeLeft(x.e - nowMs())}</small></div>
-        <div class="ym-act">${x.mine ? `<span class="ym-small">自分の出品</span>` : x.au ? `<button type="button" class="ym-btn" data-bid="${esc(x.id)}" ${busy || S.paused ? "disabled" : ""}>入札する</button>${bidInfo[x.id] ? `<span class="ym-small">${bidInfo[x.id].top ? "最高額で入札中" : "追い越されました"}</span>` : ""}` : `<button type="button" class="ym-btn" data-buy="${esc(x.id)}" ${busy || S.paused ? "disabled" : ""}>買う</button>${x.npc ? "" : my[x.id] ? `<span class="ym-small">依頼中 🪙${fmt(my[x.id])}</span>` : `<button type="button" class="ym-btn ym-sub" data-offer="${esc(x.id)}" ${busy || S.paused ? "disabled" : ""}>値下げ依頼</button>`}`}</div></div>`;
+        <div class="ym-act">${x.mine ? `<span class="ym-small">自分の出品</span>` : x.au ? `<button type="button" class="ym-btn" data-bid="${esc(x.id)}" ${busy || S.paused ? "disabled" : ""}>入札する</button>${bidInfo[x.id] ? `<span class="ym-small">${bidInfo[x.id].top ? "最高額で入札中" : "追い越されました"}</span>` : ""}` : `<button type="button" class="ym-btn" data-buy="${esc(x.id)}" ${busy || S.paused ? "disabled" : ""}>買う</button>${!x.npc && my[x.id] ? `<span class="ym-small">依頼中 🪙${fmt(my[x.id])}</span>` : `<button type="button" class="ym-btn ym-sub" data-nego="${esc(x.id)}" ${busy || S.paused ? "disabled" : ""}>${x.npc ? "値下げ交渉" : "値下げ依頼"}</button>`}`}</div>
+        ${negoOpen === x.id ? negoPanel(x) : ""}</div>`;
     }).join("") || `<div class="ym-card ym-msg">いま出品はありません</div>`}</div>
     <p class="ym-small">買ったあとのキャンセルはできません。買った確変台の枠は、また売ることはできません。</p>`;
   $("#ymSlot").addEventListener("change", (e) => { slotFilter = e.target.value; drawBuy(); });
   $("#ymSort").addEventListener("change", (e) => { sort = e.target.value; drawBuy(); });
   $("#ymReload").addEventListener("click", () => { note = null; refresh(); });
   root.querySelectorAll("[data-buy]").forEach((b) => b.addEventListener("click", () => buy(b.dataset.buy)));
-  root.querySelectorAll("[data-offer]").forEach((b) => b.addEventListener("click", () => offer(b.dataset.offer)));
+  root.querySelectorAll("[data-nego]").forEach((b) => b.addEventListener("click", () => { negoOpen = negoOpen === b.dataset.nego ? null : b.dataset.nego; drawBuy(); }));
+  root.querySelectorAll("[data-nsend]").forEach((b) => b.addEventListener("click", () => nego(b.dataset.nsend)));
   root.querySelectorAll("[data-bid]").forEach((b) => b.addEventListener("click", () => bid(b.dataset.bid)));
 }
 /* 出品できるもの：パーツ（martMine）＋確変枠・番くじ景品（martSellable。この画面を開いたときだけ読む） */
@@ -216,13 +219,35 @@ function bid(id) {
   if (!Number.isInteger(price)) { setNote("金額は整数で入れてください", true); return; }
   run(async () => { await api("martBid", { id, price }); return `🪙 ${fmt(price)} で入札しました。追い越されたら、もう一度入札できます`; });
 }
-function offer(id) {
-  const x = S.listings.find((l) => l.id === id); if (!x) return;
-  const min = Math.ceil(x.price * 0.3), v = prompt(`いくらなら買いますか？（${fmt(min)}〜${fmt(x.price - 1)} コイン）\n出品者が受けると、その値段で買うことになります。`, String(Math.max(min, Math.floor(x.price * 0.85))));
-  if (v === null) return;
-  const price = Number(v);
-  if (!Number.isInteger(price)) { setNote("値段は整数で入れてください", true); return; }
-  run(async () => { await api("martOffer", { id, price }); return "値下げ依頼を出しました。出品者が受けると売れます（24時間）"; });
+/* 値下げの交渉・依頼の入力欄（カードの下に開く）。NPC には交渉（その場で返事）、人には依頼（出品者が受けたら売れる） */
+function negoPanel(x) {
+  const min = Math.ceil(x.price * 0.3), msg = negoMsg[x.id];
+  return `<div class="ym-nego">
+    <label>${x.npc ? `「${esc(x.n)}」に、いくらにしてほしいか伝えます。納得してくれたら、値段がその金額に変わります。` : `いくらなら買いますか？（🪙 ${fmt(min)}〜${fmt(x.price - 1)}）　出品者が受けると、その値段で買うことになります（24時間）。`}</label>
+    <div class="ym-nrow"><input type="number" inputmode="numeric" id="ymN" class="ym-input" min="1" step="1" value="${Math.max(x.npc ? 1 : min, Math.floor(x.price * (x.npc ? 0.9 : 0.85)))}"><button type="button" class="ym-btn" data-nsend="${esc(x.id)}" ${busy ? "disabled" : ""}>${x.npc ? "この値段で交渉する" : "この値段で依頼する"}</button></div>
+    ${msg ? `<div class="ym-nmsg ${msg.good ? "good" : ""}">${esc(msg.text)}</div>` : ""}</div>`;
+}
+async function nego(id) {
+  const x = S.listings.find((l) => l.id === id); if (!x || busy) return;
+  const price = Number($("#ymN").value);
+  if (!Number.isInteger(price) || price < 1) { negoMsg[id] = { text: "値段は1以上の整数で入れてください" }; drawBuy(); return; }
+  busy = true; const my = token; drawBuy();
+  try {
+    if (x.npc) {
+      const r = await api("martNegotiate", { id, price });
+      negoMsg[id] = r.accepted ? { good: true, text: `「${r.npc}」：いいでしょう！ 🪙${fmt(r.price)} にします。10分のあいだ、あなたが優先で買えます。` }
+        : r.counter ? { text: `「${r.npc}」：うーん、その値段はちょっと…。🪙${fmt(r.counter)} ならどうでしょう？（あと${r.triesLeft}回）` }
+        : r.limit ? { text: `「${r.npc}」：これ以上は、下げられないんです…。` }
+        : r.near ? { text: `「${r.npc}」：うーん…もうちょっと上なら、考えますよ。（あと${r.triesLeft}回）` }
+        : { text: `「${r.npc}」：それはさすがに安すぎます…！（あと${r.triesLeft}回）` };
+      if (r.accepted) { negoOpen = null; note = { text: `🤝 ${r.npc}と交渉成立！ 🪙${fmt(r.price)} になりました。10分以内に「買う」を押してください`, bad: false }; }
+    } else {
+      await api("martOffer", { id, price });
+      negoOpen = null; note = { text: "値下げ依頼を出しました。出品者が受けると売れます（24時間）", bad: false };
+    }
+  } catch (e) { negoMsg[id] = { text: (ERR[e && e.code] || "うまくいきませんでした。もう一度お試しください") + (e && e.code === "bad_price" && e.detail && e.detail.max ? `（🪙 ${fmt(e.detail.max)} 以下）` : "") }; }
+  busy = false;
+  if (my === token) await refresh(my);
 }
 function setNote(text, bad) { note = { text, bad }; draw(); }
 async function run(fn) {
@@ -281,6 +306,9 @@ function injectStyles() {
   .ym-btn { border: none; border-radius: 10px; padding: 9px 12px; font-weight: 900; font-size: 13px; cursor: pointer; color: #fff; background: linear-gradient(135deg, #ff7a18, #ff4d6d); } .ym-btn[disabled] { opacity: .45; cursor: default; } .ym-sub { background: #eee; color: #444; }
   .ym-input { width: 96px; padding: 7px; border-radius: 9px; border: 1px solid #ccc; font-size: 14px; text-align: right; }
   .ym-sellrow { margin-bottom: 8px; }
+  .ym-nego { grid-column: 1 / -1; background: #fff7e6; border-radius: 12px; padding: 10px; } .ym-nego label { display: block; font-size: 12.5px; line-height: 1.7; color: #555; margin-bottom: 6px; }
+  .ym-nrow { display: flex; gap: 8px; align-items: center; } .ym-nrow .ym-input { flex: 0 0 110px; } .ym-nmsg { margin-top: 8px; font-size: 13px; font-weight: 800; line-height: 1.6; color: #a35a00; } .ym-nmsg.good { color: #1b6b3a; }
+  .ym-deal { color: #1b6b3a; font-weight: 800; }
   .ym-mode { display: flex; gap: 6px; margin: 6px 0; flex-wrap: wrap; } .ym-mode .ym-tab { padding: 8px 6px; } .ym-mode select { padding: 8px; border-radius: 10px; border: 1px solid #ddd; background: #fff; }
   .ym-au { background: #2f4bd0; color: #fff; border-radius: 6px; font-size: 10.5px; padding: 1px 6px; vertical-align: 2px; }
   .ym-offer { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: space-between; background: #fff7e6; border-radius: 10px; padding: 8px 10px; margin-top: 8px; font-size: 13px; }

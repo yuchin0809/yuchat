@@ -304,7 +304,7 @@ test("商品の絵：有料パーツの全部に、そのパーツの絵があ�
 });
 
 /* ---------- 確変枠・番くじ景品 ---------- */
-import { kakuInitialSlots, kakuMachineFor, resetKakuCacheForTest, BANKUJI } from "../worker.js";
+import { kakuInitialSlots, kakuMachineFor, resetKakuCacheForTest, martNpcFloor, BANKUJI } from "../worker.js";
 const DAY = "2026-10-26", SLOT0 = kakuInitialSlots(DAY)[0];   // 8:00〜8:30
 function setupKaku(over = {}) {
   resetKakuCacheForTest();
@@ -571,4 +571,71 @@ test("NPC どうしのオークション：早めに入れても、あとから 
   await t.act(2, { action: "martStatus" });
   assert.equal(t.coinsOf(1), 20000); assert.equal(t.ownedOf(1).length, 0);
   assert.equal(Object.keys(idxOf(t).NA).length, 0);
+});
+
+/* ---------- NPC との値下げ交渉 ---------- */
+const refOf = (x) => Math.round(KESHI_PARTS[x.slot].find((p) => p.id === x.part.replace("~u", "")).price * 0.75);
+const npcFirst = async (t, i = 1) => (await t.act(i, { action: "martStatus" })).listings.filter((x) => x.npc && !x.au).sort((a, b) => b.price - refOf(b) - (a.price - refOf(a)))[0];   // いちばん値下げの余地がある出品
+
+test("NPC との値下げ交渉：下限以上なら納得して、出品の値段がその値段に変わる（みんなの画面でも）。下限に近ければ「この値段なら」と返す。相場より安くはならない", async () => {
+  const t = setup();
+  const x = await npcFirst(t), ref = refOf(x), floor = martNpcFloor(x);
+  assert.ok(x.price > ref + 20 && floor >= ref && floor <= x.price, `相場 ${ref} ≦ 下限 ${floor} ≦ 出品 ${x.price}`);
+  assert.equal((await t.act(1, { action: "martNegotiate", id: x.id, price: x.price })).error, "bad_price", "いまの値段以上は交渉にならない");
+  let r = await t.act(1, { action: "martNegotiate", id: x.id, price: 10 });
+  assert.equal(r.ok, true); assert.equal(r.accepted, false); assert.equal(r.counter, null, "安すぎると断られる");
+  assert.equal(r.near, false);
+  r = await t.act(2, { action: "martNegotiate", id: x.id, price: Math.floor(floor * 0.75) });
+  assert.equal(r.accepted, false); assert.equal(r.near, true, "あと少しなら、もう少し上なら…と返す（金額は教えない）"); assert.equal(r.counter, null);
+  r = await t.act(1, { action: "martNegotiate", id: x.id, price: Math.floor(floor * 0.9) });
+  assert.equal(r.accepted, false); assert.equal(r.counter, floor, "もう少しで下限：この値段なら、と返す");
+  r = await t.act(1, { action: "martNegotiate", id: x.id, price: floor });
+  assert.equal(r.accepted, true); assert.equal(r.price, floor); assert.ok(r.price >= ref && r.price < x.price);
+  const after = (await t.act(2, { action: "martStatus" })).listings.find((v) => v.id === x.id);
+  assert.equal(after.price, floor, "ほかの人の画面でも、値段が変わる"); assert.equal(after.deal.from, x.price); assert.equal(after.deal.until, t.state.now + 10 * MIN);
+  assert.equal((await t.act(1, { action: "martStatus" })).listings.find((v) => v.id === x.id).dealMine, true);
+  assert.equal((await t.act(2, { action: "martStatus" })).listings.find((v) => v.id === x.id).dealMine, false);
+});
+
+test("交渉が成立したお客さんは10分のあいだ優先で買える（その値段で）。そのあとは、だれでもその値段で買える", async () => {
+  const t = setup();
+  const x = await npcFirst(t), floor = martNpcFloor(x);
+  const r = await t.act(1, { action: "martNegotiate", id: x.id, price: floor });
+  assert.equal(r.accepted, true);
+  assert.equal((await t.act(2, { action: "martBuy", id: x.id })).error, "reserved");
+  assert.equal((await t.act(2, { action: "martNegotiate", id: x.id, price: 1 })).error, "reserved");
+  const before = t.coinsOf(1);
+  const b = await t.act(1, { action: "martBuy", id: x.id });
+  assert.equal(b.ok, true); assert.equal(b.price, floor);
+  assert.equal(t.coinsOf(1), before - floor);
+  const t2 = setup();
+  const y = await npcFirst(t2), f2 = martNpcFloor(y);
+  assert.equal((await t2.act(1, { action: "martNegotiate", id: y.id, price: f2 })).accepted, true);
+  t2.state.now += 11 * MIN;
+  const c = await t2.act(2, { action: "martBuy", id: y.id });
+  assert.equal(c.ok, true); assert.equal(c.price, f2, "10分たったら、だれでもその値段で");
+});
+
+test("交渉は1つの出品に3回まで／コインが足りない値段では交渉できない／出品が入れ替わったら交渉の記録も消える", async () => {
+  const t = setup({ owned: ["body:titan"] });
+  const x = await npcFirst(t);
+  for (let i = 0; i < 3; i++) assert.equal((await t.act(1, { action: "martNegotiate", id: x.id, price: 1 })).ok, true);
+  assert.equal((await t.act(1, { action: "martNegotiate", id: x.id, price: 1 })).error, "no_more");
+  assert.equal((await t.act(2, { action: "martNegotiate", id: x.id, price: 1 })).ok, true, "ほかの人は別に3回");
+  t.fs.putP("users/u0", { uid: "id0", name: "u0", coins: 5 });
+  assert.equal((await t.act(0, { action: "martNegotiate", id: x.id, price: x.price - 10 })).error, "insufficient_coins");
+  assert.equal((await t.act(1, { action: "martNegotiate", id: "x123", price: 5 })).error, "bad_request");
+  t.state.now += 13 * 3600000;
+  await t.act(1, { action: "martStatus" });
+  await t.act(0, { action: "martList", kind: "part", slot: "body", part: "titan", price: 9999 });   // 書き込み（古い記録の掃除）
+  assert.deepEqual(Object.keys(idxOf(t).ND || {}), [], "入れ替わったら、記録は消える");
+});
+
+test("NPC から買って NPC に売っても増えない：交渉で下げられる最安値でも、同じものを NPC に売った額（手数料後の最高）より高い", async () => {
+  const t = setup();
+  for (const x of (await t.act(1, { action: "martStatus" })).listings.filter((v) => v.npc && !v.au)) {
+    const ref = refOf(x), lowest = martNpcFloor(x), npcPays = Math.floor(ref * MART.npcBuyMax);
+    assert.ok(lowest >= ref - 5, `${x.part}: 下限 ${lowest} ≧ 相場 ${ref}`);
+    assert.ok(npcPays - Math.floor(npcPays / 10) < lowest, `${x.part}: NPC への売値（手数料後の最高 ${npcPays - Math.floor(npcPays / 10)}）より高い`);
+  }
 });
