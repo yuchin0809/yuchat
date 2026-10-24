@@ -5218,7 +5218,7 @@ export const MART = {
   prizeRef: { A: 8000, C: 1500, D: 900, E: 600, F: 300 },   // 番くじ景品の相場（売れるのは A・C・D・E・F。株・コイン・ラストワン賞は売れない）
   prizeNpc: { buyMax: 0.7, lo: 0.5, span: 0.15 }            // NPC が景品に出す額は、相場の0.5〜0.65倍（買い取りは相場の0.7倍以下）。景品を NPC に売ってコインが増えすぎないように低くする
 };
-const martFee = (price) => Math.floor(price * MART.feePct / 100);
+const martFee = (price) => Math.floor(price / 100) * MART.feePct + Math.floor(((price % 100) * MART.feePct) / 100);   // price × 10% の切り捨て（とても大きな値段でも、ずれない計算）
 const martParts = () => KESHI_SLOTS.flatMap((slot) => KESHI_PARTS[slot].filter((p) => p.price > 0).map((p) => ({ slot, id: p.id, price: p.price })));
 const martRef = (slot, id) => { const p = KESHI_PART_BY[slot]?.[keshiBaseId(id)]; return p && p.price > 0 ? Math.round(p.price * MART.usedMarket) : 0; };
 /* 出品の相場（種類ごと）。k：part（パーツ）／kaku（確変枠）／prize（番くじ景品） */
@@ -5409,7 +5409,7 @@ async function martList(deps, uid, body) {
   if (auction && kind === "kaku") return { status: 409, error: "no_auction" };   // 確変枠はオークションにしない（精算が遅れると、枠が始まってしまうため）
   if (auction && !MART.auc.hours.includes(hours)) return { status: 400, error: "bad_request" };
   if (kind === "part") { const base = KESHI_PART_BY[String(body?.slot || "")]?.[keshiBaseId(String(body?.part || ""))]; if (!base || base.price === 0 || !keshiPartOf(String(body.slot), String(body.part))) return { status: 400, error: "bad_request" }; }
-  if (!Number.isInteger(price) || price < 1 || price > 100000000) return { status: 400, error: "bad_price" };
+  if (!Number.isInteger(price) || price < 1 || !Number.isSafeInteger(price)) return { status: 400, error: "bad_price" };   // 値段の上限はない（コインが足りれば、いくらでも）
   const me = await loadMyUser(deps.firestore, uid, body?.username);
   if (me.error) return me.error;
   const now = deps.now(), mcur = await martLoad(deps);
@@ -5702,7 +5702,7 @@ async function martBid(deps, uid, body) {
   const g = await martGate(deps, uid);
   if (g) return g;
   const id = String(body?.id || ""), price = Number(body?.price), now = deps.now();
-  if (!Number.isInteger(price) || price < 1 || price > 100000000) return { status: 400, error: "bad_price" };
+  if (!Number.isInteger(price) || price < 1 || !Number.isSafeInteger(price)) return { status: 400, error: "bad_price" };   // 値段の上限はない（コインが足りれば、いくらでも）
   await martSettle(deps);   // 終わったものを先に精算する
   const mcur = await martLoad(deps);
   if (mcur.m.paused && !slotIsTopAdmin(deps, uid)) return { status: 409, error: "paused" };
