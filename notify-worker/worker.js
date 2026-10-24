@@ -2444,6 +2444,7 @@ export async function handleYuslotAction(deps, uid, body) {
       case "martStatus": return await martStatus(deps, uid);
       case "martMine": return await martMine(deps, uid, body);
       case "martList": return await martList(deps, uid, body);
+      case "martSellable": return await martSellable(deps, uid);
       case "martCancel": return await martCancel(deps, uid, body);
       case "martBuy": return await martBuy(deps, uid, body);
       case "martOffer": return await martOffer(deps, uid, body);
@@ -5208,11 +5209,23 @@ export const MART = {
   npcMaxPay: 4000,         // NPC が1件に払う（値下げ依頼・買い取り）上限
   npcSlots: 14, npcPeriodsH: [4, 6, 8, 12],
   npcBuyMax: 1.05, npcBuyChance: 0.55, npcOfferChance: 0.7,
-  highPrice: 3000, highRatio: 3, repeatPair: 3, logMax: 120, doneMax: 60
+  highPrice: 3000, highRatio: 3, repeatPair: 3, logMax: 120, doneMax: 60,
+  kakuLeadMs: 10 * 60000,   // 確変枠：枠の始まりの何ミリ秒前まで出品できるか（出品の期限もここまで）
+  kakuMaxPerDay: 3,         // 確変枠：1人が1日に持てる枠（買って増やせる上限）
+  kakuRef: { long: 1500, short: 500, weekend: 1.5 },   // 確変枠の相場（30分枠／10分枠、土日は1.5倍）
+  prizeRef: { A: 8000, C: 1500, D: 900, E: 600, F: 300 },   // 番くじ景品の相場（売れるのは A・C・D・E・F。株・コイン・ラストワン賞は売れない）
+  prizeNpc: { buyMax: 0.7, lo: 0.5, span: 0.15 }            // NPC が景品に出す額は、相場の0.5〜0.65倍（買い取りは相場の0.7倍以下）。景品を NPC に売ってコインが増えすぎないように低くする
 };
 const martFee = (price) => Math.floor(price * MART.feePct / 100);
 const martParts = () => KESHI_SLOTS.flatMap((slot) => KESHI_PARTS[slot].filter((p) => p.price > 0).map((p) => ({ slot, id: p.id, price: p.price })));
 const martRef = (slot, id) => { const p = KESHI_PART_BY[slot]?.[keshiBaseId(id)]; return p && p.price > 0 ? Math.round(p.price * MART.usedMarket) : 0; };
+/* 出品の相場（種類ごと）。k：part（パーツ）／kaku（確変枠）／prize（番くじ景品） */
+function martRefOf(L) {
+  if (L.k === "kaku") return Math.round((L.se - L.ss >= 20 * 60000 ? MART.kakuRef.long : MART.kakuRef.short) * (kakuIsWeekend(L.day) ? MART.kakuRef.weekend : 1));
+  if (L.k === "prize") return MART.prizeRef[L.pid] || 0;
+  return martRef(L.slot, L.part);
+}
+const martItemKey = (L) => (L.k === "kaku" ? `kaku:${L.day}:${L.si}` : L.k === "prize" ? `prize:${L.pid}` : `${L.slot}:${keshiBaseId(L.part)}`);
 function martHash(...ns) {
   let h = 2166136261 >>> 0;
   for (const n of ns) {
@@ -5252,14 +5265,16 @@ function martNpcById(id, now, sold) {
 
 /* NPC が、人の出品にどうするか（すべて出品の id と時刻だけで決まる）。買い取り：buyAt を過ぎたら売れる。値下げ依頼：offerAt〜offerAt+24時間に出る */
 function martNpcPlan(L) {
-  const ref = martRef(L.slot, L.part);
+  if (L.k === "kaku") return null;   // 確変枠は NPC は売り買いしない
+  const ref = martRefOf(L);
   if (!ref) return null;
-  if (L.price <= Math.floor(ref * MART.npcBuyMax) && L.price <= MART.npcMaxPay) {
+  const P = L.k === "prize" ? MART.prizeNpc : { buyMax: MART.npcBuyMax, lo: 0.8, span: 0.2 };
+  if (L.price <= Math.floor(ref * P.buyMax) && L.price <= MART.npcMaxPay) {
     if (martUnit(L.i, 11) >= MART.npcBuyChance) return null;
     return { type: "buy", at: L.t + 5 * 60000 + Math.floor(martUnit(L.i, 21) * 85 * 60000), q: L.price, name: martNpcName(L.i, 31) };
   }
   if (martUnit(L.i, 12) >= MART.npcOfferChance) return null;
-  const q = Math.min(MART.npcMaxPay, Math.max(10, Math.round((ref * (0.8 + 0.2 * martUnit(L.i, 13))) / 10) * 10));
+  const q = Math.min(MART.npcMaxPay, Math.max(10, Math.round((ref * (P.lo + P.span * martUnit(L.i, 13))) / 10) * 10));
   if (q >= L.price) return null;
   const at = L.t + 10 * 60000 + Math.floor(martUnit(L.i, 22) * 3 * 3600000);
   return { type: "offer", at, until: at + MART.offerMs, q, name: martNpcName(L.i, 32) };
@@ -5287,6 +5302,7 @@ async function martLoad(deps, maxAgeMs = 0) {
 }
 function martIndexWrite(deps, cur, m, now) {
   m.npcSold = m.npcSold.filter((id) => martNpcById(id, now, []) !== null);   // もう入れ替わった棚の分は忘れる
+  m.L = m.L.filter((L) => !(L.k === "kaku" && now > L.e + 86400000));   // 確変枠の期限切れ（預かりがない）は、1日たったら消す
   m.done = m.done.slice(-MART.doneMax); m.log = m.log.slice(-MART.logMax);
   const json = JSON.stringify(m);
   martCache = { at: 0, cur: null };
@@ -5308,8 +5324,12 @@ const martNames = () => {
   KESHI_SLOTS.forEach((slot) => { out[slot] = KESHI_PARTS[slot].filter((p) => p.price > 0).map((p) => ({ id: p.id, name: p.name, price: p.price, ref: martRef(slot, p.id), m: p.m, s: p.s, b: p.b, z: p.z })); });
   return out;
 };
-const martView = (L) => ({ id: L.i || L.id, npc: L.npc === true, n: L.n, slot: L.slot, part: `${keshiBaseId(L.part)}~u`,   // 売れたら中古になるので、中古の姿で見せる
-   price: L.price, t: L.t, e: L.e, ref: martRef(L.slot, L.part) });
+const martView = (L) => {
+  const head = { id: L.i || L.id, npc: L.npc === true, n: L.n, k: L.k || "part", price: L.price, t: L.t, e: L.e, ref: martRefOf(L) };
+  if (L.k === "kaku") return { ...head, day: L.day, ss: L.ss, se: L.se, machine: kakuMachineFor(L.day) };
+  if (L.k === "prize") return { ...head, pid: L.pid, prize: L.pz };
+  return { ...head, slot: L.slot, part: `${keshiBaseId(L.part)}~u` };   // 売れたら中古になるので、中古の姿で見せる
+};
 
 /* 一覧：だれでも見られる。読み取りは martIndex/open の1回だけ（数秒はメモリのものを使う） */
 async function martStatus(deps, uid) {
@@ -5340,8 +5360,8 @@ async function martMine(deps, uid, body) {
         const p = martNpcBought(L, now), fee = martFee(p.q);
         gain += p.q - fee;
         m.L = m.L.filter((x) => x.i !== L.i);
-        m.done.push({ at: p.at, su: uid, sn: L.n, i: `${L.slot}:${keshiBaseId(L.part)}`, q: p.q, fee, b: p.name, npc: 1 });
-        m.log.push({ at: p.at, su: uid, s: L.n, bu: "", b: p.name, i: `${L.slot}:${keshiBaseId(L.part)}`, q: p.q, k: "npc", ref: martRef(L.slot, L.part) });
+        m.done.push({ at: p.at, su: uid, sn: L.n, i: martItemKey(L), q: p.q, fee, b: p.name, npc: 1 });
+        m.log.push({ at: p.at, su: uid, s: L.n, bu: "", b: p.name, i: martItemKey(L), q: p.q, k: "npc", ref: martRefOf(L) });
       }
       const idx = martIndexWrite(deps, cur, m, now);
       const err = await martCommit(deps, [martIncCoins(deps, me.name, gain), idx.write]);
@@ -5363,13 +5383,13 @@ async function martMine(deps, uid, body) {
   return { status: 409, error: "busy" };
 }
 
-/* 出品：パーツを預かりにして（持ち物から外す）、一覧に載せる */
+/* 出品：パーツ・番くじ景品は預かりにして（持ち物から外す）、確変枠は持ち主のまま（売れたときに持ち主を書きかえる）、一覧に載せる。body.kind：part（省略時）／kaku／prize */
 async function martList(deps, uid, body) {
   const g = await martGate(deps, uid);
   if (g) return g;
-  const slot = String(body?.slot || ""), variant = String(body?.part || ""), price = Number(body?.price);
-  const base = KESHI_PART_BY[slot]?.[keshiBaseId(variant)];
-  if (!base || base.price === 0 || !keshiPartOf(slot, variant)) return { status: 400, error: "bad_request" };
+  const kind = String(body?.kind || "part"), price = Number(body?.price);
+  if (!["part", "kaku", "prize"].includes(kind)) return { status: 400, error: "bad_request" };
+  if (kind === "part") { const base = KESHI_PART_BY[String(body?.slot || "")]?.[keshiBaseId(String(body?.part || ""))]; if (!base || base.price === 0 || !keshiPartOf(String(body.slot), String(body.part))) return { status: 400, error: "bad_request" }; }
   if (!Number.isInteger(price) || price < 1 || price > 100000000) return { status: 400, error: "bad_price" };
   const me = await loadMyUser(deps.firestore, uid, body?.username);
   if (me.error) return me.error;
@@ -5377,27 +5397,71 @@ async function martList(deps, uid, body) {
   if (mcur.m.paused && !slotIsTopAdmin(deps, uid)) return { status: 409, error: "paused" };
   if (mcur.m.L.filter((L) => L.u === uid).length >= MART.maxOpen) return { status: 409, error: "too_many", max: MART.maxOpen };
   if (mcur.m.L.length >= MART.maxListings) return { status: 409, error: "mart_full" };
-  const k = await keshiLoad(deps, uid);
-  const key = `${slot}:${variant}`;
-  if (!k.owned.includes(key)) return { status: 409, error: "not_owned" };
-  const eq = { ...k.eq };
-  if (eq[slot] === variant) eq[slot] = KESHI_DEFAULT_EQ[slot];   // 付けていたら、はずす
-  const owned = k.owned.filter((o) => o !== key);
+  const L = { i: crypto.randomUUID().replace(/-/g, "").slice(0, 12), u: uid, n: me.name, price, t: now, e: now + MART.listMs };
+  let writes = [];
+  if (kind === "part") {
+    const slot = String(body.slot), variant = String(body.part), k = await keshiLoad(deps, uid), key = `${slot}:${variant}`;
+    if (!k.owned.includes(key)) return { status: 409, error: "not_owned" };
+    const eq = { ...k.eq };
+    if (eq[slot] === variant) eq[slot] = KESHI_DEFAULT_EQ[slot];   // 付けていたら、はずす
+    writes = keshiWrite(deps, uid, k, { owned: k.owned.filter((o) => o !== key), eq, color: k.color, n: me.name });
+    Object.assign(L, { slot, part: variant });
+  } else if (kind === "kaku") {
+    const day = String(body?.day || ""), si = Number(body?.si), today = kakuDayId(now);
+    if (day < KAKU_EPOCH || ![today, kakuNextDay(today)].includes(day) || !Number.isInteger(si)) return { status: 400, error: "bad_request" };
+    const cur = await kakuGetDay(deps, day, 0), slot = cur?.data?.slots?.find((x) => x.i === si);
+    if (!slot || slot.uid !== uid || slot.npc || slot.bt || slot.cx) return { status: 409, error: "not_owned" };   // 自分が当てた（NPC でない）枠だけ。買った枠は売れない
+    if (slot.s - now <= MART.kakuLeadMs + KAKU_MIN) return { status: 409, error: "too_late" };   // 枠の始まりの10分前までに
+    if (mcur.m.L.some((x) => x.k === "kaku" && x.day === day && x.si === si && now < x.e)) return { status: 409, error: "already_listed" };
+    Object.assign(L, { k: "kaku", day, si, ss: slot.s, se: slot.e, e: Math.min(now + MART.listMs, slot.s - MART.kakuLeadMs) });
+  } else {
+    const n = Number(body?.n), path = `bankujiEntries/${BANKUJI.round}_${uid}`, raw = await deps.firestore.getRaw(path);
+    const prizes = raw && Array.isArray(decodeFields(raw.fields).prizes) ? decodeFields(raw.fields).prizes : [];
+    const rec = prizes.find((x) => x.n === n);
+    if (!rec || !MART.prizeRef[rec.id]) return { status: 409, error: "not_owned" };   // 売れるのは A・C・D・E・F。株・コイン・ラストワン賞は売れない
+    if (rec.bt && (rec.id === "C" || rec.id === "D")) return { status: 409, error: "no_resale" };   // 確変台の予約権は、買ったものをまた売ることはできない
+    if (rec.until && rec.until <= now + 60000) return { status: 409, error: "right_expired" };
+    if (rec.id === "A" && (await martCompanyCreated(deps, uid))) return { status: 409, error: "company_exists" };   // A賞は、会社をまだ作っていないときだけ
+    writes = [{ update: { name: deps.firestore.docName(path), fields: encodeFields({ prizes: prizes.filter((x) => x.n !== n) }) }, updateMask: { fieldPaths: ["prizes"] }, currentDocument: { updateTime: raw.updateTime } }];
+    Object.assign(L, { k: "prize", pid: rec.id, pz: rec, e: rec.until ? Math.min(now + MART.listMs, rec.until) : now + MART.listMs });
+  }
   const m = structuredClone(mcur.m);
-  const L = { i: crypto.randomUUID().replace(/-/g, "").slice(0, 12), u: uid, n: me.name, slot, part: variant, price, t: now, e: now + MART.listMs };
   m.L.push(L);
   const idx = martIndexWrite(deps, mcur, m, now);
   if (idx.json.length > MART.maxJson) return { status: 409, error: "mart_full" };
-  const err = await martCommit(deps, [...keshiWrite(deps, uid, k, { owned, eq, color: k.color, n: me.name }), idx.write]);
+  const err = await martCommit(deps, [...writes, idx.write]);
   if (err) return err;
   return { ok: true, id: L.i };
+}
+/* A賞（会社を運営できる権利）：会社を作るしくみができたら、ここで「すでに会社を作ったか」を返す。いまは会社がないので、いつも false */
+async function martCompanyCreated() { return false; }
+
+/* 出品できるもの（確変枠・番くじ景品）。「出品する」画面を開いたときだけ呼ぶ（確変の今日・明日の書類と、番くじの自分の書類を読む） */
+async function martSellable(deps, uid) {
+  const g = await martGate(deps, uid);
+  if (g) return g;
+  const now = deps.now(), today = kakuDayId(now), mcur = await martLoad(deps, 6000);
+  const listed = (x) => mcur.m.L.some((L) => L.k === x.k && now < L.e && (x.k === "kaku" ? L.day === x.day && L.si === x.si : L.pz?.n === x.n));
+  const slots = [];
+  for (const day of [today, kakuNextDay(today)]) {
+    if (day < KAKU_EPOCH) continue;
+    const cur = await kakuGetDay(deps, day);
+    for (const x of cur?.data?.slots || []) {
+      if (x.uid !== uid || x.npc || x.bt || x.cx || x.s - now <= MART.kakuLeadMs + KAKU_MIN || listed({ k: "kaku", day, si: x.i })) continue;
+      slots.push({ day, si: x.i, ss: x.s, se: x.e, machine: kakuMachineFor(day), ref: martRefOf({ k: "kaku", day, ss: x.s, se: x.e }) });
+    }
+  }
+  const raw = await deps.firestore.get(`bankujiEntries/${BANKUJI.round}_${uid}`);
+  const prizes = (Array.isArray(raw?.prizes) ? raw.prizes : []).filter((x) => MART.prizeRef[x.id] && !(x.bt && (x.id === "C" || x.id === "D")) && !(x.until && x.until <= now + 60000) && !listed({ k: "prize", n: x.n }))
+    .map((x) => ({ n: x.n, pid: x.id, prize: x, ref: MART.prizeRef[x.id] }));
+  return { ok: true, serverNowMs: now, slots, prizes };
 }
 
 /* 売れたときの共通処理。買う人（人／NPC）と出品（人／NPC）のどの組み合わせでも、コインの移動・パーツの移動・記録を1回の commit で書く。
    手数料は売れた値段の 10%（出品した人が受け取るのは残り）。NPC が買うとき、コインはどこからも出ない（NPC に予算はない）。 */
 async function martExecute(deps, mcur, L, price, buyer) {
-  const now = deps.now(), fs = deps.firestore;
-  const base = keshiBaseId(L.part), key = `${L.slot}:${base}~u`;
+  const now = deps.now(), fs = deps.firestore, kind = L.k || "part";
+  const base = kind === "part" ? keshiBaseId(L.part) : "", key = `${L.slot}:${base}~u`;
   let buyerWrites = [], buyerName = buyer.npc || "", buyerUid = "";
   if (!buyer.npc) {
     const me = await loadMyUser(fs, buyer.uid, buyer.name);
@@ -5405,13 +5469,25 @@ async function martExecute(deps, mcur, L, price, buyer) {
     const coins = Number(decodeFields(me.raw.fields).coins || 0);
     if (coins < price) return { status: 409, error: buyer.byOther ? "buyer_no_coins" : "insufficient_coins" };
     if (await lotterySeatedElsewhere(deps, buyer.uid, now)) return { status: 409, error: buyer.byOther ? "buyer_busy" : "seated" };
-    const k = await keshiLoad(deps, buyer.uid);
-    if (k.owned.includes(key)) return { status: 409, error: buyer.byOther ? "buyer_has_it" : "already_owned" };
+    const userWrite = { update: { name: fs.docName(`users/${me.name}`), fields: { coins: restInt(coins - price) } }, updateMask: { fieldPaths: ["coins"] }, currentDocument: { updateTime: me.raw.updateTime } };
     buyerName = me.name; buyerUid = buyer.uid;
-    buyerWrites = [
-      { update: { name: fs.docName(`users/${me.name}`), fields: { coins: restInt(coins - price) } }, updateMask: { fieldPaths: ["coins"] }, currentDocument: { updateTime: me.raw.updateTime } },
-      ...keshiWrite(deps, buyer.uid, k, { owned: [...k.owned, key], eq: k.eq, color: k.color, n: me.name })
-    ];
+    if (kind === "part") {
+      const k = await keshiLoad(deps, buyer.uid);
+      if (k.owned.includes(key)) return { status: 409, error: buyer.byOther ? "buyer_has_it" : "already_owned" };
+      buyerWrites = [userWrite, ...keshiWrite(deps, buyer.uid, k, { owned: [...k.owned, key], eq: k.eq, color: k.color, n: me.name })];
+    } else if (kind === "kaku") {
+      const kc = await kakuGetDay(deps, L.day, 0), slot = kc?.data?.slots?.find((x) => x.i === L.si);
+      if (!slot || slot.uid !== L.u || slot.npc || slot.bt || slot.s - now <= MART.kakuLeadMs) return { status: 409, error: "gone" };   // 出品した人が、もうその枠を持っていない
+      if (kc.data.slots.filter((x) => x.uid === buyer.uid).length >= MART.kakuMaxPerDay) return { status: 409, error: buyer.byOther ? "buyer_has_it" : "slot_limit" };
+      const slots = kc.data.slots.map((x) => (x.i === L.si ? { ...x, uid: buyer.uid, name: me.name, bt: 1 } : x));   // 買った枠は、また売れない（bt）
+      buyerWrites = [userWrite, { update: { name: fs.docName(`yuslotKaku/${L.day}`), fields: encodeFields({ slots }) }, updateMask: { fieldPaths: ["slots"] }, currentDocument: { updateTime: kc.updateTime } }];
+    } else {
+      const path = `bankujiEntries/${BANKUJI.round}_${buyer.uid}`, raw = await fs.getRaw(path), d = raw ? decodeFields(raw.fields) : {};
+      const prizes = [...(Array.isArray(d.prizes) ? d.prizes : []), { ...L.pz, bt: 1 }];
+      buyerWrites = [userWrite, raw
+        ? { update: { name: fs.docName(path), fields: encodeFields({ prizes }) }, updateMask: { fieldPaths: ["prizes"] }, currentDocument: { updateTime: raw.updateTime } }
+        : { update: { name: fs.docName(path), fields: encodeFields({ uid: buyer.uid, name: me.name, round: BANKUJI.round, tickets: [], prizes, dayKey: "", dayCount: 0 }) }, currentDocument: { exists: false } }];
+    }
   }
   const fee = martFee(price);
   let sellerWrites = [];
@@ -5420,15 +5496,16 @@ async function martExecute(deps, mcur, L, price, buyer) {
     if (sm.error) return { status: 409, error: "seller_missing" };
     sellerWrites = [martIncCoins(deps, sm.name, price - fee)];
   }
-  const m = structuredClone(mcur.m), item = `${L.slot}:${base}`;
+  const m = structuredClone(mcur.m), item = martItemKey(L);
   if (L.npc) m.npcSold.push(L.id); else m.L = m.L.filter((x) => x.i !== L.i);
   const sn = L.n;
   m.done.push({ at: now, su: L.npc ? "" : L.u, sn, bu: buyerUid, bn: buyerName, i: item, q: price, fee });
-  m.log.push({ at: now, su: L.npc ? "" : L.u, s: sn, bu: buyerUid, b: buyerName, i: item, q: price, k: L.npc ? "npc-list" : buyer.npc ? "npc-buy" : "p2p", ref: martRef(L.slot, L.part) });
+  m.log.push({ at: now, su: L.npc ? "" : L.u, s: sn, bu: buyerUid, b: buyerName, i: item, q: price, k: L.npc ? "npc-list" : buyer.npc ? "npc-buy" : "p2p", ref: martRefOf(L) });
   const idx = martIndexWrite(deps, mcur, m, now);
   const err = await martCommit(deps, [...buyerWrites, ...sellerWrites, idx.write]);
   if (err) return err;
-  return { ok: true, price, fee, item: { slot: L.slot, part: `${base}~u` } };
+  if (L.k === "kaku") kakuDocCache.delete(L.day);
+  return { ok: true, price, fee, item: L.k === "kaku" || L.k === "prize" ? { k: L.k } : { slot: L.slot, part: `${base}~u` } };
 }
 
 async function martBuy(deps, uid, body) {
@@ -5444,14 +5521,21 @@ async function martBuy(deps, uid, body) {
   return await martExecute(deps, mcur, L, L.price, { uid, name: body?.username });
 }
 
-/* 出品を取り下げて、パーツを持ち主に戻す（本人の取り消し・期限切れの回収・管理者の強制取り下げ） */
+/* 出品を取り下げて、預かっているものを持ち主に戻す（本人の取り消し・期限切れの回収・管理者の強制取り下げ）。確変枠は預かっていないので、一覧から消すだけ */
 async function martReturn(deps, mcur, L) {
-  const now = deps.now(), k = await keshiLoad(deps, L.u);
-  const key = `${L.slot}:${L.part}`, owned = k.owned.includes(key) ? k.owned : [...k.owned, key];
-  const m = structuredClone(mcur.m);
+  const now = deps.now(), m = structuredClone(mcur.m);
   m.L = m.L.filter((x) => x.i !== L.i);
   const idx = martIndexWrite(deps, mcur, m, now);
-  return await martCommit(deps, [...keshiWrite(deps, L.u, k, { owned, eq: k.eq, color: k.color, n: L.n }), idx.write]);
+  let writes = [];
+  if (L.k === "prize") {
+    const path = `bankujiEntries/${BANKUJI.round}_${L.u}`, raw = await deps.firestore.getRaw(path), d = raw ? decodeFields(raw.fields) : {};
+    const prizes = Array.isArray(d.prizes) ? d.prizes : [];
+    if (raw && !prizes.some((x) => x.n === L.pz.n)) writes = [{ update: { name: deps.firestore.docName(path), fields: encodeFields({ prizes: [...prizes, L.pz] }) }, updateMask: { fieldPaths: ["prizes"] }, currentDocument: { updateTime: raw.updateTime } }];
+  } else if (L.k !== "kaku") {
+    const k = await keshiLoad(deps, L.u), key = `${L.slot}:${L.part}`, owned = k.owned.includes(key) ? k.owned : [...k.owned, key];
+    writes = keshiWrite(deps, L.u, k, { owned, eq: k.eq, color: k.color, n: L.n });
+  }
+  return await martCommit(deps, [...writes, idx.write]);
 }
 async function martCancel(deps, uid, body) {
   const g = await martGate(deps, uid);

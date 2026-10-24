@@ -302,3 +302,121 @@ test("商品の絵：有料パーツの全部に、そのパーツの絵があ�
   assert.deepEqual([...MART_ART_KEYS].sort(), [...keys].sort());
   for (const k of keys) { const [s, i] = k.split(":"); assert.equal(partArt(s, `${i}~u`), partArt(s, i)); assert.ok(!partArt(s, i).includes("📦")); }
 });
+
+/* ---------- 確変枠・番くじ景品 ---------- */
+import { kakuInitialSlots, kakuMachineFor, resetKakuCacheForTest, BANKUJI } from "../worker.js";
+const DAY = "2026-10-26", SLOT0 = kakuInitialSlots(DAY)[0];   // 8:00〜8:30
+function setupKaku(over = {}) {
+  resetKakuCacheForTest();
+  const t = setup({ now: JST(2026, 10, 26, 6), ...over });
+  const slots = kakuInitialSlots(DAY).map((x) => (x.i === 0 ? { ...x, uid: "id0", name: "u0" } : x.i === 1 ? { ...x, uid: "id2", name: "u2" } : x.i === 2 ? { ...x, npc: true, name: "ほしぞら" } : x));
+  t.fs.putP(`yuslotKaku/${DAY}`, { day: DAY, machine: "yubasic", mode: "full", slots, app1: [], app2: [], draw1Done: true, draw2Done: true });
+  return t;
+}
+const slotsOf = (t) => t.fs.plain(`yuslotKaku/${DAY}`).slots;
+
+test("確変枠：自分が当てた枠だけ出品できる（NPC の枠・他人の枠・買った枠・始まる10分前をすぎた枠は出せない）", async () => {
+  const t = setupKaku();
+  const mine = await t.act(0, { action: "martSellable" });
+  assert.deepEqual(mine.slots.map((x) => [x.day, x.si, x.ref]), [[DAY, 0, 1500 * 1.5 >= 0 ? mine.slots[0].ref : 0]].map(([d, s]) => [d, s, mine.slots[0].ref]));
+  assert.equal(mine.slots[0].ref, 1500 * (new Date(`${DAY}T00:00:00Z`).getUTCDay() % 6 === 0 ? 1.5 : 1));
+  assert.equal((await t.act(1, { action: "martSellable" })).slots.length, 0);
+  assert.equal((await t.act(0, { action: "martList", kind: "kaku", day: DAY, si: 1, price: 1000 })).error, "not_owned", "他人の枠");
+  assert.equal((await t.act(0, { action: "martList", kind: "kaku", day: DAY, si: 2, price: 1000 })).error, "not_owned", "NPC の枠");
+  assert.equal((await t.act(0, { action: "martList", kind: "kaku", day: "2026-10-30", si: 0, price: 1000 })).error, "bad_request");
+  t.state.now = SLOT0.s - 9 * MIN;
+  assert.equal((await t.act(0, { action: "martList", kind: "kaku", day: DAY, si: 0, price: 1000 })).error, "too_late", "始まる10分前をすぎたら出せない");
+});
+
+test("確変枠：売れたら枠の持ち主が買った人に変わる。買った枠はまた売れない。NPC は売り買いしない。期限は枠の始まりの10分前", async () => {
+  const t = setupKaku();
+  const l = await t.act(0, { action: "martList", kind: "kaku", day: DAY, si: 0, price: 2000 });
+  assert.equal(l.ok, true);
+  assert.equal((await t.act(0, { action: "martList", kind: "kaku", day: DAY, si: 0, price: 1800 })).error, "already_listed");
+  assert.equal((await t.act(0, { action: "martSellable" })).slots.length, 0, "出品中の枠は出品する一覧から消える");
+  const st = await t.act(1, { action: "martStatus" });
+  const x = st.listings.find((v) => v.id === l.id);
+  assert.equal(x.k, "kaku"); assert.equal(x.machine, kakuMachineFor(DAY)); assert.equal(x.e, SLOT0.s - 10 * MIN);
+  t.state.now += 3 * 3600000;
+  const mine = await t.act(0, { action: "martMine" });
+  assert.equal(mine.listings[0].npcOffer, null, "NPC は枠を買わず、値下げ依頼も出さない");
+  t.state.now = JST(2026, 10, 26, 6);
+  const before = t.total();
+  const r = await t.act(1, { action: "martBuy", id: l.id });
+  assert.equal(r.ok, true); assert.equal(r.fee, 200);
+  const s0 = slotsOf(t).find((v) => v.i === 0);
+  assert.equal(s0.uid, "id1"); assert.equal(s0.name, "u1"); assert.equal(s0.bt, 1);
+  assert.equal(t.coinsOf(0), 20000 + 1800); assert.equal(t.total(), before - 200);
+  assert.equal((await t.act(1, { action: "martList", kind: "kaku", day: DAY, si: 0, price: 2500 })).error, "not_owned", "買った枠はまた売れない");
+  assert.equal((await t.act(1, { action: "martSellable" })).slots.length, 0);
+});
+
+test("確変枠：出品したあとに持ち主でなくなっていたら売れない／買う人は1日3枠まで／期限がすぎたら一覧から消える", async () => {
+  const t = setupKaku();
+  const l = await t.act(0, { action: "martList", kind: "kaku", day: DAY, si: 0, price: 800 });
+  const slots = slotsOf(t).map((x) => (x.i === 0 ? { ...x, uid: "idX", name: "x" } : x));
+  t.fs.putP(`yuslotKaku/${DAY}`, { day: DAY, machine: "yubasic", mode: "full", slots, app1: [], app2: [], draw1Done: true, draw2Done: true });
+  resetYuslotCacheForTest();
+  assert.equal((await t.act(1, { action: "martBuy", id: l.id })).error, "gone");
+  const t2 = setupKaku();
+  const l2 = await t2.act(0, { action: "martList", kind: "kaku", day: DAY, si: 0, price: 800 });
+  const full = slotsOf(t2).map((x) => (x.i >= 3 && x.i <= 5 ? { ...x, uid: "id1", name: "u1" } : x));
+  t2.fs.putP(`yuslotKaku/${DAY}`, { day: DAY, machine: "yubasic", mode: "full", slots: full, app1: [], app2: [], draw1Done: true, draw2Done: true });
+  resetYuslotCacheForTest();
+  assert.equal((await t2.act(1, { action: "martBuy", id: l2.id })).error, "slot_limit");
+  t2.state.now = SLOT0.s - 10 * MIN + 1;
+  assert.equal((await t2.act(2, { action: "martStatus" })).listings.some((v) => v.id === l2.id), false);
+});
+
+const PRIZES = [{ n: 5, id: "E", kind: "gear", code: "body", at: 1 }, { n: 6, id: "C", kind: "kaku3", until: JST(2027, 1, 1), at: 1 }, { n: 7, id: "B", kind: "stock", code: "X", qty: 25, at: 1 }, { n: 8, id: "H", kind: "coin", amount: 100, at: 1 },
+  { n: 9, id: "L", kind: "last", at: 1 }, { n: 10, id: "F", kind: "color", code: "gold", at: 1 }, { n: 11, id: "A", kind: "company", at: 1 }, { n: 12, id: "D", kind: "kaku1", until: JST(2027, 1, 1), at: 1 }];
+const entryOf = (t, i) => t.fs.plain(`bankujiEntries/${BANKUJI.round}_id${i}`);
+function setupPrize() {
+  const t = setup();
+  t.fs.putP(`bankujiEntries/${BANKUJI.round}_id0`, { uid: "id0", name: "u0", round: BANKUJI.round, tickets: [5, 6], prizes: PRIZES, dayKey: "2026-10-26", dayCount: 8 });
+  return t;
+}
+
+test("番くじ景品：A・C・D・E・F だけ出品できる（株・コイン・ラストワン賞は売れない）。出品中は預かり、取り消すと戻る", async () => {
+  const t = setupPrize();
+  const s = await t.act(0, { action: "martSellable" });
+  assert.deepEqual(s.prizes.map((x) => x.pid).sort(), ["A", "C", "D", "E", "F"]);
+  for (const n of [7, 8, 9]) assert.equal((await t.act(0, { action: "martList", kind: "prize", n, price: 100 })).error, "not_owned");
+  const l = await t.act(0, { action: "martList", kind: "prize", n: 5, price: 500 });
+  assert.equal(l.ok, true);
+  assert.ok(!entryOf(t, 0).prizes.some((x) => x.n === 5), "預かり");
+  assert.equal((await t.act(0, { action: "martList", kind: "prize", n: 5, price: 500 })).error, "not_owned", "同じ景品は二重に出せない");
+  assert.equal((await t.act(0, { action: "martCancel", id: l.id })).ok, true);
+  assert.ok(entryOf(t, 0).prizes.some((x) => x.n === 5), "戻る");
+  assert.equal(entryOf(t, 0).prizes.length, PRIZES.length);
+});
+
+test("番くじ景品：売れたら買った人の景品の記録に入る（書類がなくても作る）。確変台の予約権は、買ったものをまた売れない。ほかは売れる", async () => {
+  const t = setupPrize();
+  const e = await t.act(0, { action: "martList", kind: "prize", n: 5, price: 700 });
+  const c = await t.act(0, { action: "martList", kind: "prize", n: 6, price: 1500 });
+  assert.equal(entryOf(t, 1), null);
+  assert.equal((await t.act(1, { action: "martBuy", id: e.id })).ok, true);
+  assert.equal((await t.act(1, { action: "martBuy", id: c.id })).ok, true);
+  const mine = entryOf(t, 1);
+  assert.deepEqual(mine.prizes.map((x) => [x.n, x.id, x.bt]), [[5, "E", 1], [6, "C", 1]]);
+  assert.equal(t.coinsOf(0), 20000 + 630 + 1350);
+  assert.equal((await t.act(1, { action: "martList", kind: "prize", n: 6, price: 2000 })).error, "no_resale");
+  assert.equal((await t.act(1, { action: "martList", kind: "prize", n: 5, price: 800 })).ok, true, "E賞は買ったものもまた売れる");
+  assert.ok(!(await t.act(1, { action: "martSellable" })).prizes.some((x) => x.pid === "C"));
+});
+
+test("番くじ景品：期限切れの予約権は出せない。NPC が景品に出す額は相場の0.5〜0.65倍まで（景品を NPC に売ってコインが増えすぎない）", async () => {
+  const t = setupPrize();
+  t.state.now = JST(2027, 1, 2);
+  assert.equal((await t.act(0, { action: "martList", kind: "prize", n: 12, price: 500 })).error, "right_expired");
+  t.state.now = JST(2026, 10, 26, 6);
+  const ids = [];
+  for (const [n, price] of [[5, 100000], [10, 100000], [11, 100000], [6, 100000], [12, 100000]]) { const r = await t.act(0, { action: "martList", kind: "prize", n, price }); assert.equal(r.ok, true); ids.push(r.id); }
+  t.state.now += 6 * 3600000;
+  const m = await t.act(0, { action: "martMine" });
+  const REF = { E: 600, F: 300, A: 8000, C: 1500, D: 900 };
+  for (const x of m.listings.filter((v) => v.npcOffer)) { assert.ok(x.npcOffer.q <= Math.min(4000, Math.round(REF[x.pid] * 0.65 / 10) * 10), `${x.pid} ${x.npcOffer.q}`); assert.ok(x.npcOffer.q >= Math.min(4000, Math.round(REF[x.pid] * 0.5 / 10) * 10)); }
+  const lowId = (await t.act(0, { action: "martList", kind: "prize", n: 5, price: 100000 })).error;
+  assert.ok(lowId === "not_owned", "出品中のものは出せない");
+});
