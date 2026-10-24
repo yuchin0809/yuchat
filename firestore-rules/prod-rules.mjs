@@ -169,6 +169,16 @@ const TEST_CASES = [
   testCase("DENY", "lotteryEntries：購入枚数を削除する", userA, "delete", `lotteryEntries/2030-01-04_${userA.uid}`, { existing: { uid: userA.uid, round: "2030-01-04", count: 3 } }),
   testCase("DENY", "lotteryRounds：抽選結果を直接読めない", userA, "get", "lotteryRounds/2030-01-04", { existing: { round: "2030-01-04", status: "open", tickets: 3 } }),
   testCase("DENY", "lotteryRounds：抽選結果を書き換えて当選する", userA, "update", "lotteryRounds/2030-01-04", { data: { status: "done", winners: [{ uid: userA.uid, tier: "1等", amount: 999999 }] }, existing: { round: "2030-01-04", status: "open" } }),
+  // 🎊 ゆう番くじ：景品の残り・券・整理券はサーバー（通知 Worker）だけ。ブラウザからは読み書きできない
+  testCase("DENY", "bankujiRounds：景品の残り本数を直接読めない", userA, "get", "bankujiRounds/r1", { existing: { round: "r1", sold: 3, left: { A: 1 } } }),
+  testCase("DENY", "bankujiRounds：売れた番号・景品の残りを書き換える", userA, "update", "bankujiRounds/r1", { data: { round: "r1", sold: 0, left: { A: 1 } }, existing: { round: "r1", sold: 3, left: { A: 0 } } }),
+  testCase("DENY", "bankujiEntries：自分の券でも直接読めない（Worker 経由だけ）", userA, "get", `bankujiEntries/r1_${userA.uid}`, { existing: { uid: userA.uid, round: "r1", tickets: [1] } }),
+  testCase("DENY", "bankujiEntries：景品を勝手に増やす", userA, "update", `bankujiEntries/r1_${userA.uid}`, { data: { uid: userA.uid, round: "r1", tickets: [1], prizes: [{ id: "A" }] }, existing: { uid: userA.uid, round: "r1", tickets: [1] } }),
+  testCase("DENY", "bankujiEntries：タダで券を作る", userA, "create", `bankujiEntries/r1_${userA.uid}`, { data: { uid: userA.uid, round: "r1", tickets: [1], prizes: [{ id: "A" }] } }),
+  testCase("DENY", "bankujiPasses：整理券の抽選結果を直接読めない", userA, "get", "bankujiPasses/r1_2030-01-04", { existing: { round: "r1", winners: [] } }),
+  testCase("DENY", "bankujiPasses：自分を整理券の当選にする", userA, "create", "bankujiPasses/r1_2030-01-04", { data: { round: "r1", winners: [userA.uid] } }),
+  testCase("DENY", "bankujiApply：整理券の申込を直接作る", userA, "create", `bankujiApply/r1_2030-01-04_${userA.uid}`, { data: { round: "r1", day: "2030-01-04", uid: userA.uid } }),
+  testCase("DENY", "bankujiRounds：最上位管理者でもブラウザから書けない", admin, "update", "bankujiRounds/r1", { data: { status: "done" }, existing: { round: "r1", status: "selling" } }),
   // 🌈 ゆうスロ確変台：枠・申込（yuslotKaku）と通知の好み（yuslotPrefs）はサーバー（通知 Worker）だけ
   testCase("DENY", "yuslotKaku：枠・申込を直接読めない", userA, "get", "yuslotKaku/2030-01-04", { existing: { day: "2030-01-04", machine: "yubasic", slots: [], app1: [] } }),
   testCase("DENY", "yuslotKaku：自分を当選させる（枠の書き換え）", userA, "update", "yuslotKaku/2030-01-04", { data: { slots: [{ i: 0, uid: userA.uid, name: "a" }] }, existing: { day: "2030-01-04", machine: "yubasic", slots: [] } }),

@@ -44,6 +44,11 @@ async function ng(n, p) { try { await assertFails(p); pass++; logs.push("PASS �
     // 🎟 ゆう宝くじ：購入枚数（lotteryEntries）と抽選結果（lotteryRounds）は Worker（サービスアカウント）だけが書く
     await setDoc(doc(d, "lotteryEntries/2026-10-23_uidA"), { uid: "uidA", name: "alice", round: "2026-10-23", count: 3 });
     await setDoc(doc(d, "lotteryRounds/2026-10-23"), { round: "2026-10-23", tickets: 3, sales: 30, status: "open" });
+    // 🎊 ゆう番くじ：売れた番号・景品の残り・券・整理券は Worker（サービスアカウント）だけが書く
+    await setDoc(doc(d, "bankujiRounds/r1"), { round: "r1", sold: 3, soldBits: "1", left: { A: 1 }, status: "selling" });
+    await setDoc(doc(d, "bankujiEntries/r1_uidA"), { uid: "uidA", name: "alice", round: "r1", tickets: [1], prizes: [] });
+    await setDoc(doc(d, "bankujiPasses/r1_2026-10-27"), { round: "r1", day: "2026-10-27", winners: [] });
+    await setDoc(doc(d, "bankujiApply/r1_2026-10-27_uidA"), { round: "r1", day: "2026-10-27", uid: "uidA" });
     // 🌈 ゆうスロ確変台：枠・申込（yuslotKaku）と通知の好み（yuslotPrefs）は Worker（サービスアカウント）だけが書く
     await setDoc(doc(d, "yuslotKaku/2026-10-21"), { day: "2026-10-21", machine: "yubasic", slots: [], app1: [], app2: [] });
     await setDoc(doc(d, "yuslotPrefs/uidA"), { uid: "uidA", kakuNotify: { result1: true } });
@@ -146,6 +151,16 @@ async function ng(n, p) { try { await assertFails(p); pass++; logs.push("PASS �
   await ng("抽選結果を書き換えて自分を当選させる", setDoc(doc(alice, "lotteryRounds/2026-10-23"), { status: "done", winners: [{ uid: "uidA", name: "alice", tier: "1等", amount: 999999 }] }));
   await ng("最上位管理者でもブラウザから抽選結果を書けない", updateDoc(doc(admin, "lotteryRounds/2026-10-23"), { status: "done" }));
   await ng("未ログインが購入枚数を作る", setDoc(doc(anon, "lotteryEntries/2026-10-23_uidZ"), { uid: "uidZ", count: 1 }));
+  await ng("ゆう番くじ：景品の残り（bankujiRounds）を直接読めない", getDoc(doc(alice, "bankujiRounds/r1")));
+  await ng("ゆう番くじ：景品の残りを書き換える", updateDoc(doc(alice, "bankujiRounds/r1"), { left: { A: 5 } }));
+  await ng("ゆう番くじ：自分の券（bankujiEntries）を直接読めない", getDoc(doc(alice, "bankujiEntries/r1_uidA")));
+  await ng("ゆう番くじ：他人の券を覗く", getDoc(doc(bob, "bankujiEntries/r1_uidA")));
+  await ng("ゆう番くじ：景品を勝手に増やす", updateDoc(doc(alice, "bankujiEntries/r1_uidA"), { prizes: [{ id: "A" }] }));
+  await ng("ゆう番くじ：タダで券を作る", setDoc(doc(bob, "bankujiEntries/r1_uidB"), { uid: "uidB", name: "bob", round: "r1", tickets: [2], prizes: [{ id: "A" }] }));
+  await ng("ゆう番くじ：整理券の抽選結果（bankujiPasses）を直接読めない", getDoc(doc(alice, "bankujiPasses/r1_2026-10-27")));
+  await ng("ゆう番くじ：自分を整理券の当選にする", updateDoc(doc(alice, "bankujiPasses/r1_2026-10-27"), { winners: ["uidA"] }));
+  await ng("ゆう番くじ：整理券の申込（bankujiApply）を直接作る", setDoc(doc(bob, "bankujiApply/r1_2026-10-27_uidB"), { round: "r1", day: "2026-10-27", uid: "uidB" }));
+  await ng("ゆう番くじ：最上位管理者でもブラウザから書けない", updateDoc(doc(admin, "bankujiRounds/r1"), { status: "done" }));
 
   logs.push("--- ⑨ ゆうスロ確変台：枠・申込・通知の好みはサーバー（Worker）だけ。ブラウザからは読み書きできない");
   await ng("確変台の枠・申込（yuslotKaku）を直接読めない", getDoc(doc(alice, "yuslotKaku/2026-10-21")));

@@ -2415,6 +2415,10 @@ export async function handleYuslotAction(deps, uid, body) {
       case "lotteryStatus": return await lotteryStatus(deps, uid, body);
       case "lotteryBuy": return await lotteryBuy(deps, uid, body);
       case "lotterySetPublished": return await lotterySetPublished(deps, uid, body);
+      case "bankujiStatus": return await bankujiStatus(deps, uid, body);
+      case "bankujiBuy": return await bankujiBuy(deps, uid, body);
+      case "bankujiApply": return await bankujiApply(deps, uid, body);
+      case "bankujiSetPaused": return await bankujiSetPaused(deps, uid, body);
       case "kakuStatus": return await kakuStatus(deps, uid, body);
       case "kakuApply": return await kakuApply(deps, uid, body);
       // 先着は、ゲーム（battle*）を通らないと買えない（kakuQuick を直接呼ぶ入口はない）
@@ -3185,6 +3189,290 @@ async function lotteryBuy(deps, uid, body) {
   }
   lotteryDocCache.delete(roundPath);
   return { ok: true, bought: count, numbers: alloc.numbers, balance: coins - cost, cost, mode, tickets: totalTickets, remaining: Math.max(0, N - totalTickets) };
+}
+
+/* =========================================================
+   🎊 ゆう番くじ（ゆうくじ売り場の「ゆう番くじ売り場」）
+   ・総数 300 枚・1枚 200 コイン。300枚の一覧から、自分で選んで買う。景品は買った瞬間に決まる（サーバーだけが決める）。
+   ・1人あたり1日（日本時間 0:00 区切り）15枚まで。
+   ・初日（発売日）は先着。購入前の残りが 101 枚以上のあいだだけ買える（残りが 100 枚以下になったら、その日の販売は終了。
+     残り 101 枚のときに買い始めた人は15枚まで買える＝そのあとの人は買えない）。
+   ・2日目以降は整理券制：毎朝 8:00〜8:30 に希望者が申し込み、8:30 に抽選（当たった人だけ、その日の終わりまで買える）。
+     当たりの人数は「残り枚数 ÷ 15 を切り上げた数 × 2」（申込が少なければ全員）。抽選は最初に見た人の呼び出しで1回だけ行う（二重に決まらない）。
+   ・景品の決め方：箱に入っている景品の残り本数から、枚数ぶんをランダムに引く。いちばん最後の1枚だけが「ラストワン賞」。
+     （選んだ番号と景品は関係がない。どの番号を選んでも、残りの景品から公平に引く）
+   ・景品は、コインとゆう株は買った瞬間に渡す。確変台の予約権・会社の運営権・消しバトの限定品は「もちもの」に記録する（使える機能は順次）。
+   ・Firestore：bankujiRounds（売れた番号の表と景品の残り本数）・bankujiEntries（買った人ごとの券と景品）・bankujiPasses（整理券の抽選結果）・
+     bankujiApply（整理券の申込）。すべて Worker（サービスアカウント）だけが読み書きする（ブラウザからは読めない）。
+   ・購入は「読み取り3回（残高・自分の券・売れた番号の表）＋書き込み3件の commit 1回」。同時に買われたら、どちらか一方だけが成功して、もう一方は「もう一度」。
+   ・販売の一時停止：worldConfig/bankuji（最上位管理者だけが変更）。
+   ========================================================= */
+
+export const BANKUJI = {
+  round: "r1",
+  price: 200,
+  pool: 300,
+  perDay: 15,
+  stopRemaining: 100,                                   // 初日：購入前の残りがこれ以下なら、その日の販売は終了
+  saleStartMs: Date.UTC(2026, 9, 25, 23, 0, 0),         // 2026-10-26（月）8:00 JST ＝ 2026-10-25 23:00 UTC
+  applyOpen: [8, 0], applyClose: [8, 30],               // 整理券の申込（日本時間）
+  passFactor: 2,
+  rightDays: 60,                                        // 確変台の予約権の有効日数
+  prizes: [                                             // 合計 299 本＋ラストワン賞 1 本＝ 300 枚
+    { id: "A", name: "A賞", count: 1, kind: "company", desc: "自分の会社を運営できる権利" },
+    { id: "B", name: "B賞", count: 5, kind: "stock", qty: [25, 25], desc: "ゆう株 25株（5社のどれか）" },
+    { id: "C", name: "C賞", count: 6, kind: "kaku3", desc: "確変台の予約を3回とれる権利" },
+    { id: "D", name: "D賞", count: 10, kind: "kaku1", desc: "確変台の予約を優先で1回確定でとれる権利" },
+    { id: "E", name: "E賞", count: 30, kind: "gear", desc: "消しバトの限定改造品" },
+    { id: "F", name: "F賞", count: 70, kind: "color", desc: "消しバトの限定カラー" },
+    { id: "G", name: "G賞", count: 70, kind: "stock", qty: [1, 3], desc: "ゆう株 1〜3株（5社のどれか）" },
+    { id: "H", name: "H賞", count: 107, kind: "coin", amount: 100, desc: "ゆうコイン 100" }
+  ],
+  last: { id: "L", name: "ラストワン賞", kind: "last", desc: "伝説セット（称号・限定カラー・パーツ一式・全5社5株・確変台の予約3回）" }
+};
+const BANKUJI_GEAR_SLOTS = ["body", "edge", "sole", "weight"];
+const BANKUJI_COLOR_CODES = ["gold", "silver", "rainbow", "blackgold"];
+export const bankujiFirstDay = () => jstDateString(BANKUJI.saleStartMs);
+export const bankujiMode = (day) => (day === bankujiFirstDay() ? "open" : "pass");
+export const bankujiApplyWindow = (day) => ({ openMs: jstTimeMs(day, ...BANKUJI.applyOpen), closeMs: jstTimeMs(day, ...BANKUJI.applyClose) });
+const bankujiInitialLeft = () => Object.fromEntries(BANKUJI.prizes.map((p) => [p.id, p.count]));
+const bankujiPrizeById = (id) => (id === BANKUJI.last.id ? BANKUJI.last : BANKUJI.prizes.find((p) => p.id === id));
+/* お客さんに見せる景品の一覧（名前・本数・説明） */
+const bankujiPublicPrizes = () => [...BANKUJI.prizes.map((p) => ({ id: p.id, name: p.name, count: p.count, desc: p.desc })), { id: BANKUJI.last.id, name: BANKUJI.last.name, count: 1, desc: BANKUJI.last.desc }];
+
+/* 残り本数（left）から1本を引く（残りの本数に比例）。引いたら left を1減らす */
+export function bankujiPickPrize(left, random) {
+  const ids = Object.keys(left).filter((k) => left[k] > 0);
+  const total = ids.reduce((s, k) => s + left[k], 0);
+  if (total <= 0) return "H";
+  let r = Math.floor(random() * total);
+  for (const k of ids) { if (r < left[k]) { left[k]--; return k; } r -= left[k]; }
+  left[ids[0]]--; return ids[0];
+}
+/* 引いた景品の中身（株の会社・株数、消しバトの限定品の種類など）を決める */
+export function bankujiMakeAward(prizeId, n, now, random) {
+  const p = bankujiPrizeById(prizeId);
+  const rec = { n, id: prizeId, kind: p.kind, at: now };
+  const pick = (list) => list[Math.floor(random() * list.length)];
+  if (p.kind === "stock") { rec.code = pick(Object.keys(ASSET_STOCK_INITIAL_PRICES)); rec.qty = p.qty[0] + Math.floor(random() * (p.qty[1] - p.qty[0] + 1)); }
+  else if (p.kind === "coin") rec.amount = p.amount;
+  else if (p.kind === "gear") rec.code = pick(BANKUJI_GEAR_SLOTS);
+  else if (p.kind === "color") rec.code = pick(BANKUJI_COLOR_CODES);
+  else if (p.kind === "kaku3" || p.kind === "kaku1") rec.until = now + BANKUJI.rightDays * 86400000;
+  return rec;
+}
+
+let bankujiPauseCache = { value: null, at: 0 };
+const bankujiPassCache = new Map();
+export function resetBankujiCacheForTest() { bankujiPauseCache = { value: null, at: 0 }; bankujiPassCache.clear(); }
+
+async function bankujiGetPaused(deps, maxAgeMs = 60000) {
+  const now = deps.now();
+  if (bankujiPauseCache.value !== null && now - bankujiPauseCache.at < maxAgeMs) return bankujiPauseCache.value;
+  try {
+    const doc = await deps.firestore.get("worldConfig/bankuji");
+    bankujiPauseCache = { value: doc?.bankujiPaused === true, at: now };
+    return bankujiPauseCache.value;
+  } catch (error) {
+    console.warn("bankuji config read failed", String(error?.message || error).slice(0, 120));
+    return true; // 取得失敗は停止扱い（お金が動くので安全側）
+  }
+}
+async function bankujiSetPaused(deps, uid, body) {
+  if (!slotIsTopAdmin(deps, uid)) return { status: 403, error: "not_top_admin" };
+  const paused = body?.paused === true;
+  await deps.firestore.commit([{
+    update: { name: deps.firestore.docName("worldConfig/bankuji"), fields: { bankujiPaused: { booleanValue: paused }, updatedAtMs: { integerValue: String(deps.now()) }, updatedByUid: { stringValue: uid } } },
+    updateMask: { fieldPaths: ["bankujiPaused", "updatedAtMs", "updatedByUid"] }
+  }]);
+  bankujiPauseCache = { value: paused, at: deps.now() };
+  return { ok: true, paused };
+}
+
+/* その日の整理券の抽選（申込の締切のあと。最初に呼ばれたときに1回だけ決めて、書類に残す。ほかの人が先に決めていたらそれに従う） */
+async function bankujiEnsurePass(deps, day, remaining) {
+  const R = BANKUJI.round, path = `bankujiPasses/${R}_${day}`;
+  const cached = bankujiPassCache.get(path);
+  if (cached) return cached;
+  let doc = await deps.firestore.get(path);
+  if (!doc) {
+    const apps = await deps.firestore.query("bankujiApply", [["round", "EQUAL", R], ["day", "EQUAL", day]]);
+    const uids = [...new Set(apps.map((a) => a.data.uid).filter(Boolean))];
+    for (let i = uids.length - 1; i > 0; i--) { const j = Math.floor(deps.random() * (i + 1)); [uids[i], uids[j]] = [uids[j], uids[i]]; }
+    const count = Math.min(uids.length, BANKUJI.passFactor * Math.ceil(Math.max(0, remaining) / BANKUJI.perDay));
+    const data = { round: R, day, drawnAtMs: deps.now(), applicants: uids.length, count, winners: uids.slice(0, count) };
+    doc = (await deps.firestore.createIfAbsent(path, data)) ? data : await deps.firestore.get(path);
+  }
+  if (doc) bankujiPassCache.set(path, doc);
+  return doc || { winners: [], count: 0, applicants: 0 };
+}
+
+async function bankujiPassState(deps, uid, day, now, remaining) {
+  const R = BANKUJI.round, w = bankujiApplyWindow(day);
+  const info = { openMs: w.openMs, closeMs: w.closeMs };
+  const applied = async () => !!(await deps.firestore.get(`bankujiApply/${R}_${day}_${uid}`));
+  if (now < w.openMs) return { ...info, state: "before" };
+  if (now < w.closeMs) return { ...info, state: (await applied()) ? "applied" : "canApply" };
+  const pass = await bankujiEnsurePass(deps, day, remaining);
+  if (Array.isArray(pass.winners) && pass.winners.includes(uid)) return { ...info, state: "won", count: pass.count, applicants: pass.applicants };
+  return { ...info, state: (await applied()) ? "lost" : "none", count: pass.count, applicants: pass.applicants };
+}
+
+const bankujiRoundPath = () => `bankujiRounds/${BANKUJI.round}`;
+const bankujiBitsOf = (round) => (typeof round?.soldBits === "string" && round.soldBits.length === BANKUJI.pool ? round.soldBits : "0".repeat(BANKUJI.pool));
+const bankujiCountSold = (bits) => bits.split("1").length - 1;
+
+async function bankujiStatus(deps, uid, body) {
+  const now = deps.now(), admin = slotIsTopAdmin(deps, uid), B = BANKUJI;
+  const head = { ok: true, serverNowMs: now, isTopAdmin: admin, saleStartMs: B.saleStartMs };
+  if (now < B.saleStartMs) {
+    // 発売前：ふつうの人には中身を出さない。管理者だけは、本物の売り場をテストで見られる（画面の中だけ。何も買わない・書かない）
+    if (!admin) return { ...head, phase: "before" };
+    return { ...head, phase: "before", adminPreview: true, price: B.price, pool: B.pool, perDay: B.perDay, prizes: bankujiPublicPrizes(), sold: "0".repeat(B.pool), remaining: B.pool, todayCount: 0, mine: { tickets: 0, prizes: [] } };
+  }
+  const paused = await bankujiGetPaused(deps);
+  if (paused && !admin) return { ...head, phase: "paused" };
+  const day = jstDateString(now), mode = bankujiMode(day), R = B.round;
+  const [round, entry, me] = await Promise.all([
+    lotteryCachedGet(deps, bankujiRoundPath(), 8000),
+    deps.firestore.get(`bankujiEntries/${R}_${uid}`),
+    loadMyUser(deps.firestore, uid, body?.username)
+  ]);
+  const sold = bankujiBitsOf(round);
+  const remaining = B.pool - bankujiCountSold(sold);
+  const todayCount = entry?.dayKey === day ? Number(entry.dayCount) || 0 : 0;
+  let phase, pass = null;
+  if (remaining <= 0 || round?.status === "done") phase = "soldout";
+  else if (mode === "open") phase = remaining > B.stopRemaining ? "selling" : "closedToday";
+  else { pass = await bankujiPassState(deps, uid, day, now, remaining); phase = pass.state === "won" ? "selling" : "needPass"; }
+  return {
+    ...head, phase, mode, paused, price: B.price, pool: B.pool, perDay: B.perDay, prizes: bankujiPublicPrizes(),
+    sold, remaining, todayCount, pass,
+    lastOne: round?.status === "done" && round.lastName ? { name: round.lastName } : null,
+    mine: { tickets: Array.isArray(entry?.tickets) ? entry.tickets.length : 0, prizes: Array.isArray(entry?.prizes) ? entry.prizes : [] },
+    balance: me.error ? null : Number(decodeFields(me.raw.fields).coins || 0)
+  };
+}
+
+async function bankujiApply(deps, uid, body) {
+  const now = deps.now(), B = BANKUJI;
+  if (now < B.saleStartMs) return { status: 409, error: "not_started" };
+  if ((await bankujiGetPaused(deps)) && !slotIsTopAdmin(deps, uid)) return { status: 409, error: "paused" };
+  const day = jstDateString(now);
+  if (bankujiMode(day) === "open") return { status: 409, error: "no_pass_needed" };
+  const w = bankujiApplyWindow(day);
+  if (now < w.openMs) return { status: 409, error: "apply_not_open", openMs: w.openMs };
+  if (now >= w.closeMs) return { status: 409, error: "apply_closed" };
+  const round = await lotteryCachedGet(deps, bankujiRoundPath(), 8000);
+  if (round?.status === "done") return { status: 409, error: "sold_out" };
+  const me = await loadMyUser(deps.firestore, uid, body?.username);
+  if (me.error) return me.error;
+  const made = await deps.firestore.createIfAbsent(`bankujiApply/${B.round}_${day}_${uid}`, { round: B.round, day, uid, name: me.name, atMs: now });
+  return { ok: true, already: !made, drawMs: w.closeMs };
+}
+
+async function bankujiBuy(deps, uid, body) {
+  const B = BANKUJI, now = deps.now();
+  if (now < B.saleStartMs) return { status: 409, error: "not_started", saleStartMs: B.saleStartMs };
+  if ((await bankujiGetPaused(deps)) && !slotIsTopAdmin(deps, uid)) return { status: 409, error: "paused" };
+  // 買う券：番号を選んだとき（tickets）か、おまかせ（random＝枚数）
+  const picks = Array.isArray(body?.tickets) ? body.tickets : null;
+  let count;
+  if (picks) {
+    if (!picks.every((n) => Number.isInteger(n) && n >= 0 && n < B.pool) || new Set(picks).size !== picks.length) return { status: 400, error: "bad_request" };
+    count = picks.length;
+  } else count = Number(body?.random);
+  if (!Number.isInteger(count) || count < 1 || count > B.perDay) return { status: 400, error: "bad_count" };
+
+  const day = jstDateString(now), mode = bankujiMode(day), R = B.round;
+  const me = await loadMyUser(deps.firestore, uid, body?.username);
+  if (me.error) return me.error;
+  const meData = decodeFields(me.raw.fields);
+  const coins = Number(meData.coins || 0);
+  const cost = B.price * count;
+  if (coins < cost) return { status: 409, error: "insufficient_coins" };
+
+  const entryPath = `bankujiEntries/${R}_${uid}`, roundPath = bankujiRoundPath();
+  const [roundRaw, entryRaw] = await Promise.all([deps.firestore.getRaw(roundPath), deps.firestore.getRaw(entryPath)]);
+  const round = roundRaw ? decodeFields(roundRaw.fields) : {};
+  const entry = entryRaw ? decodeFields(entryRaw.fields) : {};
+  const bits = bankujiBitsOf(round);
+  const remaining = B.pool - bankujiCountSold(bits);
+  if (remaining <= 0 || round.status === "done") return { status: 409, error: "sold_out" };
+  if (mode === "open") {
+    if (remaining <= B.stopRemaining) return { status: 409, error: "closed_today" };
+  } else {
+    const w = bankujiApplyWindow(day);
+    if (now < w.closeMs) return { status: 409, error: "pass_pending", closeMs: w.closeMs };
+    const pass = await bankujiEnsurePass(deps, day, remaining);
+    if (!(Array.isArray(pass.winners) && pass.winners.includes(uid))) return { status: 409, error: "no_pass" };
+  }
+  const todayCount = entry.dayKey === day ? Number(entry.dayCount) || 0 : 0;
+  if (todayCount + count > B.perDay) return { status: 409, error: "daily_limit", left: Math.max(0, B.perDay - todayCount) };
+  if (count > remaining) return { status: 409, error: "not_enough", remaining };
+
+  let chosen;
+  if (picks) {
+    const taken = picks.filter((n) => bits[n] === "1");
+    if (taken.length) return { status: 409, error: "taken", taken };
+    chosen = [...picks].sort((a, b) => a - b);
+  } else {
+    const free = []; for (let i = 0; i < B.pool; i++) if (bits[i] !== "1") free.push(i);
+    for (let k = 0; k < count; k++) { const j = k + Math.floor(deps.random() * (free.length - k)); [free[k], free[j]] = [free[j], free[k]]; }
+    chosen = free.slice(0, count).sort((a, b) => a - b);
+  }
+
+  // 景品を決める（箱の残りから引く。最後の1枚だけラストワン賞）
+  const left = round.left && typeof round.left === "object" ? { ...bankujiInitialLeft(), ...round.left } : bankujiInitialLeft();
+  const awards = chosen.map((n, i) => bankujiMakeAward(remaining - i === 1 ? B.last.id : bankujiPickPrize(left, deps.random), n, now, deps.random));
+
+  // 渡せる景品（コイン・ゆう株）は同じ commit で渡す
+  const coinGain = awards.filter((a) => a.kind === "coin").reduce((s, a) => s + a.amount, 0);
+  const stockQty = {};
+  awards.forEach((a) => { if (a.kind === "stock") stockQty[a.code] = (stockQty[a.code] || 0) + a.qty; });
+  const userFields = { coins: restInt(coins - cost + coinGain) };
+  const fieldPaths = ["coins"];
+  const stockCodes = Object.keys(stockQty);
+  if (stockCodes.length) {
+    const prices = marketPricesOf(await deps.firestore.get("market/current"));
+    const mapFields = {};
+    stockCodes.forEach((code) => {
+      const h = meData.stocks?.[code] || {};
+      const qty = Math.max(0, Math.floor(Number(h.qty) || 0)), cost0 = Math.max(0, Math.round(Number(h.cost) || 0));
+      mapFields[code] = { mapValue: { fields: { qty: restInt(qty + stockQty[code]), cost: restInt(cost0 + prices[code] * stockQty[code]) } } };
+      fieldPaths.push(`stocks.${code}`);
+    });
+    userFields.stocks = { mapValue: { fields: mapFields } };
+  }
+
+  const next = bits.split("");
+  chosen.forEach((n) => { next[n] = "1"; });
+  const nextBits = next.join("");
+  const soldNow = B.pool - (remaining - count);
+  const gotLast = awards.some((a) => a.kind === "last");
+  const roundFields = { round: R, soldBits: nextBits, sold: soldNow, left, status: gotLast ? "done" : "selling", ...(gotLast ? { lastName: me.name, lastAtMs: now } : {}) };
+  const entryFields = {
+    uid, name: me.name, round: R,
+    tickets: [...(Array.isArray(entry.tickets) ? entry.tickets : []), ...chosen],
+    prizes: [...(Array.isArray(entry.prizes) ? entry.prizes : []), ...awards],
+    dayKey: day, dayCount: todayCount + count
+  };
+  try {
+    await deps.firestore.commit([
+      { update: { name: deps.firestore.docName(`users/${me.name}`), fields: userFields }, updateMask: { fieldPaths }, currentDocument: { updateTime: me.raw.updateTime } },
+      { update: { name: deps.firestore.docName(entryPath), fields: encodeFields(entryFields) }, updateMask: { fieldPaths: Object.keys(entryFields) }, currentDocument: entryRaw ? { updateTime: entryRaw.updateTime } : { exists: false } },
+      { update: { name: deps.firestore.docName(roundPath), fields: encodeFields(roundFields) }, updateMask: { fieldPaths: Object.keys(roundFields) }, currentDocument: roundRaw ? { updateTime: roundRaw.updateTime } : { exists: false } }
+    ]);
+  } catch (error) {
+    if (isRetryableCommitError(error)) return { status: 409, error: "busy" }; // 残高や売れた番号が同時に変わった等。もう一度
+    throw error;
+  }
+  lotteryDocCache.delete(roundPath);
+  return {
+    ok: true, bought: count, balance: coins - cost + coinGain, cost, remaining: remaining - count, todayCount: todayCount + count,
+    results: awards.map((a) => ({ ...a, name: bankujiPrizeById(a.id).name, desc: bankujiPrizeById(a.id).desc })),
+    lastOne: gotLast
+  };
 }
 
 /* =========================================================
