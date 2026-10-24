@@ -48,27 +48,36 @@ export const eraserIcon = (cls = "ker-svg") => `<svg class="${cls}" viewBox="0 0
 export const KESHI_DESK = { hw: 4.4, hd: 7.4, startZ: 3.0, startX: 1.2 };
 export const KESHI_DT = 1 / 120;
 const KESHI_MAX_STEPS = 1200;
+/* 回転（当てられたら回る）：消しゴムどうしがぶつかるとき、当たった点でのこすれ（摩擦）で、向きが回り、横向きの速さも少し変わる。
+   ・まっすぐ（中心どうしを結ぶ線の上で）当たったときは、こすれがないので、今までと同じ動き。かすめるように当たると、回る
+   ・回転は、机の上でだんだん止まる（毎コマ KESHI_SPIN_DAMP をかける）。回転の計算にも、三角関数は使わない（どの端末でも同じ答えになる） */
+const KESHI_MU = 0.8, KESHI_INERTIA = 0.1, KESHI_SPIN_DAMP = 0.992, KESHI_SPIN_MIN = 0.3;   /* こすれの強さ・回りやすさ（小さいほど回る）・回転が止まっていく速さ・これ以下の回転は止める */
 /* 1コマずつ進める。pos：[[x,z],[x,z]]、who：弾いた人、(vx,vz)：弾いた速さ。
    step() が false を返したら終わり。x,z,out,first は、進めるたびに更新される（out：机から落ちた人、first：最初に落ちた人。落ちていなければ -1） */
 export function keshiSimStepper(P, pos, who, vx, vz) {
-  const s = { x: [pos[0][0], pos[1][0]], z: [pos[0][1], pos[1][1]], vx: [0, 0], vz: [0, 0], out: [false, false], first: -1, steps: 0 };
+  const s = { x: [pos[0][0], pos[1][0]], z: [pos[0][1], pos[1][1]], vx: [0, 0], vz: [0, 0], th: [0, 0], w: [0, 0], out: [false, false], first: -1, steps: 0 };
   s.vx[who] = vx; s.vz[who] = vz;
   s.step = () => {
     if (s.steps >= KESHI_MAX_STEPS) return false;
-    const { x, z, vx: vX, vz: vZ, out } = s;
+    const { x, z, vx: vX, vz: vZ, th, w, out } = s;
     let moving = false;
     for (let i = 0; i < 2; i++) {
       if (out[i]) continue;
       const sp = Math.sqrt(vX[i] * vX[i] + vZ[i] * vZ[i]);
       if (sp > 0) { const ns = sp - P[i].a * KESHI_DT; if (ns <= 0.02) { vX[i] = 0; vZ[i] = 0; } else { vX[i] *= ns / sp; vZ[i] *= ns / sp; moving = true; } }
       x[i] += vX[i] * KESHI_DT; z[i] += vZ[i] * KESHI_DT;
+      if (w[i] !== 0) { th[i] += w[i] * KESHI_DT; w[i] *= KESHI_SPIN_DAMP; if (Math.abs(w[i]) < KESHI_SPIN_MIN) w[i] = 0; else moving = true; }
     }
     if (!out[0] && !out[1]) {
       const dx = x[1] - x[0], dz = z[1] - z[0], rr = P[0].r + P[1].r, d2 = dx * dx + dz * dz;
       if (d2 < rr * rr) {
         const d = Math.sqrt(d2), nx = d > 1e-9 ? dx / d : 0, nz = d > 1e-9 ? dz / d : 1;
         const vn = (vX[1] - vX[0]) * nx + (vZ[1] - vZ[0]) * nz, ia = 1 / P[0].m, ib = 1 / P[1].m;
-        if (vn < 0) { const e = vX[0] * vX[0] + vZ[0] * vZ[0] >= vX[1] * vX[1] + vZ[1] * vZ[1] ? P[0].e : P[1].e, j = -(1 + e) * vn / (ia + ib);   /* 反発は、勢いのあるほう（当てたほう）の消しゴムの数字 */ vX[0] -= j * ia * nx; vZ[0] -= j * ia * nz; vX[1] += j * ib * nx; vZ[1] += j * ib * nz; moving = true; }
+        if (vn < 0) { const e = vX[0] * vX[0] + vZ[0] * vZ[0] >= vX[1] * vX[1] + vZ[1] * vZ[1] ? P[0].e : P[1].e, j = -(1 + e) * vn / (ia + ib);   /* 反発は、勢いのあるほう（当てたほう）の消しゴムの数字 */ vX[0] -= j * ia * nx; vZ[0] -= j * ia * nz; vX[1] += j * ib * nx; vZ[1] += j * ib * nz; moving = true;
+          const tx = -nz, tz = nx, I0 = KESHI_INERTIA * P[0].m * P[0].r * P[0].r, I1 = KESHI_INERTIA * P[1].m * P[1].r * P[1].r;
+          const vt = (vX[1] - vX[0]) * tx + (vZ[1] - vZ[0]) * tz - w[1] * P[1].r - w[0] * P[0].r;   /* 当たった点での、横向き（こすれる向き）の相対速度 */
+          const lim = KESHI_MU * j; let jt = -vt / (ia + ib + P[1].r * P[1].r / I1 + P[0].r * P[0].r / I0); jt = jt > lim ? lim : jt < -lim ? -lim : jt;
+          vX[0] -= jt * ia * tx; vZ[0] -= jt * ia * tz; vX[1] += jt * ib * tx; vZ[1] += jt * ib * tz; w[0] -= jt * P[0].r / I0; w[1] -= jt * P[1].r / I1; }
         const k = (rr - d) / (ia + ib); x[0] -= k * ia * nx; z[0] -= k * ia * nz; x[1] += k * ib * nx; z[1] += k * ib * nz;
       }
     }

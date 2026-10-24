@@ -5,8 +5,8 @@
    ・すべてこの端末の中だけで動く（通信・コイン・記録はなし）。動きの計算は、試合と同じ（yukeshi-core.js の keshiSimStepper）。
    ・ショップで選んでいるパーツのまま試せるので、買う前に試せる。
 ========================================================= */
-import { createBattleStage } from "./yukeshi-room.js?v=20261023-keshi13";
-import { keshiSimStepper, keshiPhysView, keshiLaunchSpeedView, keshiStatsView, keshiPunchView, KESHI_DESK, KESHI_DT, eraserIcon } from "./yukeshi-core.js?v=20261023-keshi13";
+import { createBattleStage } from "./yukeshi-room.js?v=20261023-keshi14";
+import { keshiSimStepper, keshiPhysView, keshiLaunchSpeedView, keshiStatsView, keshiPunchView, KESHI_DESK, KESHI_DT, eraserIcon } from "./yukeshi-core.js?v=20261023-keshi14";
 
 const START_YAW = [Math.PI / 2, -Math.PI / 2];
 const yawOf = (dx, dz) => Math.atan2(-dz, dx);
@@ -65,15 +65,16 @@ export function renderPractice(c) {
         [0, 1].forEach((i) => {
           if (fallT[i] >= 0) {
             fallT[i] += dt; const t = fallT[i], sp = Math.hypot(s.vx[i], s.vz[i]) || 1, ux = s.vx[i] / sp, uz = s.vz[i] / sp;
-            st.pose(i, { x: s.x[i] + s.vx[i] * t * .6, z: s.z[i] + s.vz[i] * t * .6, y: -9 * t * t, yaw: S.poses[i].yaw, tx: uz * Math.min(t * 3.2, 1.7), tz: -ux * Math.min(t * 3.2, 1.7), visible: -9 * t * t > -8 });
+            st.pose(i, { x: s.x[i] + s.vx[i] * t * .6, z: s.z[i] + s.vz[i] * t * .6, y: -9 * t * t, yaw: S.poses[i].yaw - s.th[i], tx: uz * Math.min(t * 3.2, 1.7), tz: -ux * Math.min(t * 3.2, 1.7), visible: -9 * t * t > -8 });
             if (t < 1) falling = true;
-          } else st.pose(i, { x: s.x[i], z: s.z[i], yaw: S.poses[i].yaw });
+          } else st.pose(i, { x: s.x[i], z: s.z[i], yaw: S.poses[i].yaw - s.th[i] });
         });
         if (more || falling) return true;
         finish(s, from); return false;
       });
     }
     function finish(s, from) {
+      [0, 1].forEach((i) => { S.poses[i].yaw -= s.th[i]; });   // 回ったままの向きで止まる
       const dummyMoved = Math.hypot(s.x[1] - from[1][0], s.z[1] - from[1][1]);
       S.poses[1] = { ...S.poses[1], x: s.x[1], z: s.z[1] };
       const hit = dummyMoved > 0.02;
