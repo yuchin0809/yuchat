@@ -5447,9 +5447,10 @@ async function keshiRoomNew(deps, room, now) {
   const order = room.memberUids.slice(0, 2);
   const cur = await Promise.all(order.map((u) => keshiLoad(deps, u)));
   const st = cur.map((c) => keshiStats(c.eq));
+  const starter = Math.floor(deps.random() * 2) % 2;   // 先に弾く人は、ルームを作った人とは関係なく、ランダム（ゲームを始めるたびに決める）。そのあとは1本ごとに交互（keshiRoomBoutEnd）
   return {
     gid: slotRandomHex(6), order, names: room.members.slice(0, 2), eq: cur.map((c) => c.eq), color: cur.map((c) => c.color), rt: st.map((s) => s.rating), par: st.map(keshiPhys),
-    bout: 1, starter: 0, cur: 0, flicks: 0, wins: [0, 0], hist: [], pos: keshiStartPos(), last: null, miss: [0, 0],
+    bout: 1, starter, cur: starter, flicks: 0, wins: [0, 0], hist: [], pos: keshiStartPos(), last: null, miss: [0, 0],
     deadline: now + KESHI_TURN_MS + 4000, at: now, done: false, winner: -1, reason: ""
   };
 }
