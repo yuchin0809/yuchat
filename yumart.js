@@ -7,7 +7,7 @@
    ・商品の画像：mart-img/{枠}-{パーツ}.png（例：mart-img/body-titan.png）。ファイルがなければ、パーツごとに描いた絵（yumart-art.js）を表示する。
 ========================================================= */
 
-import { partArt, kakuArt, prizeArt } from "./yumart-art.js?v=20261024-mart8";
+import { partArt, kakuArt, prizeArt } from "./yumart-art.js?v=20261024-mart9";
 
 let deps = null, root = null, stylesDone = false, token = 0;
 let sellMode = "fixed", sellHours = 24, negoOpen = null, negoMsg = {};
@@ -125,9 +125,9 @@ function drawBuy() {
         <small>${esc(it.sub)}</small>
         <div class="ym-price">${x.au ? `<span class="ym-au">🔨 オークション</span> 現在 ` : ""}🪙 ${fmt(x.price)} ${x.au ? "" : priceTag(x.price, x.ref)}</div>
         ${x.au ? `<small>入札 ${x.au.nb}件${x.au.top ? `　最高：${esc(x.au.top)}${x.au.top === deps.getUsername() ? "（あなた）" : ""}` : "　まだ入札なし"}</small>` : ""}
-        ${x.deal ? `<small class="ym-deal">🤝 交渉成立！ 🪙${fmt(x.deal.from)} → 🪙${fmt(x.price)}${x.dealMine && x.deal.until > nowMs() ? `（あなたが ${timeLeft(x.deal.until - nowMs()).replace("あと", "あと")} 優先で買えます）` : x.deal.until > nowMs() ? "（交渉したお客さんが優先中）" : ""}</small>` : ""}
+        ${x.deal && x.au ? `<small class="ym-deal">🤝 交渉成立！ 🪙${fmt(x.deal.q)} で即決できます${x.dealMine && x.deal.until > nowMs() ? "（あなたが優先）" : x.deal.until > nowMs() ? "（交渉したお客さんが優先中）" : ""}</small>` : x.deal ? `<small class="ym-deal">🤝 交渉成立！ 🪙${fmt(x.deal.from)} → 🪙${fmt(x.price)}${x.dealMine && x.deal.until > nowMs() ? `（あなたが ${timeLeft(x.deal.until - nowMs()).replace("あと", "あと")} 優先で買えます）` : x.deal.until > nowMs() ? "（交渉したお客さんが優先中）" : ""}</small>` : ""}
         <small class="ym-seller">出品：${esc(x.n)} ・${timeLeft(x.e - nowMs())}</small></div>
-        <div class="ym-act">${x.mine ? `<span class="ym-small">自分の出品</span>` : x.au ? `<button type="button" class="ym-btn" data-bid="${esc(x.id)}" ${busy || S.paused ? "disabled" : ""}>入札する</button>${bidInfo[x.id] ? `<span class="ym-small">${bidInfo[x.id].top ? "最高額で入札中" : "追い越されました"}</span>` : ""}` : `<button type="button" class="ym-btn" data-buy="${esc(x.id)}" ${busy || S.paused ? "disabled" : ""}>買う</button>${x.dutch ? "" : !x.npc && my[x.id] ? `<span class="ym-small">依頼中 🪙${fmt(my[x.id])}</span>` : `<button type="button" class="ym-btn ym-sub" data-nego="${esc(x.id)}" ${busy || S.paused ? "disabled" : ""}>${x.npc ? "値下げ交渉" : "値下げ依頼"}</button>`}`}</div>
+        <div class="ym-act">${x.mine ? `<span class="ym-small">自分の出品</span>` : actionsOf(x, my, bidInfo)}</div>
         ${negoOpen === x.id ? negoPanel(x) : ""}</div>`;
     }).join("") || `<div class="ym-card ym-msg">いま出品はありません</div>`}</div>
     <p class="ym-small">買ったあとのキャンセルはできません。買った確変台の枠は、また売ることはできません。</p>`;
@@ -208,8 +208,19 @@ function keyName(key) {
 function buy(id) {
   const x = S.listings.find((l) => l.id === id); if (!x) return;
   const it = itemOf(x);
-  if (!confirm(`「${it.name}」${it.used ? "（中古）" : ""}を 🪙${fmt(x.price)} で買いますか？\n買ったあとのキャンセルはできません。${x.k === "kaku" ? "\n（買った枠は、また売ることはできません）" : ""}`)) return;
+  const pay = x.au && x.deal ? x.deal.q : x.price;
+  if (!confirm(`「${it.name}」${it.used ? "（中古）" : ""}を 🪙${fmt(pay)} で買いますか？\n買ったあとのキャンセルはできません。${x.k === "kaku" ? "\n（買った枠は、また売ることはできません）" : ""}`)) return;
   run(async () => { await api("martBuy", { id }); return x.k === "kaku" ? "買いました！ゆうスロの確変台で、その時間に遊べます" : x.k === "prize" ? "買いました！ゆう番くじの「もちもの」に入ります" : `買いました！「${it.name}（中古）」は、消しバトのパーツから付けられます`; });
+}
+/* 商品カードのボタン：どの商品にも、値下げ交渉（NPC）・値下げ依頼（人）が出る。オークションは、入札がないあいだだけ（即決の値段の交渉） */
+function actionsOf(x, my, bidInfo) {
+  const off = busy || S.paused ? "disabled" : "";
+  const negoBtn = `<button type="button" class="ym-btn ym-sub" data-nego="${esc(x.id)}" ${off}>${x.npc ? "値下げ交渉" : "値下げ依頼"}</button>`;
+  if (x.au) {
+    const mine = x.dealMine && x.deal && x.deal.until > nowMs();
+    return `<button type="button" class="ym-btn" data-bid="${esc(x.id)}" ${off}>入札する</button>${mine ? `<button type="button" class="ym-btn" data-buy="${esc(x.id)}" ${off}>🪙${fmt(x.deal.q)}で即決</button>` : ""}${bidInfo[x.id] ? `<span class="ym-small">${bidInfo[x.id].top ? "最高額で入札中" : "追い越されました"}</span>` : ""}${x.au.nb === 0 ? (!x.npc && my[x.id] ? `<span class="ym-small">依頼中 🪙${fmt(my[x.id])}</span>` : negoBtn) : ""}`;
+  }
+  return `<button type="button" class="ym-btn" data-buy="${esc(x.id)}" ${off}>買う</button>${!x.npc && my[x.id] ? `<span class="ym-small">依頼中 🪙${fmt(my[x.id])}</span>` : negoBtn}`;
 }
 function bid(id) {
   const x = S.listings.find((l) => l.id === id); if (!x || !x.au) return;
@@ -223,8 +234,8 @@ function bid(id) {
 function negoPanel(x) {
   const msg = negoMsg[x.id];
   return `<div class="ym-nego">
-    <label>${x.npc ? `「${esc(x.n)}」に、いくらにしてほしいか伝えます。納得してくれたら、値段がその金額に変わります。` : `いくらなら買いますか？　出品者が受けると、その値段で買うことになります（24時間）。`}</label>
-    <div class="ym-nrow"><input type="number" inputmode="numeric" id="ymN" class="ym-input" min="1" step="1" value="${Math.max(1, Math.floor(x.price * (x.npc ? 0.9 : 0.85)))}"><button type="button" class="ym-btn" data-nsend="${esc(x.id)}" ${busy ? "disabled" : ""}>${x.npc ? "この値段で交渉する" : "この値段で依頼する"}</button></div>
+    <label>${x.au ? (x.npc ? `「${esc(x.n)}」と、オークションを待たずに買う値段を交渉します。納得してくれたら、10分のあいだ、その値段で即決できます（入札がないあいだだけ）。` : `オークションを待たずに買う（即決する）値段を、出品者に依頼します。入札がないあいだだけ。受けてもらえたら、その値段で買えてオークションは終わります（24時間）。`) : x.npc ? `「${esc(x.n)}」に、いくらにしてほしいか伝えます。納得してくれたら、値段がその金額に変わります。` : `いくらなら買いますか？　出品者が受けると、その値段で買うことになります（24時間）。`}</label>
+    <div class="ym-nrow"><input type="number" inputmode="numeric" id="ymN" class="ym-input" min="1" step="1" value="${x.au ? Math.max(1, Math.round((x.ref || x.price) * (x.npc ? 1.15 : 1.2))) : Math.max(1, Math.floor(x.price * (x.npc ? 0.9 : 0.85)))}"><button type="button" class="ym-btn" data-nsend="${esc(x.id)}" ${busy ? "disabled" : ""}>${x.npc ? "この値段で交渉する" : "この値段で依頼する"}</button></div>
     ${msg ? `<div class="ym-nmsg ${msg.good ? "good" : ""}">${esc(msg.text)}</div>` : ""}</div>`;
 }
 async function nego(id) {

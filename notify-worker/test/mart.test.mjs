@@ -426,14 +426,14 @@ const H = 3600000;
 const idxOf = (t) => JSON.parse(t.fs.plain("martIndex/open").json);
 const aucList = (t, i, o = {}) => t.act(i, { action: "martList", kind: "part", slot: "body", part: "titan", price: 2000, auction: true, hours: 6, ...o });
 
-test("オークションの出品：期間は1・6・24・72時間だけ。確変枠はオークションにできない。固定価格の購入・値下げ依頼はできない", async () => {
+test("オークションの出品：期間は1・6・24・72時間だけ。確変枠はオークションにできない。固定価格の購入はできない（入札がないあいだだけ、即決の依頼ができる）", async () => {
   const t = setupKaku({ owned: ["body:titan", "body:pro"] });
   assert.equal((await aucList(t, 0, { hours: 5 })).error, "bad_request");
   assert.equal((await t.act(0, { action: "martList", kind: "kaku", day: DAY, si: 0, price: 500, auction: true, hours: 6 })).error, "no_auction");
   const a = await aucList(t, 0);
   assert.equal(a.ok, true);
   assert.equal((await t.act(1, { action: "martBuy", id: a.id })).error, "auction_only");
-  assert.equal((await t.act(1, { action: "martOffer", id: a.id, price: 1500 })).error, "auction_only");
+  assert.equal((await t.act(1, { action: "martOffer", id: a.id, price: 1500 })).ok, true, "入札がないあいだは、即決の値段を依頼できる");
   const x = (await t.act(1, { action: "martStatus" })).listings.find((v) => v.id === a.id);
   assert.equal(x.au.cur, 2000); assert.equal(x.au.nb, 0); assert.equal(x.au.min, 2000); assert.equal(x.e - x.t, 6 * H);
   assert.equal((await t.act(0, { action: "martCancel", id: a.id })).ok, true, "入札がなければ取り下げられる");
@@ -679,7 +679,6 @@ test("前日の抽選の NPC 枠を買う：その時の値段を払い、枠の
   assert.equal((await t.act(2, { action: "martBuy", id: x.id })).error, "gone");
   assert.deepEqual(await knList(t), []);
   assert.equal((await t.act(1, { action: "martList", kind: "kaku", day: DAY, si: 2, price: 5000 })).error, "not_owned", "買った枠はまた売れない");
-  assert.equal((await t.act(1, { action: "martNegotiate", id: x.id, price: 10 })).error, "bad_request");
 });
 
 test("前日の抽選の NPC 枠：1日3枠まで・コイン不足・席に着いている人は買えない。抽選が終わっていない・当日分の枠は売らない", async () => {
@@ -748,4 +747,57 @@ test("人への値下げ依頼は、1コインから出せる（いまの値段�
   assert.equal((await t.act(0, { action: "martMine" })).listings[0].offers.length, 2);
   const r = await t.act(0, { action: "martAnswer", id: a.id, who: "id1", accept: true });
   assert.equal(r.ok, true); assert.equal(r.price, 1); assert.equal(r.fee, 0);
+});
+
+/* ---------- すべての商品で値下げ交渉 ---------- */
+test("前日の抽選の NPC 枠も値下げ交渉できる：下限以上で成立し、その値段（時間で下がるなら、下がったほう）で10分のあいだ優先", async () => {
+  const t = setupKaku();
+  const T = kakuTimes(DAY); t.state.now = T.preClose + 3600000; resetKakuCacheForTest();
+  const x = (await knList(t))[0], floor = martNpcFloor(x);
+  assert.ok(floor >= 1500 && floor <= x.price, `相場 1500 ≦ 下限 ${floor} ≦ いまの値段 ${x.price}`);
+  assert.equal((await t.act(1, { action: "martNegotiate", id: x.id, price: 10 })).accepted, false);
+  const r = await t.act(1, { action: "martNegotiate", id: x.id, price: floor });
+  assert.equal(r.accepted, true);
+  const v = (await knList(t, 2))[0];
+  assert.equal(v.price, floor); assert.equal(v.deal.q, floor);
+  assert.equal((await t.act(2, { action: "martBuy", id: x.id })).error, "reserved");
+  const b = await t.act(1, { action: "martBuy", id: x.id });
+  assert.equal(b.ok, true); assert.equal(b.price, floor);
+  assert.equal(slotsOf(t).find((v) => v.i === 2).uid, "id1");
+});
+
+test("NPC どうしのオークションも交渉できる：入札がないとき、下限（相場〜相場の1.5倍）以上で成立。その人は10分のあいだ、その値段で即決で買える。ほかの人は入札できない", async () => {
+  const t = setup();
+  const x = (await t.act(1, { action: "martStatus" })).listings.find((v) => v.au && v.npc);
+  const floor = martNpcFloor({ ...x, na: true, k: "part", part: x.part, slot: x.slot, price: x.au.s });
+  const ref = refOf(x);
+  assert.ok(floor >= ref && floor <= Math.round(ref * 1.5 / 10) * 10 + 10, `下限 ${floor} / 相場 ${ref}`);
+  assert.equal((await t.act(1, { action: "martNegotiate", id: x.id, price: Math.max(1, Math.floor(floor * 0.5)) })).accepted, false);
+  const r = await t.act(1, { action: "martNegotiate", id: x.id, price: floor });
+  assert.equal(r.accepted, true);
+  assert.equal((await t.act(2, { action: "martBid", id: x.id, price: 999999 })).error, "reserved");
+  assert.equal((await t.act(2, { action: "martBuy", id: x.id })).error, "reserved");
+  const b = await t.act(1, { action: "martBuy", id: x.id });
+  assert.equal(b.ok, true); assert.equal(b.price, floor);
+  assert.equal(t.coinsOf(1), 20000 - floor); assert.ok(t.ownedOf(1).some((o) => o.endsWith("~u")));
+  assert.deepEqual(Object.keys(idxOf(t).NA), []);
+  const t2 = setup();
+  const y = (await t2.act(1, { action: "martStatus" })).listings.find((v) => v.au && v.npc);
+  assert.equal((await t2.act(2, { action: "martBid", id: y.id, price: y.au.min })).ok, true);
+  assert.equal((await t2.act(1, { action: "martNegotiate", id: y.id, price: 100 })).error, "has_bids", "入札があると交渉できない");
+  assert.equal((await t2.act(1, { action: "martBuy", id: y.id })).error, "auction_only");
+});
+
+test("人のオークションも、入札がないあいだは即決の値段を交渉（依頼）できる。受ければ、その人に売れてオークションは終わる。入札があると不可", async () => {
+  const t = setup({ owned: ["body:titan", "body:pro"] });
+  const a = await aucList(t, 0);
+  assert.equal((await t.act(1, { action: "martOffer", id: a.id, price: 3000 })).ok, true, "開始価格より高い即決の値段も出せる");
+  const r = await t.act(0, { action: "martAnswer", id: a.id, who: "id1", accept: true });
+  assert.equal(r.ok, true); assert.equal(r.price, 3000);
+  assert.ok(t.ownedOf(1).includes("body:titan~u")); assert.equal(idxOf(t).L.length, 0);
+  const b = await t.act(0, { action: "martList", kind: "part", slot: "body", part: "pro", price: 2000, auction: true, hours: 6 });
+  assert.equal((await t.act(1, { action: "martOffer", id: b.id, price: 2500 })).ok, true);
+  assert.equal((await t.act(2, { action: "martBid", id: b.id, price: 2000 })).ok, true);
+  assert.equal((await t.act(0, { action: "martAnswer", id: b.id, who: "id1", accept: true })).error, "has_bids", "入札があとから入ったら、即決は受けられない");
+  assert.equal((await t.act(2, { action: "martOffer", id: b.id, price: 9000 })).error, "has_bids");
 });

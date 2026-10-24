@@ -5304,7 +5304,7 @@ async function martLoad(deps, maxAgeMs = 0) {
 }
 function martIndexWrite(deps, cur, m, now) {
   m.npcSold = m.npcSold.filter((id) => martNpcById(id, now, []) !== null);   // もう入れ替わった棚の分は忘れる
-  Object.keys(m.ND).forEach((id) => { if (martNpcById(id, now, []) === null) delete m.ND[id]; });   // 交渉の記録も同じ
+  Object.keys(m.ND).forEach((id) => { const k = id.startsWith("kn:") ? martKakuNpcOpen(id.split(":")[1], now) : id.startsWith("na") ? martNpcAuctionById(id, now)?.live : martNpcById(id, now, []) !== null; if (!k) delete m.ND[id]; });   // 交渉の記録も同じ（入れ替わった・売り終わったら消す）
   m.L = m.L.filter((L) => !(L.k === "kaku" && now > L.e + 86400000));   // 確変枠の期限切れ（預かりがない）は、1日たったら消す
   m.done = m.done.slice(-MART.doneMax); m.log = m.log.slice(-MART.logMax);
   const json = JSON.stringify(m);
@@ -5331,7 +5331,7 @@ const martNames = () => {
 };
 const martView = (L, now, bids) => {
   const head = { id: L.i || L.id, npc: L.npc === true, n: L.n, k: L.k || "part", price: L.price, t: L.t, e: L.e, ref: martRefOf(L) };
-  if (L.deal) head.deal = { until: L.deal.until, from: L.deal.from };   // 交渉が成立している（だれが交渉したかは出さない）
+  if (L.deal) head.deal = { until: L.deal.until, from: L.deal.from, q: L.deal.q };   // 交渉が成立している（だれが交渉したかは出さない）
   if (L.au) { const au = martAucView(L, L.na ? bids : L.au.bids || [], now); head.price = au.cur; head.au = au; }
   if (L.k === "kaku") return { ...head, day: L.day, ss: L.ss, se: L.se, machine: kakuMachineFor(L.day), ...(L.dutch ? { dutch: L.dutch } : {}) };
   if (L.k === "prize") return { ...head, pid: L.pid, prize: L.pz };
@@ -5349,8 +5349,8 @@ async function martStatus(deps, uid) {
   const list = [
     ...cur.m.L.filter((L) => martLive(L, now)).map((L) => ({ ...martView(L, now), mine: L.u === uid })),
     ...martNpcListings(now, cur.m.npcSold).map((L) => { const D = martNpcDeal(L, cur.m.ND, now); return { ...martView(D, now), ...(D.deal ? { dealMine: D.deal.u === uid } : {}) }; }),
-    ...martNpcAuctions(now).map((A) => martView(A, now, cur.m.NA[A.id] || [])),
-    ...(await martKakuNpcListings(deps, now)).map((L) => martView(L, now))
+    ...martNpcAuctions(now).map((A) => { const D = martNpcDeal(A, cur.m.ND, now); return { ...martView(D, now, cur.m.NA[A.id] || []), ...(D.deal ? { dealMine: D.deal.u === uid } : {}) }; }),
+    ...(await martKakuNpcListings(deps, now)).map((L) => { const D = martNpcDeal(L, cur.m.ND, now); return { ...martView(D, now), ...(D.deal ? { dealMine: D.deal.u === uid } : {}) }; })
   ].sort((a, b) => b.t - a.t);
   return { ok: true, serverNowMs: now, paused: cur.m.paused, isTopAdmin: admin, listings: list, mineCount: mine.length, table: martNames(), usedRate: KESHI_USED_RATE, feePct: MART.feePct, maxOpen: MART.maxOpen, auctionHours: MART.auc.hours };
 }
@@ -5534,14 +5534,20 @@ async function martBuy(deps, uid, body) {
   const id = String(body?.id || ""), now = deps.now(), mcur = await martLoad(deps);
   if (mcur.m.paused && !slotIsTopAdmin(deps, uid)) return { status: 409, error: "paused" };
   let L;
-  if (id.startsWith("kn:")) L = await martKakuNpcById(deps, id, now);   // 前日の抽選で NPC が取った枠（時間とともに値下がり）
-  else if (/^n\d/.test(id)) {
-    L = martNpcById(id, now, mcur.m.npcSold);
-    if (L) { L = martNpcDeal(L, mcur.m.ND, now); if (L.deal && L.deal.u !== uid && now < L.deal.until) return { status: 409, error: "reserved", until: L.deal.until }; }   // 交渉が成立したお客さんが、10分のあいだ優先
+  if (/^(n\d|na\d|kn:)/.test(id)) {   // NPC の商品：交渉が成立していれば、その値段（成立したお客さんが、10分のあいだ優先）
+    L = await martNpcTarget(deps, mcur, id, now);
+    if (L) {
+      const D = martNpcDeal(L, mcur.m.ND, now);
+      if (D.deal && D.deal.u !== uid && now < D.deal.until) return { status: 409, error: "reserved", until: D.deal.until };
+      if (L.na) {   // NPC どうしのオークションは、交渉が成立した人だけが、その値段で即決できる
+        if (!D.deal || D.deal.u !== uid || now >= D.deal.until || (mcur.m.NA[id] || []).length) return { status: 409, error: "auction_only" };
+        L = { ...D };
+      } else L = D;
+    }
   }
   else { L = mcur.m.L.find((x) => x.i === id); if (L && !martLive(L, now)) L = null; }
   if (!L) return { status: 409, error: "gone" };
-  if (L.au) return { status: 409, error: "auction_only" };
+  if (L.au && !L.na) return { status: 409, error: "auction_only" };
   if (!L.npc && L.u === uid) return { status: 409, error: "own_listing" };
   return await martExecute(deps, mcur, L, L.price, { uid, name: body?.username });
 }
@@ -5582,9 +5588,9 @@ async function martOffer(deps, uid, body) {
   if (mcur.m.paused && !slotIsTopAdmin(deps, uid)) return { status: 409, error: "paused" };
   const L = mcur.m.L.find((x) => x.i === id);
   if (!L || !martLive(L, now)) return { status: 409, error: "gone" };
-  if (L.au) return { status: 409, error: "auction_only" };
+  if (L.au && (L.au.bids || []).length) return { status: 409, error: "has_bids" };   // オークションは、入札がないあいだだけ「即決の値段」の依頼ができる
   if (L.u === uid) return { status: 409, error: "own_listing" };
-  if (!Number.isInteger(price) || price >= L.price || price < 1) return { status: 400, error: "bad_price", max: L.price - 1 };
+  if (!Number.isInteger(price) || price < 1 || (!L.au && price >= L.price)) return { status: 400, error: "bad_price", max: L.au ? undefined : L.price - 1 };   // オークションは、開始価格より高い即決の値段も出せる
   const me = await loadMyUser(deps.firestore, uid, body?.username);
   if (me.error) return me.error;
   if (Number(decodeFields(me.raw.fields).coins || 0) < price) return { status: 409, error: "insufficient_coins" };
@@ -5615,6 +5621,7 @@ async function martAnswer(deps, uid, body) {
     if (!accept) return (await dropOffer((T) => { T.dn = [...(T.dn || []), "npc"]; })) || { ok: true };
     return await martExecute(deps, mcur, L, p.q, { npc: p.name });
   }
+  if (L.au && (L.au.bids || []).length) return { status: 409, error: "has_bids" };   // 入札があるオークションは、即決の依頼を受けられない
   const o = (L.of || []).find((x) => x.u === who && now - x.t < MART.offerMs);
   if (!o) return { status: 409, error: "gone" };
   if (!accept) return (await dropOffer((T) => { T.of = T.of.filter((x) => x.u !== who); })) || { ok: true };
@@ -5711,6 +5718,8 @@ async function martBid(deps, uid, body) {
     const r = martNpcAuctionById(id, now);
     if (!r || !r.live) return { status: 409, error: "gone" };
     L = r.A; na = id; bids = mcur.m.NA[id] || [];
+    const dl = martNpcDeal(L, mcur.m.ND, now).deal;
+    if (dl && dl.u !== uid && now < dl.until) return { status: 409, error: "reserved", until: dl.until };   // 即決の交渉が成立したお客さんが、10分のあいだ優先
   } else {
     L = mcur.m.L.find((x) => x.i === id && x.au);
     if (!L || now >= L.e) return { status: 409, error: "gone" };
@@ -5788,35 +5797,45 @@ async function martSettleNa(deps, mcur, id, now) {
 ========================================================= */
 MART.nego = { tries: 3, holdMs: 10 * 60000, floorRatio: 0.85, lo: 0.2, span: 0.5 };
 export function martNpcFloor(L) {
-  const ref = martRefOf(L), f = MART.nego.lo + MART.nego.span * martUnit(L.id, 91);
-  return Math.min(L.price, Math.ceil((ref + (L.price - ref) * f) / 10) * 10);
+  const ref = martRefOf(L), f = MART.nego.lo + MART.nego.span * martUnit(L.id, 91), top = martNegoTop(L);
+  return Math.min(top, Math.ceil((ref + (top - ref) * f) / 10) * 10);
 }
-/* 成立している交渉があれば、その値段にする */
+/* 交渉の前の値段（NPC どうしのオークションは、相場の1.5倍を「出している値段」として、その下で交渉する） */
+const martNegoTop = (L) => (L.na ? Math.round((martRefOf(L) * 1.5) / 10) * 10 : L.price);
+/* 成立している交渉があれば、その値段にする（NPC 枠は時間とともに下がるので、下がったほうを使う） */
 function martNpcDeal(L, ND, now) {
   const d = ND && ND[L.id];
   if (!d || !d.q) return L;
-  return { ...L, price: d.q, deal: { u: d.u, until: d.until, from: L.price } };
+  return { ...L, price: L.na ? d.q : Math.min(L.price, d.q), deal: { u: d.u, until: d.until, from: martNegoTop(L), q: d.q } };
+}
+/* 交渉できる NPC の商品を探す（出品・前日の抽選の NPC 枠・NPC どうしのオークション） */
+async function martNpcTarget(deps, mcur, id, now) {
+  if (id.startsWith("kn:")) return await martKakuNpcById(deps, id, now);
+  if (/^na\d/.test(id)) { const r = martNpcAuctionById(id, now); return r && r.live ? r.A : null; }
+  if (/^n\d/.test(id)) return martNpcById(id, now, mcur.m.npcSold);
+  return null;
 }
 async function martNegotiate(deps, uid, body) {
   const g = await martGate(deps, uid);
   if (g) return g;
   const id = String(body?.id || ""), price = Number(body?.price), now = deps.now(), mcur = await martLoad(deps);
   if (mcur.m.paused && !slotIsTopAdmin(deps, uid)) return { status: 409, error: "paused" };
-  if (!/^n\d/.test(id)) return { status: 400, error: "bad_request" };
-  const base = martNpcById(id, now, mcur.m.npcSold);
+  if (!/^(n\d|na\d|kn:)/.test(id)) return { status: 400, error: "bad_request" };
+  const base = await martNpcTarget(deps, mcur, id, now);
   if (!base) return { status: 409, error: "gone" };
-  const d0 = mcur.m.ND[id] || {}, L = martNpcDeal(base, mcur.m.ND, now);
-  if (!Number.isInteger(price) || price < 1 || price >= L.price) return { status: 400, error: "bad_price", max: L.price - 1 };
+  if (base.na && (mcur.m.NA[id] || []).length) return { status: 409, error: "has_bids" };   // 入札があるオークションは、交渉できない
+  const d0 = mcur.m.ND[id] || {}, L = martNpcDeal(base, mcur.m.ND, now), top = base.na ? martNegoTop(base) : L.price;
+  if (!Number.isInteger(price) || price < 1 || price >= top) return { status: 400, error: "bad_price", max: top - 1 };
   if (L.deal && L.deal.u !== uid && now < L.deal.until) return { status: 409, error: "reserved", until: L.deal.until };
   const tries = (d0.tries && d0.tries[uid]) || 0;
   if (tries >= MART.nego.tries) return { status: 409, error: "no_more" };
   const me = await loadMyUser(deps.firestore, uid, body?.username);
   if (me.error) return me.error;
   if (Number(decodeFields(me.raw.fields).coins || 0) < price) return { status: 409, error: "insufficient_coins" };
-  const floor = martNpcFloor(base), m = structuredClone(mcur.m);   // 下限は、元の出品価格から決まる
+  const floor = martNpcFloor(base), m = structuredClone(mcur.m);   // 下限は、元の出品価格（いまの値段）から決まる
   const d = m.ND[id] = { ...d0, tries: { ...(d0.tries || {}), [uid]: tries + 1 } };
   let reply;
-  if (floor >= L.price && !L.deal) reply = { accepted: false, counter: null, limit: true };   // もう下げられない
+  if (floor >= top && !L.deal) reply = { accepted: false, counter: null, limit: true };   // もう下げられない
   else if (price >= floor) { d.q = price; d.u = uid; d.until = now + MART.nego.holdMs; reply = { accepted: true, price, until: d.until }; }
   else if (price >= Math.floor(floor * MART.nego.floorRatio)) reply = { accepted: false, counter: floor };
   else reply = { accepted: false, counter: null, near: price >= Math.floor(floor * 0.7) };   // near：もう少し上ならいけそう（金額は教えない）
