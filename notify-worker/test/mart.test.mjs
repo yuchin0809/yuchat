@@ -149,11 +149,11 @@ test("取り消し・期限切れ：パーツは元の状態（新品は新品�
   assert.equal((await t.act(0, { action: "martCancel", id: ids[0] })).ok, true, "期限切れも取り消して戻せる");
 });
 
-test("値下げ依頼：買いたい人が値段を出し、出品者が受けると、その値段で売れる。1人1件・安すぎる値段は出せない", async () => {
+test("値下げ依頼：買いたい人が値段を出し、出品者が受けると、その値段で売れる。1人1件", async () => {
   const t = setup({ owned: ["body:titan"] });
   const a = await t.act(0, { action: "martList", slot: "body", part: "titan", price: 2000 });
   assert.equal((await t.act(1, { action: "martOffer", id: a.id, price: 2000 })).error, "bad_price");
-  assert.equal((await t.act(1, { action: "martOffer", id: a.id, price: 500 })).error, "bad_price");
+  assert.equal((await t.act(1, { action: "martOffer", id: a.id, price: 0 })).error, "bad_price");
   assert.equal((await t.act(1, { action: "martOffer", id: a.id, price: 1500 })).ok, true);
   assert.equal((await t.act(1, { action: "martOffer", id: a.id, price: 1400 })).error, "already_offered");
   assert.equal((await t.act(2, { action: "martOffer", id: a.id, price: 1200 })).ok, true);
@@ -738,4 +738,14 @@ test("値段の上限はない：1億コインをこえる値段でも出品で�
   assert.equal(b.ok, true);
   t.fs.putP("users/u2", { uid: "id2", name: "u2", coins: 5000000000 });
   assert.equal((await t.act(2, { action: "martBid", id: b.id, price: 4000000000 })).ok, true);
+});
+
+test("人への値下げ依頼は、1コインから出せる（いまの値段より安ければ）", async () => {
+  const t = setup({ owned: ["body:titan"] });
+  const a = await t.act(0, { action: "martList", slot: "body", part: "titan", price: 2000 });
+  assert.equal((await t.act(1, { action: "martOffer", id: a.id, price: 1 })).ok, true);
+  assert.equal((await t.act(2, { action: "martOffer", id: a.id, price: 1999 })).ok, true);
+  assert.equal((await t.act(0, { action: "martMine" })).listings[0].offers.length, 2);
+  const r = await t.act(0, { action: "martAnswer", id: a.id, who: "id1", accept: true });
+  assert.equal(r.ok, true); assert.equal(r.price, 1); assert.equal(r.fee, 0);
 });

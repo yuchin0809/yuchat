@@ -7,7 +7,7 @@
    ・商品の画像：mart-img/{枠}-{パーツ}.png（例：mart-img/body-titan.png）。ファイルがなければ、パーツごとに描いた絵（yumart-art.js）を表示する。
 ========================================================= */
 
-import { partArt, kakuArt, prizeArt } from "./yumart-art.js?v=20261024-mart7";
+import { partArt, kakuArt, prizeArt } from "./yumart-art.js?v=20261024-mart8";
 
 let deps = null, root = null, stylesDone = false, token = 0;
 let sellMode = "fixed", sellHours = 24, negoOpen = null, negoMsg = {};
@@ -221,10 +221,10 @@ function bid(id) {
 }
 /* 値下げの交渉・依頼の入力欄（カードの下に開く）。NPC には交渉（その場で返事）、人には依頼（出品者が受けたら売れる） */
 function negoPanel(x) {
-  const min = Math.ceil(x.price * 0.3), msg = negoMsg[x.id];
+  const msg = negoMsg[x.id];
   return `<div class="ym-nego">
-    <label>${x.npc ? `「${esc(x.n)}」に、いくらにしてほしいか伝えます。納得してくれたら、値段がその金額に変わります。` : `いくらなら買いますか？（🪙 ${fmt(min)}〜${fmt(x.price - 1)}）　出品者が受けると、その値段で買うことになります（24時間）。`}</label>
-    <div class="ym-nrow"><input type="number" inputmode="numeric" id="ymN" class="ym-input" min="1" step="1" value="${Math.max(x.npc ? 1 : min, Math.floor(x.price * (x.npc ? 0.9 : 0.85)))}"><button type="button" class="ym-btn" data-nsend="${esc(x.id)}" ${busy ? "disabled" : ""}>${x.npc ? "この値段で交渉する" : "この値段で依頼する"}</button></div>
+    <label>${x.npc ? `「${esc(x.n)}」に、いくらにしてほしいか伝えます。納得してくれたら、値段がその金額に変わります。` : `いくらなら買いますか？　出品者が受けると、その値段で買うことになります（24時間）。`}</label>
+    <div class="ym-nrow"><input type="number" inputmode="numeric" id="ymN" class="ym-input" min="1" step="1" value="${Math.max(1, Math.floor(x.price * (x.npc ? 0.9 : 0.85)))}"><button type="button" class="ym-btn" data-nsend="${esc(x.id)}" ${busy ? "disabled" : ""}>${x.npc ? "この値段で交渉する" : "この値段で依頼する"}</button></div>
     ${msg ? `<div class="ym-nmsg ${msg.good ? "good" : ""}">${esc(msg.text)}</div>` : ""}</div>`;
 }
 async function nego(id) {
