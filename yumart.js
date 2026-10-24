@@ -4,8 +4,10 @@
    ・いらなくなった消しバトのパーツを、ほかの人に売る・買う。売れたパーツは「中古」になる（新品より、増える点数がほんの少しだけ低い）。
    ・手数料は売れた値段の 10%。値段の上限はない。値下げ依頼（買う人が値段を出す／NPC から来ることもある）を、出品者が受ける・断る。
    ・売る・買う・コインの移動は、すべて Worker（mart* アクション）が決める。この画面は表示と操作だけ。
-   ・商品の画像：mart-img/{枠}-{パーツ}.png（例：mart-img/body-titan.png）。ファイルがなければ絵文字で表示する。
+   ・商品の画像：mart-img/{枠}-{パーツ}.png（例：mart-img/body-titan.png）。ファイルがなければ、パーツごとに描いた絵（yumart-art.js）を表示する。
 ========================================================= */
+
+import { partArt } from "./yumart-art.js?v=20261024-mart2";
 
 let deps = null, root = null, stylesDone = false, token = 0;
 let S = null, M = null, tab = "buy", slotFilter = "all", sort = "new", busy = false, note = null, adminData = null;
@@ -13,7 +15,6 @@ const fmt = (n) => Number(n || 0).toLocaleString("ja-JP");
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const $ = (s) => root && root.querySelector(s);
 const SLOT = { body: "本体", edge: "ふち", sole: "そこ", weight: "おもり" };
-const EMOJI = { body: "🧽", edge: "🔲", sole: "👟", weight: "⚖️" };
 const STAT = [["m", "重さ"], ["s", "すべり"], ["b", "反発"], ["z", "大きさ"]];
 const ERR = {
   gone: "この商品はもうありません（売れた・取り下げられた・期限切れ）", own_listing: "自分の出品は買えません", insufficient_coins: "コインが足りません", already_owned: "同じ中古パーツをすでに持っています",
@@ -64,7 +65,7 @@ function effectText(slot, variant) {
 }
 function thumb(slot, variant) {
   const id = String(variant).replace(/~u$/, "");
-  return `<span class="ym-img"><img src="mart-img/${esc(slot)}-${esc(id)}.png" alt="" loading="lazy" onerror="this.remove()"><i>${EMOJI[slot] || "📦"}</i></span>`;
+  return `<span class="ym-img">${partArt(slot, id)}<img src="mart-img/${esc(slot)}-${esc(id)}.png" alt="" loading="lazy" onerror="this.remove()"></span>`;
 }
 function priceTag(price, ref) {
   if (!ref) return "";
@@ -213,7 +214,7 @@ function injectStyles() {
   .ym-item { display: grid; grid-template-columns: 64px 1fr auto; gap: 10px; align-items: center; background: #fff; border-radius: 14px; padding: 10px; box-shadow: 0 2px 8px rgba(0,0,0,.06); }
   .ym-mine .ym-item { box-shadow: none; padding: 0; }
   .ym-img { position: relative; width: 64px; height: 64px; border-radius: 12px; background: linear-gradient(135deg, #fff1d6, #ffe0e8); display: grid; place-items: center; overflow: hidden; }
-  .ym-img img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; } .ym-img i { font-style: normal; font-size: 30px; }
+  .ym-img img, .ym-img .ym-art { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
   .ym-info b { font-size: 14.5px; } .ym-info small { display: block; color: #777; font-size: 11.5px; line-height: 1.6; }
   .ym-used { background: #8a7a5a; color: #fff; border-radius: 6px; font-size: 10px; padding: 1px 5px; margin-left: 5px; vertical-align: 2px; }
   .ym-price { font-weight: 900; font-size: 16px; color: #d6361f; margin: 2px 0; } .ym-tag { font-style: normal; font-size: 10.5px; border-radius: 6px; padding: 1px 6px; margin-left: 4px; vertical-align: 2px; } .ym-tag.good { background: #dff7e6; color: #1b6b3a; } .ym-tag.high { background: #fde9d4; color: #9a4b00; }
