@@ -520,7 +520,7 @@ export async function handleAdminAction(deps, callerUid, body) {
 
   const action = typeof body?.action === "string" ? body.action : "";
   const uid = typeof body?.uid === "string" ? body.uid : "";
-  const noUidActions = ["listUsers", "notifyAnnouncement", "renameUserRefs", "transferList", "transferApprove", "transferReject", "kakuWinners", "keshiLeagueEnroll"];
+  const noUidActions = ["listUsers", "notifyAnnouncement", "renameUserRefs", "transferList", "transferApprove", "transferReject", "kakuWinners", "keshiLeagueEnroll", "economyReport"];
   if (!noUidActions.includes(action) && !UID_PATTERN.test(uid)) return { status: 400, error: "invalid_uid" };
 
   try {
@@ -540,6 +540,7 @@ export async function handleAdminAction(deps, callerUid, body) {
       case "lotteryRefund": return await adminLotteryRefund(deps, callerUid, uid, body);
       case "kakuWinners": return await adminKakuWinners(deps, body);
       case "keshiLeagueEnroll": return await adminKeshiLeagueEnroll(deps, callerUid, body);
+      case "economyReport": return await adminEconomyReport(deps);
       case "transferList": return await adminTransferList(deps);
       case "transferApprove": return await adminTransferApprove(deps, callerUid, body);
       case "transferReject": return await adminTransferReject(deps, callerUid, body);
@@ -3472,6 +3473,80 @@ async function bankujiBuy(deps, uid, body) {
     ok: true, bought: count, balance: coins - cost + coinGain, cost, remaining: remaining - count, todayCount: todayCount + count,
     results: awards.map((a) => ({ ...a, name: bankujiPrizeById(a.id).name, desc: bankujiPrizeById(a.id).desc })),
     lastOne: gotLast
+  };
+}
+
+/* =========================================================
+   📊 経済の状態（管理者だけ。インフレの目安）
+   ・コインの総量・分布は、総資産ランキング（rankings/assets。毎時＋13:00に更新）から計算する（読み取り1回）。
+   ・毎日の推移は、毎日13:00の処理が economyStats/history に書く1日1点（読み取り1回）。
+   ・宝くじの毎回の売上・賞金・還元率は、直近の回の書類から（最大9回）。ゆう番くじは売れた枚数と、引かれた景品から。
+   ・ダービー・ゆうスロ・ヨットの収支は、まだ計測していない（notes に書く）。
+   ・同じ計算が derby-runner/economy.mjs の summarizeEconomy にもある（同じ結果になること）。
+   ========================================================= */
+export function economySummary(entries) {
+  const list = entries.map((e) => ({ coins: Number(e.coins) || 0, deposit: Number(e.deposit) || 0, stockValue: Number(e.stockValue) || 0, loan: Number(e.loan) || 0, total: Number(e.total) || 0 }));
+  const n = list.length;
+  const sum = (k) => list.reduce((s, e) => s + e[k], 0);
+  const totals = list.map((e) => Math.max(0, e.total)).sort((a, b) => b - a);
+  const all = totals.reduce((s, v) => s + v, 0);
+  const asc = [...totals].reverse();
+  let gini = 0;
+  if (n > 1 && all > 0) { let w = 0; asc.forEach((v, i) => { w += (i + 1) * v; }); gini = Math.max(0, Math.min(1, (2 * w) / (n * all) - (n + 1) / n)); }
+  const median = n === 0 ? 0 : (asc.length % 2 ? asc[(asc.length - 1) / 2] : (asc[asc.length / 2 - 1] + asc[asc.length / 2]) / 2);
+  const bands = [[0, 500], [500, 2000], [2000, 10000], [10000, 50000], [50000, Infinity]].map(([lo, hi]) => ({ lo, hi: hi === Infinity ? null : hi, users: totals.filter((v) => v >= lo && v < hi).length }));
+  return {
+    users: n, coins: sum("coins"), deposit: sum("deposit"), stockValue: sum("stockValue"), loan: sum("loan"), total: sum("total"),
+    avg: n ? Math.round(sum("total") / n) : 0, median: Math.round(median),
+    top1: totals[0] || 0, top1Share: all ? totals[0] / all : 0, top10Share: all ? totals.slice(0, 10).reduce((s, v) => s + v, 0) / all : 0,
+    gini: Math.round(gini * 1000) / 1000, bands
+  };
+}
+
+/* 履歴（1日1点）から、直近の増え方を出す。人数が増えると総量も増えるので、1人あたり（平均・中央値）の増え方で判定する */
+export function economyTrend(points) {
+  const pts = (Array.isArray(points) ? points : []).filter((p) => p && Number(p.users) > 0);
+  if (pts.length < 2) return null;
+  const last = pts[pts.length - 1];
+  const first = pts[Math.max(0, pts.length - 8)]; // 7日ぶん
+  const pct = (a, b) => (a > 0 ? (b - a) / a : 0);
+  const avgPct = pct(first.avg, last.avg);
+  const level = avgPct >= 0.10 ? "high" : avgPct >= 0.03 ? "mid" : avgPct <= -0.03 ? "deflation" : "low";
+  return { days: pts.indexOf(last) - pts.indexOf(first), from: first.date, to: last.date, totalPct: pct(first.total, last.total), avgPct, medianPct: pct(first.median, last.median), level };
+}
+
+async function adminEconomyReport(deps) {
+  const fs = deps.firestore, now = deps.now();
+  const [ranking, history] = await Promise.all([fs.get("rankings/assets"), fs.get("economyStats/history")]);
+  const users = Array.isArray(ranking?.users) ? ranking.users : [];
+  const current = economySummary(users);
+  const top = users.slice(0, 5).map((u) => ({ name: String(u.name || ""), total: Number(u.total) || 0 }));
+  const points = (Array.isArray(history?.points) ? history.points : []).slice(-60);
+
+  // 宝くじ：直近の回（今の回と、終わった8回）
+  const next = lotteryNextDrawMs(now);
+  const ids = Array.from({ length: 9 }, (_, k) => lotteryRoundId(next - k * LOTTERY_WEEK_MS));
+  const rounds = await fs.batchGet(ids.map((id) => `lotteryRounds/${id}`));
+  const lotteries = ids.map((id, i) => ({ id, ev: lotteryEventFor(next - i * LOTTERY_WEEK_MS), r: rounds[i] })).filter((x) => x.r)
+    .map(({ id, ev, r }) => {
+      const sales = Number(r.sales) || 0, paid = Number(r.paid) || 0, done = r.status === "done";
+      return { id, name: ev.name, done, tickets: Number(r.tickets) || 0, sales, paid, rtp: done && sales > 0 ? paid / sales : null };
+    });
+
+  // ゆう番くじ：売れた枚数・売上・引かれた景品（コインの景品は金額、株は本数）
+  let bankuji = null;
+  const b = await fs.get(`bankujiRounds/${BANKUJI.round}`);
+  if (b) {
+    const left = b.left && typeof b.left === "object" ? b.left : {};
+    const drawn = (id) => Math.max(0, (BANKUJI.prizes.find((p) => p.id === id)?.count || 0) - (Number(left[id]) || 0));
+    const sold = Number(b.sold) || 0;
+    bankuji = { sold, pool: BANKUJI.pool, sales: sold * BANKUJI.price, status: b.status || "selling", coinPrizes: drawn("H") * 100, stockPrizes: { B: drawn("B"), G: drawn("G") }, drawn: Object.fromEntries(BANKUJI.prizes.map((p) => [p.id, drawn(p.id)])) };
+  }
+  return {
+    ok: true, serverNowMs: now,
+    current: { ...current, date: ranking?.date || null, updatedAt: ranking?.liveUpdatedAt || ranking?.updatedAt || null },
+    top, history: points, trend: economyTrend(points), lotteries, bankuji,
+    notes: ["ダービー・ゆうスロ・ヨットの収支は、まだ計測していません（コインの総量の増え方には入っています）。", "ログインボーナスは1日50コイン×ログインした人数です。預金の利息は毎日13:00に付き、日ごとの合計が「推移」に出ます。"]
   };
 }
 

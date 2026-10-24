@@ -179,6 +179,10 @@ const TEST_CASES = [
   testCase("DENY", "bankujiPasses：自分を整理券の当選にする", userA, "create", "bankujiPasses/r1_2030-01-04", { data: { round: "r1", winners: [userA.uid] } }),
   testCase("DENY", "bankujiApply：整理券の申込を直接作る", userA, "create", `bankujiApply/r1_2030-01-04_${userA.uid}`, { data: { round: "r1", day: "2030-01-04", uid: userA.uid } }),
   testCase("DENY", "bankujiRounds：最上位管理者でもブラウザから書けない", admin, "update", "bankujiRounds/r1", { data: { status: "done" }, existing: { round: "r1", status: "selling" } }),
+  // 📊 経済の状態：コインの総量・分布の記録は、サーバー（毎日13:00の処理）だけが書く。ブラウザからは読み書きできない
+  testCase("DENY", "economyStats：ふつうの人がコインの総量・分布の記録を読めない", userA, "get", "economyStats/history", { existing: { points: [] } }),
+  testCase("DENY", "economyStats：記録を書き換える", userA, "update", "economyStats/history", { data: { points: [{ date: "2030-01-04", total: 0 }] }, existing: { points: [] } }),
+  testCase("DENY", "economyStats：最上位管理者でもブラウザから読めない（Worker 経由だけ）", admin, "get", "economyStats/history", { existing: { points: [] } }),
   // 🌈 ゆうスロ確変台：枠・申込（yuslotKaku）と通知の好み（yuslotPrefs）はサーバー（通知 Worker）だけ
   testCase("DENY", "yuslotKaku：枠・申込を直接読めない", userA, "get", "yuslotKaku/2030-01-04", { existing: { day: "2030-01-04", machine: "yubasic", slots: [], app1: [] } }),
   testCase("DENY", "yuslotKaku：自分を当選させる（枠の書き換え）", userA, "update", "yuslotKaku/2030-01-04", { data: { slots: [{ i: 0, uid: userA.uid, name: "a" }] }, existing: { day: "2030-01-04", machine: "yubasic", slots: [] } }),

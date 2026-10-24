@@ -61,7 +61,7 @@ service cloud.firestore {
     //   gameInvites：送った人・送られた人だけ／fcmTokens：アプリからは読まない（通知サーバーだけが読む）
     //   gameRooms・gameRoomOwners：専用のルールで判定（gameRooms はロビー表示のため読み取りは今まで通り許可）
     function hasDedicatedReadRules(collection) {
-      return collection in ['messages', 'groups', 'fcmTokens', 'gameInvites', 'gameRooms', 'gameRoomOwners', 'yuslotSeats', 'lotteryEntries', 'lotteryRounds', 'bankujiRounds', 'bankujiEntries', 'bankujiPasses', 'bankujiApply', 'yuslotKaku', 'yuslotPrefs', 'coinTransfers', 'yuslotRank', 'yuslotBattle', 'yuslotYacht', 'yuslotKeshi', 'yuslotKeshiLeague'];
+      return collection in ['messages', 'groups', 'fcmTokens', 'gameInvites', 'gameRooms', 'gameRoomOwners', 'yuslotSeats', 'lotteryEntries', 'lotteryRounds', 'bankujiRounds', 'bankujiEntries', 'bankujiPasses', 'bankujiApply', 'economyStats', 'yuslotKaku', 'yuslotPrefs', 'coinTransfers', 'yuslotRank', 'yuslotBattle', 'yuslotYacht', 'yuslotKeshi', 'yuslotKeshiLeague'];
     }
 
     // 下のコレクションは管理者だけが読める
@@ -86,6 +86,8 @@ service cloud.firestore {
         'lotteryEntries', 'lotteryRounds',
         // 🎊 ゆう番くじ：売れた番号・景品の残り（bankujiRounds）、買った人の券と景品（bankujiEntries）、整理券の抽選（bankujiPasses）・申込（bankujiApply）は Worker だけが書く
         'bankujiRounds', 'bankujiEntries', 'bankujiPasses', 'bankujiApply',
+        // 📊 経済の状態の毎日の記録（economyStats）は、毎日13:00の処理（GitHub Actions）が書く。管理者は Worker 経由で見る（ブラウザからは読み書きできない）
+        'economyStats',
         // 🌈 ゆうスロ確変台：その日の枠・申込（yuslotKaku）と通知の好み（yuslotPrefs）は通知 Worker（サービスアカウント）だけが書く
         'yuslotKaku', 'yuslotPrefs',
         // 💸 コインの送金（管理者の承認制）：申請と状態は通知 Worker（サービスアカウント）だけが書く
@@ -440,6 +442,13 @@ service cloud.firestore {
       allow read: if false;
     }
     match /bankujiApply/{applyId} {
+      allow read: if false;
+    }
+
+    // ===== 📊 経済の状態（economyStats） =====
+    // コインの総量・分布の毎日の記録。書くのは毎日13:00の処理（サービスアカウント）だけ。ブラウザからは読み書きできない
+    // （誰が見られるかをアプリ側に任せない。管理者の画面は Worker の economyReport 経由で表示する）
+    match /economyStats/{statId} {
       allow read: if false;
     }
 

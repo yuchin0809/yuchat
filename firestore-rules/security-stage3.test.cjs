@@ -49,6 +49,7 @@ async function ng(n, p) { try { await assertFails(p); pass++; logs.push("PASS �
     await setDoc(doc(d, "bankujiEntries/r1_uidA"), { uid: "uidA", name: "alice", round: "r1", tickets: [1], prizes: [] });
     await setDoc(doc(d, "bankujiPasses/r1_2026-10-27"), { round: "r1", day: "2026-10-27", winners: [] });
     await setDoc(doc(d, "bankujiApply/r1_2026-10-27_uidA"), { round: "r1", day: "2026-10-27", uid: "uidA" });
+    await setDoc(doc(d, "economyStats/history"), { points: [{ date: "2026-10-27", total: 100 }] });
     // 🌈 ゆうスロ確変台：枠・申込（yuslotKaku）と通知の好み（yuslotPrefs）は Worker（サービスアカウント）だけが書く
     await setDoc(doc(d, "yuslotKaku/2026-10-21"), { day: "2026-10-21", machine: "yubasic", slots: [], app1: [], app2: [] });
     await setDoc(doc(d, "yuslotPrefs/uidA"), { uid: "uidA", kakuNotify: { result1: true } });
@@ -161,6 +162,10 @@ async function ng(n, p) { try { await assertFails(p); pass++; logs.push("PASS �
   await ng("ゆう番くじ：自分を整理券の当選にする", updateDoc(doc(alice, "bankujiPasses/r1_2026-10-27"), { winners: ["uidA"] }));
   await ng("ゆう番くじ：整理券の申込（bankujiApply）を直接作る", setDoc(doc(bob, "bankujiApply/r1_2026-10-27_uidB"), { round: "r1", day: "2026-10-27", uid: "uidB" }));
   await ng("ゆう番くじ：最上位管理者でもブラウザから書けない", updateDoc(doc(admin, "bankujiRounds/r1"), { status: "done" }));
+  await ng("経済の状態：コインの総量・分布の記録（economyStats）を直接読めない", getDoc(doc(alice, "economyStats/history")));
+  await ng("経済の状態：最上位管理者でもブラウザから読めない（Worker 経由だけ）", getDoc(doc(admin, "economyStats/history")));
+  await ng("経済の状態：記録を書き換える", updateDoc(doc(alice, "economyStats/history"), { points: [] }));
+  await ng("経済の状態：最上位管理者でもブラウザから書けない", setDoc(doc(admin, "economyStats/history"), { points: [] }));
 
   logs.push("--- ⑨ ゆうスロ確変台：枠・申込・通知の好みはサーバー（Worker）だけ。ブラウザからは読み書きできない");
   await ng("確変台の枠・申込（yuslotKaku）を直接読めない", getDoc(doc(alice, "yuslotKaku/2026-10-21")));
