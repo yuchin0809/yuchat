@@ -6,8 +6,8 @@
    ・3Dの机と消しゴムは three.js（ヨットと同じもの）。3D が使えない端末では、対戦できない（メッセージを出す）。
 ========================================================= */
 import { load3D, three } from "./yuyacht3d.js?v=20261023-3d1";
-import { eraserKit } from "./yukeshi3d.js?v=20261023-keshi13";
-import { keshiSimStepper, KESHI_DESK, KESHI_DT, eraserIcon } from "./yukeshi-core.js?v=20261023-keshi13";
+import { eraserKit } from "./yukeshi3d.js?v=20261023-keshi14";
+import { keshiSimStepper, KESHI_DESK, KESHI_DT, eraserIcon } from "./yukeshi-core.js?v=20261023-keshi14";
 
 const TOP_Y = -0.4;   // 机の上の面の高さ
 const ERASER_SCALE = 0.57;   // 机の上の消しゴムの大きさ（1人用の改造の画面の消しゴムを、この倍率に小さくする）
@@ -285,11 +285,12 @@ function play(y) {
       if (fallT[i] >= 0) {
         fallT[i] += dt; const t = fallT[i], sp = Math.hypot(s.vx[i], s.vz[i]) || 1, ux = s.vx[i] / sp, uz = s.vz[i] / sp;
         const ex = s.x[i] + s.vx[i] * t * .6, ez = s.z[i] + s.vz[i] * t * .6;
-        st.pose(i, { x: ex, z: ez, y: -9 * t * t, yaw: kr.poses[i].yaw, tx: uz * Math.min(t * 3.2, 1.7), tz: -ux * Math.min(t * 3.2, 1.7), visible: -9 * t * t > -8 });
+        st.pose(i, { x: ex, z: ez, y: -9 * t * t, yaw: kr.poses[i].yaw - s.th[i], tx: uz * Math.min(t * 3.2, 1.7), tz: -ux * Math.min(t * 3.2, 1.7), visible: -9 * t * t > -8 });
         if (t < 1) falling = true;
-      } else st.pose(i, { x: s.x[i], z: s.z[i], yaw: kr.poses[i].yaw });
+      } else st.pose(i, { x: s.x[i], z: s.z[i], yaw: kr.poses[i].yaw - s.th[i] });   // 当てられたら回る（th＝回った角度。画面の回転は、向きの反対）
     });
     if (more || falling) return true;
+    [0, 1].forEach((i) => { kr.poses[i].yaw -= s.th[i]; });   // 回ったままの向きで止まる
     finishPlay(y); return false;
   });
 }

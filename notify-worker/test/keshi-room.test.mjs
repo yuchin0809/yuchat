@@ -155,6 +155,28 @@ test("画面用の動きの計算（yukeshi-core.js）は、サーバーの計�
   assert.ok(falls > 10 && hits > 40, "いろいろな場面を試せている");
 });
 
+test("回転：まっすぐ当てたら回らない（今までと同じ）。かすめるように当てると両方が回り、そのあと止まる。サーバーと画面の計算は、かすめる当たりでも同じ答え", async () => {
+  const { keshiSimStepper } = await import("../../yukeshi-core.js");
+  const P0 = keshiPhys(keshiStats({ body: "plain", edge: "paper", sole: "bare", weight: "none" }));
+  const run = (off, vz = -10) => { const s = keshiSimStepper([P0, P0], [[off, 3], [0, 0]], 0, 0, vz); while (s.step()) { /* 終わるまで */ } return s; };
+  const head = run(0);
+  assert.deepEqual(head.th, [0, 0], "まっすぐ当てたら、こすれがないので回らない"); assert.deepEqual(head.w, [0, 0]);
+  const mid = run(0.5), wide = run(1.2);
+  assert.ok(Math.abs(mid.th[1]) > 0.5 && Math.abs(wide.th[1]) > Math.abs(mid.th[1]), "ずれが大きいほど、よく回る");
+  assert.ok(mid.th[0] * mid.th[1] > 0, "当てた側も当てられた側も、同じ向きに回る（こすれの向き）");
+  assert.deepEqual(mid.w, [0, 0], "最後は回転も止まる");
+  assert.ok(mid.steps < 1200 && wide.steps < 1200);
+  // かすめる当たりでも、サーバーと同じ位置・同じコマ数
+  for (const off of [0.15, 0.4, 0.7, 1.0, 1.3, -0.6]) {
+    const s = run(off), server = keshiSim([P0, P0], [[off, 3], [0, 0]], 0, 0, -10);
+    const r3 = (x) => Math.round(x * 1000) / 1000;
+    assert.deepEqual([[r3(s.x[0]), r3(s.z[0])], [r3(s.x[1]), r3(s.z[1])]], server.to, `ずれ ${off} の位置`); assert.equal(s.steps, server.steps);
+  }
+  // 位置への影響は小さい（回転を入れる前の動きとの差。まっすぐは同じ、かすめるときも 0.3 以内）
+  const straight = run(0).x[1], touch = run(0.5);
+  assert.equal(Math.round(straight * 1000) / 1000, 0); assert.ok(Math.hypot(touch.x[1] - -0.64, touch.z[1] - -1.60) < 0.3);
+});
+
 test("2人対戦：始める。机の上の位置・強さ・持ち時間。どちらの画面から呼んでも同じゲーム。読み書きは最小", async () => {
   const ctx = setup();
   ctx.fs.put("yuslotKeshi/id2", encF({ owned: ["body:titan", "weight:gold"], eq: { body: "titan", weight: "gold" }, color: 3 }));
