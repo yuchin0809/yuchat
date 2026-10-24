@@ -2522,6 +2522,23 @@ async function slotSeatDocs(deps, now) {
   slotSeatsCache = { at: now, docs };
   return docs;
 }
+/* 🤖 ゆうスロの NPC（お店の人）：営業時間のあいだ、いつも1台だけ、NPC が遊んでいる（ロビーの表示だけ。Firestore には何も書かない）。
+   ・日時から決まる計算（乱数なし）。40分ごとに、台と名前が変わる。数は1人だけ。
+   ・本物のお客さんが座っている台は避ける。今日の確変台も避ける（確変の枠をとった人の台なので）。
+   ・NPC が座っている台でも、お客さんは座れる（NPC は席をゆずる＝次のロビーの更新で別の台に移る） */
+export const SLOT_NPC_NAMES = ["ゆうマート従業員", "ゆうマート店長", "ゆう銀行の行員", "ゆう宝くじの売り子", "ゆうダービー実況", "ゆうスロの案内係", "ゆう消しゴム職人", "ゆうChat運営さん", "ゆう株のトレーダー", "ゆうワールド警備員", "ゆうカフェ店員", "ゆう配達員"];
+export const SLOT_NPC_BLOCK_MS = 40 * 60000;
+export function slotNpcSeat(now, occupiedIds = new Set(), kakuMachine = "") {
+  if (!slotBusinessOpen(now)) return null;
+  const block = Math.floor(now / SLOT_NPC_BLOCK_MS);
+  let h = Math.imul(block, 2654435761) >>> 0; h ^= h >>> 15; h = Math.imul(h, 2246822519) >>> 0; h ^= h >>> 13; h >>>= 0;
+  const ids = Object.keys(SLOT_MACHINES).filter((id) => id !== kakuMachine);
+  for (let k = 0; k < ids.length; k++) {
+    const id = ids[(h + k) % ids.length];
+    if (!occupiedIds.has(id)) return { machine: id, name: SLOT_NPC_NAMES[(h >>> 8) % SLOT_NPC_NAMES.length] };
+  }
+  return null;
+}
 async function yuslotLobby(deps, uid) {
   const published = await slotGetPublished(deps);
   if (!published && !slotIsTopAdmin(deps, uid)) return { status: 403, error: "not_published" };
@@ -2532,6 +2549,8 @@ async function yuslotLobby(deps, uid) {
     const d = docs.get(id) || null;
     seats[id] = d && Number(d.graceUntilMs || 0) > now && !slotSeatStale(d, id, now) ? { name: d.name || "", occupied: true, mine: d.uid === uid } : { occupied: false };
   }
+  const npc = slotNpcSeat(now, new Set(Object.keys(seats).filter((id) => seats[id].occupied)), kakuMachineFor(kakuDayId(now)));
+  if (npc) seats[npc.machine] = { name: npc.name, occupied: true, mine: false, npc: true };
   return { ok: true, seats, open: slotBusinessOpen(now), serverNowMs: now };
 }
 

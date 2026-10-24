@@ -268,10 +268,10 @@ function renderLobby() {
   const closedNote = state.open ? "" : `<div class="yw-notice-strip">⏰ ただいま営業時間外です（遊べるのは 7:00〜23:00）。</div>`;
   const cards = MACHINES.map((m) => {
     const s = seats[m.id] || { occupied: false };
-    const busy = s.occupied && !s.mine;
+    const busy = s.occupied && !s.mine && !s.npc;   // NPC（お店の人）は、お客さんが座ろうとしたら席をゆずる
     const kk = kakuMachineInfo(m.id);            // 今日の確変台なら、枠の持ち主だけが遊べる
     const kakuLockedLabel = kk && kk.locked && kk.inWindow ? (kk.holder === "npc" ? "🤖 NPC使用中" : kk.holder === "player" ? "🔒 使用中（枠をとったプレイヤー）" : "🔒 いまは空き枠（遊べません）") : "";
-    const label = busy ? `満席（${esc(s.name || "だれか")}）` : kakuLockedLabel || (s.mine ? "あなたが着席中" : "空いています");
+    const label = busy ? `満席（${esc(s.name || "だれか")}）` : kakuLockedLabel || (s.mine ? "あなたが着席中" : s.npc ? `🤖 ${esc(s.name || "NPC")}（NPC）が遊び中…` : "空いています");
     const canSit = state.open && !busy && !(kk && kk.locked);
     const kakuNote = kk && kk.inWindow ? (kk.mine ? `<div class="yw-kaku-note">⭐ いまはあなたの枠！ 確変中🌈</div>` : `<div class="yw-kaku-note">${kk.holder === "npc" ? "🤖 NPC＝抽選に参加する仮想の参加者です。NPCの枠は誰も遊べません" : "🔒 いまは枠をとった人だけ遊べます"}</div>`) : (kk ? `<div class="yw-kaku-note">8:00〜15:20 は確変タイム🌈</div>` : "");
     return `<div class="yw-machine yw-tier${m.tier} ${busy ? "is-busy" : ""} ${kk ? "yw-kaku" : ""}">${kk ? `<span class="yw-kaku-badge">🌈 確変台</span>` : ""}
@@ -280,7 +280,7 @@ function renderLobby() {
         <div class="yw-machine-price">1回 ${m.price} コイン</div>
         ${m.assetMin ? `<div class="yw-machine-need">💰 総資産 ${m.assetMin.toLocaleString()} コイン以上で遊べます${kk ? "（確変の枠をとった人は、条件なし）" : ""}</div>` : ""}
         <div class="yw-machine-desc">${esc(m.desc)}</div>
-        <div class="yw-machine-seat ${busy || kakuLockedLabel ? "busy" : s.mine ? "mine" : "free"}">${label}</div>${kakuNote}
+        <div class="yw-machine-seat ${busy || kakuLockedLabel ? "busy" : s.mine ? "mine" : s.npc ? "npc" : "free"}">${label}</div>${s.npc && !kakuLockedLabel ? `<div class="yw-npc-note">NPCは、お客さんが座ろうとすると、席をゆずってくれます。</div>` : ""}${kakuNote}
         <button type="button" class="yw-btn ${canSit ? "" : "yw-btn-disabled"}" data-sit="${m.id}" ${canSit ? "" : "disabled"}>${s.mine ? "続きから遊ぶ" : "この台で遊ぶ"}</button>
       </div>`;
   }).join("");
@@ -941,6 +941,10 @@ function injectStyles() {
   .yw-machine-seat.free { background: #e8f8ee; color: #2a7; }
   .yw-machine-seat.busy { background: #fdeceb; color: #c44; }
   .yw-machine-seat.mine { background: #fff6e0; color: #a80; }
+  .yw-machine-seat.npc { background: #efeafd; color: #5a3fc0; animation: yw-npc-pulse 2.4s ease-in-out infinite; }
+  .yw-npc-note { font-size: 10.5px; color: #7a6aa8; text-align: center; margin: -4px 0 8px; }
+  @keyframes yw-npc-pulse { 0%,100% { opacity: 1; } 50% { opacity: .65; } }
+  @media (prefers-reduced-motion: reduce) { .yw-machine-seat.npc { animation: none; } }
   .yw-btn { border: none; border-radius: 10px; background: #4a7; color: #fff; font-weight: 700; padding: 10px; cursor: pointer; font-size: 14px; }
   .yw-btn-sub { background: #667; }
   .yw-btn-disabled, .yw-btn:disabled { background: #bbb; cursor: not-allowed; }
