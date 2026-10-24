@@ -69,7 +69,7 @@ function setup({ keshi = true } = {}) {
   for (let i = 0; i < 4; i++) base[`users/u${i}`] = { uid: `id${i}`, name: `u${i}`, coins: 1000 };
   const fs = fakeFs(base);
   const state = { now: Date.UTC(2026, 9, 23, 3) };
-  const deps = { firestore: fs, adminUid: ADMIN, now: () => state.now, random: () => 0.5, slotSecret: "s", sendFcm: async () => ({ ok: true }) };
+  const deps = { firestore: fs, adminUid: ADMIN, now: () => state.now, random: () => 0.25, slotSecret: "s", sendFcm: async () => ({ ok: true }) };
   const act = (i, body) => handleYuslotAction(deps, `id${i}`, { username: `u${i}`, ...body });
   fs.put(`gameRooms/${ROOM}`, encF({ gameType: "keshi", ownerUid: "id1", owner: "u1", members: ["u1", "u2"], memberUids: ["id1", "id2"], status: "playing", createdAt: "x" }));
   return { fs, deps, state, act, room: () => fs.plain(`gameRooms/${ROOM}`), r: (i, action, body = {}) => act(i, { action, roomId: ROOM, ...body }) };
@@ -215,6 +215,47 @@ test("2人対戦：弾く。番の人だけ・正しい形だけ。弾くと、�
   assert.equal((await ctx.r(1, "keshiRoomFlick", { ...aimAt(y), p: 0.4 })).error, "not_your_turn", "続けて弾けない");
   const big = await ctx.r(2, "keshiRoomFlick", { gid: y.gid, dx: 0, dz: 1, p: 7 });
   assert.equal(big.keshi.last.vz, Math.round(keshiLaunchSpeed(y.par[1], 1) * 1000) / 1000, "強さは 1 までに丸める");
+});
+
+test("先に弾く人は、ルームを作った人に関係なくランダム。そのあとは1本ごとに交互。「もう一度」でも決め直す", async () => {
+  const mk = (r) => { const ctx = setup(); ctx.deps.random = () => r; return ctx; };
+  // 乱数が小さければ1人目（ルームを作った人）から、大きければ2人目から
+  const a = mk(0.25), b = mk(0.75);
+  const ya = (await a.r(1, "keshiRoomStart")).keshi, yb = (await b.r(1, "keshiRoomStart")).keshi;
+  assert.deepEqual([ya.starter, ya.cur], [0, 0]); assert.deepEqual([yb.starter, yb.cur], [1, 1], "2人目から始まることもある");
+  // 後手から始まる場合：弾けるのは2人目だけ。1人目が弾こうとすると断られる
+  assert.equal((await b.r(1, "keshiRoomFlick", { ...aimAt(yb), p: 0.5 })).ok, undefined, "1人目の番ではない");
+  const first = await b.r(2, "keshiRoomFlick", { ...aimAt(yb), p: 0.5 });
+  assert.equal(first.ok, true);
+  // 1本ごとに交互：2人目から始まったら、次の1本は1人目から
+  const strong = { owned: ["body:titan", "edge:crystal", "sole:air", "weight:gold"], eq: { body: "titan", edge: "crystal", sole: "air", weight: "gold" }, color: 0 };
+  const c = mk(0.75); c.fs.put("yuslotKeshi/id1", encF(strong)); c.fs.put("yuslotKeshi/id2", encF(strong));
+  let y = (await c.r(1, "keshiRoomStart")).keshi;
+  const order = [y.starter];
+  for (let i = 0; i < 2 && !y.done; i++) {
+    const r = await c.r(y.cur === 0 ? 1 : 2, "keshiRoomFlick", { ...aimAt(y), p: 1 }); assert.equal(r.ok, true, JSON.stringify(r)); y = r.keshi;
+    if (!y.done) order.push(y.starter);
+  }
+  assert.deepEqual(order.slice(0, 2), [1, 0], "1本目は2人目から、2本目は1人目から");
+  // もう一度：決め直す（前の先手とは関係ない）
+  const d = mk(0.25);
+  d.fs.put("yuslotKeshi/id1", encF(strong)); d.fs.put("yuslotKeshi/id2", encF(strong));
+  let z = (await d.r(1, "keshiRoomStart")).keshi;
+  while (!z.done) { const r = await d.r(z.cur === 0 ? 1 : 2, "keshiRoomFlick", { ...aimAt(z), p: 1 }); z = r.keshi; }
+  d.deps.random = () => 0.75;
+  const again = (await d.r(1, "keshiRoomStart", { rematch: true })).keshi;
+  assert.notEqual(again.gid, z.gid); assert.deepEqual([again.starter, again.cur], [1, 1]);
+});
+
+test("先に弾く人の決め方：本物の乱数で、およそ半々になる（どちらかに偏らない）。範囲は 0・1 だけ", async () => {
+  let starters = 0, n = 300;
+  for (let i = 0; i < n; i++) {
+    const ctx = setup(); ctx.deps.random = () => { const b = new Uint32Array(1); crypto.getRandomValues(b); return b[0] / 4294967296; };
+    const y = (await ctx.r(1, "keshiRoomStart")).keshi;
+    assert.ok(y.starter === 0 || y.starter === 1); assert.equal(y.cur, y.starter);
+    starters += y.starter;
+  }
+  assert.ok(starters > n * 0.35 && starters < n * 0.65, `2人目が先手になった回数 ${starters}/${n}`);
 });
 
 test("2人対戦：3本勝負。相手を落とすと1本。先に2本取った人の勝ち。2本目は後ろの人から弾く", async () => {
