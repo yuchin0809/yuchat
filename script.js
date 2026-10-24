@@ -35,8 +35,9 @@ import {
 import {
   initYuWorld, openYuWorldView, stopYuWorldView
 } from "./yuworld.js?v=20261024-yuworld48";
+import { initYuMart, openYuMartView, stopYuMartView } from "./yumart.js?v=20261024-mart1";
 import { renderYachtRoom } from "./yuyacht.js?v=20261023-yacht5";
-import { renderKeshiRoom } from "./yukeshi-room.js?v=20261023-keshi14";
+import { renderKeshiRoom } from "./yukeshi-room.js?v=20261024-mart1";
 
 /* 💸 コインの送金（申請は本人・OK/却下は管理者）。中身の確定は Worker */
 import { transferInit, transferOpenUser, transferOpenAdmin, transferReset } from "./yutransfer.js?v=20261020-transfer1";
@@ -44,7 +45,7 @@ import { transferInit, transferOpenUser, transferOpenAdmin, transferReset } from
 import { inviteInit } from "./yuinvite.js?v=20261021-invite1";
 /* 🌈 確変台の当選者（管理者だけ） */
 import { kakuWinnersInit, kakuWinnersOpen, kakuWinnersReset } from "./yukakuwinners.js?v=20261021-winners1";
-import { keshiEnrollInit, keshiEnrollOpen, keshiEnrollReset } from "./yukeshi-admin.js?v=20261023-keshi14";
+import { keshiEnrollInit, keshiEnrollOpen, keshiEnrollReset } from "./yukeshi-admin.js?v=20261024-mart1";
 import { economyAdminInit, economyAdminOpen, economyAdminReset } from "./yueconomy-admin.js?v=20261024-econ2";
 
 import {
@@ -238,6 +239,7 @@ const userManageView = document.getElementById("userManageView");
 const economyView = document.getElementById("economyView");
 const economyContent = document.getElementById("economyContent");
 const yuworldView = document.getElementById("yuworldView");
+const martView = document.getElementById("martView");
 
 const derbyCountdown = document.getElementById("derbyCountdown");
 const raceTrack = document.getElementById("raceTrack");
@@ -3659,7 +3661,7 @@ tabButtons.forEach((button) => {
 function switchView(view) {
   /* 👤 ユーザー管理は管理者だけ（タブも管理者にだけ表示） */
   if (view === "usermanage" && !isAdminUser()) view = "chat";
-  const views = { chat: chatView, derby: derbyView, economy: economyView, games: gamesView, yuworld: yuworldView, announcements: announcementsView, mypage: mypageView, usermanage: userManageView };
+  const views = { chat: chatView, derby: derbyView, economy: economyView, games: gamesView, yuworld: yuworldView, mart: martView, announcements: announcementsView, mypage: mypageView, usermanage: userManageView };
 
   Object.entries(views).forEach(([name, element]) => {
     if (!element) return;
@@ -3681,6 +3683,8 @@ function switchView(view) {
   if (view === "economy") { openEconomyView(); transferOpenUser(); }
   if (view === "yuworld") openYuWorldView();
   else stopYuWorldView();
+  if (view === "mart") openYuMartView();
+  else stopYuMartView();
   if (view === "announcements") openAnnouncementsView();
   else stopAnnouncementsSubscription();
   if (view === "usermanage") openUserManageView();
@@ -3695,6 +3699,13 @@ initYuWorld({
   getUsername: () => username,
   isTopAdmin: () => isAdminUser(),
   onSettled: () => { /* 精算後は既存の coins リスナーが users の残高を拾って各画面を更新する */ }
+});
+
+/* 🏪 ゆうマート */
+initYuMart({
+  endpoint: NOTIFY_ENDPOINT.replace(/\/notify$/, "/yuslot"),
+  getToken: () => currentUser.getIdToken(),
+  getUsername: () => username
 });
 
 /* 📨 友達に紹介 */

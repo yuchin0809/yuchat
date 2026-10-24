@@ -581,6 +581,17 @@
 
 
         <button
+            data-view="mart"
+            type="button"
+        >
+            🏪
+            <span>
+                ゆうマート
+            </span>
+        </button>
+
+
+        <button
             data-view="economy"
             type="button"
         >
@@ -1157,6 +1168,17 @@
 
 
 
+            <!-- 🏪 ゆうマート（フリマ）。中身は yumart.js が描く -->
+
+            <section
+                id="martView"
+                class="view hidden"
+            >
+                <div id="yumartRoot" class="yuworld-root"></div>
+            </section>
+
+
+
             <!-- 💰 ゆう経済（ゆう銀行・ゆう株・総資産）。中身は script.js の renderEconomyView が描く -->
 
             <section
@@ -1604,7 +1626,7 @@
      OFF のとき（とテスト環境）は、data-app-src のアプリ本体を読み込む -->
 <script
     src="./maintenance.js?v=20261009-maint-quota"
-    data-app-src="./script.js?v=20261023-keshi14"
+    data-app-src="./script.js?v=20261024-mart1"
 ></script>
 
 

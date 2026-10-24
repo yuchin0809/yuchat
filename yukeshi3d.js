@@ -26,7 +26,8 @@ export function eraserKit(T, RBG) {
   const std = (o) => new T.MeshStandardMaterial(o);
   const phys = (o) => new T.MeshPhysicalMaterial(o);
 
-  function build(eq, color) {
+  function build(eqIn, color) {
+    const eq = Object.fromEntries(Object.entries(eqIn || {}).map(([k, v]) => [k, String(v).replace(/~u$/, "")]));   // 中古（~u）も、見た目は同じ
     const g = new T.Group();
     const add = (geo, mat, x = 0, y = 0, z = 0) => { const m = new T.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; g.add(m); return m; };
     const body = {
