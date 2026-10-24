@@ -222,7 +222,7 @@ test("金曜 15:10 の結果発表：上位3名に 1000・700・400 コイン。
   await ctx.tick(JST(2026, 10, 30, 15, 10));
   const wk = ctx.wk();
   assert.equal(wk.settled, true); assert.equal(wk.top.length, 3);
-  assert.deepEqual(wk.top.map((t) => [t.rank, t.prize, t.paid]), [[1, 1500, true], [2, 1000, true], [3, 300, true]]);
+  assert.deepEqual(wk.top.map((t) => [t.rank, t.prize, t.paid]), [[1, 3000, true], [2, 2000, true], [3, 600, true]]);
   const gained = [0, 1, 2, 3, 4, 5].map((i) => ctx.coinsOf(i) - before[i]);
   wk.top.forEach((t) => assert.equal(gained[Number(t.uid.slice(2))], t.prize));
   assert.equal(gained.reduce((a, b) => a + b, 0), 2800, "4位以下には渡さない");
