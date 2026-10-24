@@ -94,7 +94,6 @@ export function kakuPanelHtml() {
     html += `<div class="yk-mine">⭐ あなたの今日の予定：${mine.length ? mine.map((x) => `${hm(x.s)}〜${hm(x.e)}（${KIND[x.kind]}）`).join("、") : "まだありません"}</div>`;
     const lotMine = mine.filter((x) => x.kind === "lot").length;
     if (t.applied1 && t.draw1Done) html += mine.some((x) => x.kind === "pre") ? `<div class="yk-ok">🎉 前日の抽選に当選しました！</div>` : `<div class="yk-sub">前日の抽選は外れでした。当日分の抽選・先着があります！</div>`;
-    if (t.weekend) html += `<div class="yk-sub">🎊 土日は人気のため、抽選に当たる確率は約5%です（先着は同じ）。</div>`;
     // 当日分
     const quicks = t.slots.filter((x) => x.kind === "quick");
     html += `<div class="yk-sec">当日分（12:30〜13:20の10分枠：抽選3・先着${quicks.length}）</div>`;
@@ -117,7 +116,6 @@ export function kakuPanelHtml() {
     const mi = deps.machines[tm.machine] || { name: tm.machine, emoji: "🎰" };
     const T = tm.times, preOpen = now >= T.preOpen && now < T.preClose && tm.mode !== "sameDay";
     html += `<div class="yk-tomorrow"><div class="yk-sec">${mi.emoji} 明日（${md(T.dayStart)}）の確変台：<b>${esc(mi.name)}</b></div>`;
-    if (tm.weekend) html += `<div class="yk-sub">🎊 明日は土日のため、抽選に当たる確率は約5%です。</div>`;
     if (now < T.preOpen) html += `<div class="yk-sub">前日の抽選（30分枠×13）の申込は、今日の ${hm(T.preOpen)}〜${hm(T.preClose)}。</div>`;
     else if (preOpen) html += tm.applied1 ? `<div class="yk-ok">✓ 抽選に申込済み（${hm(T.preClose)}に抽選・明日 7:50 に結果）</div>` : `<button type="button" class="yk-btn" data-kk="apply" data-which="pre">🎟 明日の抽選に申し込む（${hm(T.preClose)}まで・無料）</button>`;
     else if (tm.mode === "sameDay") html += `<div class="yk-sub">明日は前日の抽選がなく、当日分だけの発売です。</div>`;

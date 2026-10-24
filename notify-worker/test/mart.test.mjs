@@ -644,7 +644,7 @@ test("NPC から買って NPC に売っても増えない：交渉で下げら�
 import { kakuTimes } from "../worker.js";
 const knList = async (t, i = 1) => (await t.act(i, { action: "martStatus" })).listings.filter((x) => x.id.startsWith("kn:"));
 
-test("前日の抽選のあと・発表の前：NPC が取った30分枠が、ゆうマートで売られる。最初は高く（相場の2.6〜3.4倍）、発表に向けて、なめらかに安くなる", async () => {
+test("前日の抽選のあと・発表の前：NPC が取った30分枠が、ゆうマートで売られる。最初は高く（相場の2.6〜3.4倍）、発表に向けて、相場まで安くなる（下がることは、画面には出さない）", async () => {
   const t = setupKaku();
   const T = kakuTimes(DAY), ref = 1500;   // 10/26（月）の30分枠の相場
   t.state.now = T.preClose + 60000;
@@ -657,7 +657,9 @@ test("前日の抽選のあと・発表の前：NPC が取った30分枠が、�
     t.state.now = T.preClose + frac * (T.resultAt - T.preClose); resetYuslotCacheForTest(); resetKakuCacheForTest();
     l = await knList(t); assert.ok(l[0].price < prev, `どんどん下がる ${prev} → ${l[0].price}`); prev = l[0].price;
   }
-  assert.ok(prev >= ref * 0.4 - 5 && prev < ref * 0.8, `最後は相場の0.4倍に近づく ${prev}`);
+  assert.ok(prev >= ref && prev < ref * 1.4, `最後は相場に近づく（相場より安くはならない）${prev}`);
+  t.state.now = T.resultAt - 1; resetKakuCacheForTest();
+  assert.equal((await knList(t))[0].price, ref, "いちばん安くても、相場");
   t.state.now = T.resultAt; resetKakuCacheForTest();
   assert.deepEqual(await knList(t), [], "発表のあとは売らない");
   t.state.now = T.preClose - 60000; resetKakuCacheForTest();
@@ -698,4 +700,25 @@ test("前日の抽選の NPC 枠：1日3枠まで・コイン不足・席に着�
   t2.fs.putP(`yuslotKaku/${DAY}`, { day: DAY, machine: "yubasic", mode: "full", slots: slotsOf(t2), app1: [], app2: [], draw1Done: false, draw2Done: false });
   resetKakuCacheForTest();
   assert.deepEqual(await knList(t2), [], "抽選がまだなら売らない");
+});
+
+test("前日の抽選の NPC 枠は、1日に2〜3枠だけ売る。選ぶ枠は日付から決まっていて、売れても代わりの枠は出ない。売れ残りはそのまま NPC の枠", async () => {
+  const t = setupKaku();
+  const T = kakuTimes(DAY); t.state.now = T.preClose + 3600000;
+  const pre = kakuInitialSlots(DAY).filter((x) => x.kind === "pre").map((x) => x.i);
+  const slots = slotsOf(t).map((x) => (pre.includes(x.i) ? { ...x, uid: "", name: "ほしぞら", npc: true } : x));
+  t.fs.putP(`yuslotKaku/${DAY}`, { day: DAY, machine: "yubasic", mode: "full", slots, app1: [], app2: [], draw1Done: true, draw2Done: false });
+  resetKakuCacheForTest();
+  const first = (await knList(t)).map((x) => x.id);
+  assert.ok(first.length >= 2 && first.length <= 3, `売るのは2〜3枠（${first.length}）`);
+  assert.deepEqual((await knList(t, 2)).map((x) => x.id), first, "だれが見ても同じ");
+  assert.equal((await t.act(1, { action: "martBuy", id: `kn:${DAY}:${pre.find((i) => !first.includes(`kn:${DAY}:${i}`))}` })).error, "gone", "選ばれていない枠は買えない");
+  const r = await t.act(1, { action: "martBuy", id: first[0] });
+  assert.equal(r.ok, true);
+  const after = (await knList(t)).map((x) => x.id);
+  assert.deepEqual(after, first.slice(1), "売れても、代わりの枠は出ない");
+  const sold = slotsOf(t).find((x) => `kn:${DAY}:${x.i}` === first[0]);
+  assert.equal(sold.kn, 1);
+  t.state.now = T.resultAt; resetKakuCacheForTest();
+  assert.equal(slotsOf(t).filter((x) => x.npc === true).length, pre.length - 1, "売れ残りは NPC の枠のまま");
 });

@@ -5499,7 +5499,7 @@ async function martExecute(deps, mcur, L, price, buyer) {
       const kc = await kakuGetDay(deps, L.day, 0), slot = kc?.data?.slots?.find((x) => x.i === L.si);
       if (!slot || (L.kn ? slot.npc !== true || slot.uid : slot.uid !== L.u || slot.npc || slot.bt) || slot.s - now <= MART.kakuLeadMs) return { status: 409, error: "gone" };   // 出品した人が、もうその枠を持っていない（NPC の枠は、まだ NPC のもの）
       if (kc.data.slots.filter((x) => x.uid === buyer.uid).length >= MART.kakuMaxPerDay) return { status: 409, error: buyer.byOther ? "buyer_has_it" : "slot_limit" };
-      const slots = kc.data.slots.map((x) => (x.i === L.si ? { ...x, uid: buyer.uid, name: me.name, npc: false, bt: 1 } : x));   // 買った枠は、また売れない（bt）
+      const slots = kc.data.slots.map((x) => (x.i === L.si ? { ...x, uid: buyer.uid, name: me.name, npc: false, bt: 1, ...(L.kn ? { kn: 1 } : {}) } : x));   // 買った枠は、また売れない（bt）
       buyerWrites = [userWrite, { update: { name: fs.docName(`yuslotKaku/${L.day}`), fields: encodeFields({ slots }) }, updateMask: { fieldPaths: ["slots"] }, currentDocument: { updateTime: kc.updateTime } }];
     } else {
       const path = `bankujiEntries/${BANKUJI.round}_${buyer.uid}`, raw = await fs.getRaw(path), d = raw ? decodeFields(raw.fields) : {};
@@ -5829,21 +5829,21 @@ async function martNegotiate(deps, uid, body) {
 
 /* =========================================================
    🌈 前日の抽選で NPC が取った確変枠の販売（抽選のあと、結果の発表（当日 7:50）まで）
-   ・前日の抽選（21:00）で NPC が取った30分枠を、ゆうマートで売る。最初は高い値段（相場の2.6〜3.4倍）から、結果の発表まで、どんどん下がっていく（相場の0.4倍まで。なめらかに下がる）。
+   ・前日の抽選（21:00）で NPC が取った30分枠のうち、1日に2〜3枠だけを、ゆうマートで売る（どの枠かは日付と枠の番号から決まる）。最初は高い値段（相場の2.6〜3.4倍）から、結果の発表まで、なめらかに下がる（相場まで。相場より安くはならない）。値下がりすることは、画面には出さない。
    ・値段は時刻から決まる計算（保存しない）。買われたら、その枠の持ち主が買った人に変わる（買った枠なので、また売れない・1日3枠まで）。コインはどこにも入らない。
    ・売れ残った枠は、発表のとき、いつも通り NPC の枠のまま。
    ・Firestore：今日・明日の確変の書類を読む（この時間帯だけ。30秒メモリにためる）。買うとき、その書類と users・index を1回の commit で書く。
 ========================================================= */
-MART.kakuNpc = { startLo: 2.6, startSpan: 0.8, floor: 0.4, ttl: 30000 };
+MART.kakuNpc = { startLo: 2.6, startSpan: 0.8, floor: 1.0, ttl: 30000, perDay: [2, 3] };   // 値段は、最初は相場の2.6〜3.4倍。下がっても、相場より安くはならない。売る枠は1日に2〜3枠だけ
 function martKakuNpcPrice(day, si, ss, se, now) {
   const t = kakuTimes(day), ref = martRefOf({ k: "kaku", day, ss, se });
   const start = Math.round((ref * (MART.kakuNpc.startLo + MART.kakuNpc.startSpan * martUnit(day, si, 111))) / 10) * 10, floor = Math.max(10, Math.round((ref * MART.kakuNpc.floor) / 10) * 10);
   const frac = Math.min(1, Math.max(0, (now - t.preClose) / (t.resultAt - t.preClose)));
-  return { start, floor, price: Math.max(floor, Math.round((start * Math.pow(floor / start, frac)) / 10) * 10) };
+  return { start, floor, price: Math.max(floor, Math.round((start * Math.pow(floor / start, frac)) / 10) * 10) };   // floor＝相場
 }
 function martKakuNpcListing(day, slot, now) {
   const t = kakuTimes(day), p = martKakuNpcPrice(day, slot.i, slot.s, slot.e, now);
-  return { id: `kn:${day}:${slot.i}`, npc: true, kn: true, n: martNpcName(day, slot.i, 112), k: "kaku", day, si: slot.i, ss: slot.s, se: slot.e, price: p.price, t: t.preClose, e: t.resultAt, dutch: { start: p.start, floor: p.floor } };
+  return { id: `kn:${day}:${slot.i}`, npc: true, kn: true, n: martNpcName(day, slot.i, 112), k: "kaku", day, si: slot.i, ss: slot.s, se: slot.e, price: p.price, t: t.preClose, e: t.resultAt, dutch: true };
 }
 const martKakuNpcOpen = (day, now) => { if (day < KAKU_EPOCH) return false; const t = kakuTimes(day); return now >= t.preClose && now < t.resultAt; };
 /* いま売っている枠（今日・明日の書類のうち、抽選のあと発表の前のもの） */
@@ -5853,15 +5853,22 @@ async function martKakuNpcListings(deps, now, ttl = MART.kakuNpc.ttl) {
     if (!martKakuNpcOpen(day, now)) continue;
     const cur = await kakuGetDay(deps, day, ttl);
     if (!cur || cur.data.draw1Done !== true) continue;
-    for (const slot of cur.data.slots) if (slot.kind === "pre" && slot.npc === true && !slot.uid && !slot.cx) out.push(martKakuNpcListing(day, slot, now));
+    for (const slot of martKakuNpcPicks(day, cur.data.slots)) if (slot.npc === true && !slot.uid && !slot.cx) out.push(martKakuNpcListing(day, slot, now));
   }
   return out;
+}
+/* その日に売る枠（2〜3枠）：NPC が取った30分枠（すでにこの販売で売れた枠も数える）を、日付と枠の番号から決まる順に並べて、先頭の2〜3枠。売れても、代わりの枠は出さない */
+function martKakuNpcPicks(day, slots) {
+  const cand = slots.filter((x) => x.kind === "pre" && ((x.npc === true && !x.uid && !x.cx) || x.kn === 1));
+  const n = MART.kakuNpc.perDay[0] + (martHash(day, 114) % (MART.kakuNpc.perDay[1] - MART.kakuNpc.perDay[0] + 1));
+  return cand.sort((a, b) => martHash(day, a.i, 113) - martHash(day, b.i, 113) || a.i - b.i).slice(0, n);
 }
 async function martKakuNpcById(deps, id, now) {
   const m = /^kn:(\d{4}-\d{2}-\d{2}):(\d+)$/.exec(String(id));
   if (!m || !martKakuNpcOpen(m[1], now)) return null;
   const cur = await kakuGetDay(deps, m[1], 0), slot = cur?.data?.slots?.find((x) => x.i === Number(m[2]));
   if (!slot || cur.data.draw1Done !== true || slot.kind !== "pre" || slot.npc !== true || slot.uid || slot.cx) return null;
+  if (!martKakuNpcPicks(m[1], cur.data.slots).some((x) => x.i === slot.i)) return null;   // 売る枠として選ばれた枠だけ
   return martKakuNpcListing(m[1], slot, now);
 }
 
