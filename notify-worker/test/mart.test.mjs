@@ -295,3 +295,10 @@ test("消しバトが非公開のあいだは、ふつうの人は使えない",
   assert.equal((await t.act(1, { action: "martStatus" })).error, "not_published");
   assert.equal((await t.act(1, { action: "martBuy", id: "n0-1" })).error, "not_published");
 });
+
+test("商品の絵：有料パーツの全部に、そのパーツの絵がある（中古でも同じ絵）", async () => {
+  const { partArt, MART_ART_KEYS } = await import("../../yumart-art.js");
+  const keys = KESHI_SLOTS.flatMap((s) => KESHI_PARTS[s].filter((p) => p.price > 0).map((p) => `${s}:${p.id}`));
+  assert.deepEqual([...MART_ART_KEYS].sort(), [...keys].sort());
+  for (const k of keys) { const [s, i] = k.split(":"); assert.equal(partArt(s, `${i}~u`), partArt(s, i)); assert.ok(!partArt(s, i).includes("📦")); }
+});
