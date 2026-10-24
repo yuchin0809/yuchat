@@ -268,6 +268,30 @@ export function buildAssetRanking(entries) {
   });
 }
 
+/* ----- 経済の状態のまとめ（インフレの目安。管理者の「経済の状態」画面と、毎日の記録に使う） -----
+   entries＝[{ coins, deposit, stockValue, loan, total }]。同じ計算が notify-worker/worker.js の economySummary にもある（同じ結果になること）。
+   ・total＝コイン総量の目安：手持ち＋預金＋株の評価額−借入（借入は引く）。coins＝手持ちだけ。
+   ・top1/top10Share＝総資産の合計のうち、上位1人／上位10人が持っている割合（マイナスの人は 0 として数える）。 gini＝0（みんな同じ）〜1（1人が全部）。 */
+export function summarizeEconomy(entries) {
+  const list = entries.map((e) => ({ coins: Number(e.coins) || 0, deposit: Number(e.deposit) || 0, stockValue: Number(e.stockValue) || 0, loan: Number(e.loan) || 0, total: Number(e.total) || 0 }));
+  const n = list.length;
+  const sum = (k) => list.reduce((s, e) => s + e[k], 0);
+  const totals = list.map((e) => Math.max(0, e.total)).sort((a, b) => b - a);
+  const all = totals.reduce((s, v) => s + v, 0);
+  const asc = [...totals].reverse();
+  let gini = 0;
+  if (n > 1 && all > 0) { let w = 0; asc.forEach((v, i) => { w += (i + 1) * v; }); gini = Math.max(0, Math.min(1, (2 * w) / (n * all) - (n + 1) / n)); }
+  const median = n === 0 ? 0 : (asc.length % 2 ? asc[(asc.length - 1) / 2] : (asc[asc.length / 2 - 1] + asc[asc.length / 2]) / 2);
+  const bands = [[0, 500], [500, 2000], [2000, 10000], [10000, 50000], [50000, Infinity]].map(([lo, hi]) => ({ lo, hi: hi === Infinity ? null : hi, users: totals.filter((v) => v >= lo && v < hi).length }));
+  return {
+    users: n, coins: sum("coins"), deposit: sum("deposit"), stockValue: sum("stockValue"), loan: sum("loan"), total: sum("total"),
+    avg: n ? Math.round(sum("total") / n) : 0, median: Math.round(median),
+    top1: totals[0] || 0, top1Share: all ? totals[0] / all : 0, top10Share: all ? totals.slice(0, 10).reduce((s, v) => s + v, 0) / all : 0,
+    gini: Math.round(gini * 1000) / 1000, bands
+  };
+}
+export const ECONOMY_HISTORY_DAYS = 120;
+
 /* ----- 総資産ランキングだけの更新（日本時間 9:00〜16:59 に1時間おき。ranking-hourly.mjs から） -----
    ・1日1回の処理（runDailyJobs）とは別。株価・利息・ボーナスには触れない（その日の処理が済んだかを見る date・complete は変えない。update で必要な項目だけ書く）。
    ・株価は毎日 13:00 にしか変わらないので、途中の更新で動くのは、コイン・預金・株の保有数・借入が変わった人の順位だけ。
@@ -367,6 +391,16 @@ export async function runDailyJobs({ db, now = new Date(), log = console.log, st
     updatedBy: "github-actions"
   });
   result.rankingUsers = ranking.length;
+  /* 経済の状態の毎日の記録（1日1点。管理者の画面の推移に使う。失敗しても、今日の処理は止めない） */
+  try {
+    const histRef = db.collection("economyStats").doc("history");
+    const snap = await histRef.get();
+    const points = (snap.exists && Array.isArray(snap.data().points) ? snap.data().points : []).filter((p) => p && p.date !== today);
+    points.push({ date: today, ...summarizeEconomy(ranking), interestUsers: result.interestUsers, interestTotal: result.interestTotal, autoRepaidTotal: result.autoRepaidTotal, bonusGranted: result.bonusGranted });
+    await histRef.set({ points: points.slice(-ECONOMY_HISTORY_DAYS), updatedAt: FieldValue.serverTimestamp(), updatedBy: "github-actions" });
+  } catch (error) {
+    result.errors.push(`economyStats: ${error.message || error}`);
+  }
   result.status = result.errors.length ? "error" : "ok";
   log(JSON.stringify({ dailyJobs: { ...result, news: result.news.map((n) => `${n.code}:${n.kind}`), events: result.events.map((e) => `${e.code}:${e.kind}`) } }));
   return result;
