@@ -51,7 +51,7 @@ function render() {
   const rows = hist.map((p, i) => {
     const prev = i > 0 ? hist[i - 1] : null;
     const ch = prev && prev.avg > 0 ? (p.avg - prev.avg) / prev.avg : null;
-    return `<tr><td>${esc(String(p.date).slice(5))}</td><td>${fmt(p.total)}</td><td>${fmt(p.avg)}</td><td class="${ch != null && ch >= 0.03 ? "yec-up" : ""}">${ch == null ? "－" : sgn(ch)}</td><td>${p.interestTotal == null ? "－" : fmt(p.interestTotal)}</td><td>${p.bonusGranted == null ? "－" : fmt(p.bonusGranted)}</td></tr>`;
+    return `<tr><td>${esc(String(p.date).slice(5))}</td><td>${fmt(p.total)}</td><td>${fmt(p.avg)}</td><td class="${ch != null && ch >= 0.03 ? "yec-up" : ""}">${ch == null ? "－" : sgn(ch)}</td><td>${p.interestTotal == null ? "－" : fmt(p.interestTotal)}</td><td>${p.taxTotal == null ? "－" : fmt(p.taxTotal)}</td><td>${p.bonusGranted == null ? "－" : fmt(p.bonusGranted)}</td></tr>`;
   }).join("");
   const maxBand = Math.max(1, ...(c.bands || []).map((b) => b.users));
   const lot = (d.lotteries || []).map((l) => `<tr><td>${esc(l.id.slice(5))}</td><td>${esc(l.name)}</td><td>${fmt(l.sales)}</td><td>${fmt(l.paid)}</td><td class="${l.rtp != null && l.rtp > 1 ? "yec-up" : ""}">${l.done ? pct(l.rtp, 0) : "販売中"}</td></tr>`).join("");
@@ -70,7 +70,7 @@ function render() {
     <div class="yec-bands">${(c.bands || []).map((b) => `<div class="yec-band"><span>${BAND(b)}</span><i style="width:${Math.round((b.users / maxBand) * 100)}%"></i><em>${fmt(b.users)}人</em></div>`).join("")}</div>
     <h4>毎日の推移（直近14日）</h4>
     ${spark(hist)}
-    ${rows ? `<table class="yec-table"><thead><tr><th>日</th><th>総資産</th><th>1人あたり</th><th>前日比</th><th>預金利息</th><th>ボーナス</th></tr></thead><tbody>${rows}</tbody></table><p class="yec-note">預金利息＝その日13:00に付いた利息の合計、ボーナス＝その日に追加ボーナス（500）をもらった人数。</p>` : `<p class="yec-note">まだ記録がありません（毎日13:00の処理のあと、1日1点ずつたまります）。</p>`}
+    ${rows ? `<table class="yec-table"><thead><tr><th>日</th><th>総資産</th><th>1人あたり</th><th>前日比</th><th>預金利息</th><th>ゆう税</th><th>ボーナス</th></tr></thead><tbody>${rows}</tbody></table><p class="yec-note">預金利息＝その日13:00に付いた利息の合計、ゆう税＝その日に集めた税の合計（消えるコイン）、ボーナス＝その日に追加ボーナス（500）をもらった人数。</p>` : `<p class="yec-note">まだ記録がありません（毎日13:00の処理のあと、1日1点ずつたまります）。</p>`}
     <h4>宝くじの収支（還元率が 100% を超えると、コインが増える側）</h4>
     ${lot ? `<table class="yec-table"><thead><tr><th>抽選日</th><th>名前</th><th>売上</th><th>賞金</th><th>還元率</th></tr></thead><tbody>${lot}</tbody></table>` : `<p class="yec-note">記録のある回がありません。</p>`}
     ${bk ? `<h4>ゆう番くじ</h4><p class="yec-note">売れた枚数：${fmt(bk.sold)} / ${fmt(bk.pool)}（売上 ${fmt(bk.sales)} コイン）／ コイン景品：${fmt(bk.coinPrizes)} コイン／ 株の景品：B賞 ${bk.stockPrizes.B}本（25株）・G賞 ${bk.stockPrizes.G}本（1〜3株）</p>` : ""}

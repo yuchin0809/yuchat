@@ -207,8 +207,24 @@ export function totalAssetsOf(data, prices) {
   return { coins, deposit: bank.deposit, stockValue, loan: bank.loan, total: coins + bank.deposit + stockValue - bank.loan };
 }
 
-/* 1人分の1日1回の処理（利息 → 返済期限切れの自動返済 → 追加ボーナス）。変更が無ければ null */
-export function applyDailyUserUpdate(data, today, now) {
+/* ゆう税（累進課税）：総資産のうち、YUU_TAX_FREE を超えた部分だけに、段階ごとの税率で毎日13:00にかける。
+   ・総資産＝手持ち＋預金＋株の評価額−借入（利息・自動返済のあとの値）。YUU_TAX_FREE 以下の人にはかからない。
+   ・手持ちコインから先に引き、足りなければ預金から。株は売らない。集めたコインは消える（コインの総量が減る）。
+   ・同じ日に2回かけない（bank.taxDate）。税が0の人には何も書かない（書き込みを増やさない）。 */
+export const YUU_TAX_FREE = 5000;
+export const YUU_TAX_BRACKETS = [{ upTo: 10000, rate: 0.01 }, { upTo: 30000, rate: 0.02 }, { upTo: Infinity, rate: 0.03 }];
+export function yuuTaxOf(total) {
+  let tax = 0, lo = YUU_TAX_FREE;
+  for (const b of YUU_TAX_BRACKETS) {
+    if (total <= lo) break;
+    tax += (Math.min(total, b.upTo) - lo) * b.rate;
+    lo = b.upTo;
+  }
+  return Math.floor(tax);
+}
+
+/* 1人分の1日1回の処理（利息 → 返済期限切れの自動返済 → ゆう税 → 追加ボーナス）。変更が無ければ null。prices が無ければ、税はかけない */
+export function applyDailyUserUpdate(data, today, now, prices = null) {
   const bank = normalizeBank(data.bank);
   let coins = typeof data.coins === "number" ? data.coins : null;
   const update = {};
@@ -242,6 +258,22 @@ export function applyDailyUserUpdate(data, today, now) {
     if (fromCoins > 0) update.coins = true;
   }
 
+  /* ゆう税（利息・自動返済のあとの総資産で計算）。手持ち → 預金の順に引く */
+  let tax = 0;
+  if (prices && bank.taxDate !== today) {
+    const cash = coins === null ? 0 : Math.max(0, Math.floor(coins));
+    const total = (coins === null ? 0 : coins) + bank.deposit + stockValueOf(data.stocks, prices) - bank.loan;
+    tax = Math.min(yuuTaxOf(total), cash + bank.deposit);
+    if (tax > 0) {
+      const fromCoins = Math.min(cash, tax), fromDeposit = tax - fromCoins;
+      if (fromCoins > 0) { coins -= fromCoins; update.coins = true; }
+      bank.deposit -= fromDeposit;
+      bank.taxDate = today;
+      bank.lastTax = tax;
+      update.bank = true;
+    }
+  }
+
   if (update.bank) bank.interestBase = bank.deposit; /* 次の利息の対象は、今日の処理のあとの残高 */
 
   if (coins !== null && data.bonus500Granted !== true) {
@@ -255,7 +287,7 @@ export function applyDailyUserUpdate(data, today, now) {
   if (update.bank) fields.bank = bank;
   if (update.coins) fields.coins = coins;
   if (bonus) { fields.bonus500Granted = true; fields.bonus500GrantedAt = FieldValue.serverTimestamp(); }
-  return { fields, interest, repaid, bonus };
+  return { fields, interest, repaid, bonus, tax };
 }
 
 /* 総資産ランキング（同額は同じ順位。並びは総資産の多い順、同額は名前の順） */
@@ -348,18 +380,18 @@ export async function runDailyJobs({ db, now = new Date(), log = console.log, st
   /* 2〜4. 利息・返済期限切れ・追加ボーナス（必要な人だけ書き込む） */
   const usersSnap = await db.collection("users").select("uid", "coins", "bank", "stocks", "bonus500Granted").get();
   const finalData = new Map();
-  Object.assign(result, { users: usersSnap.size, interestUsers: 0, interestTotal: 0, autoRepaid: 0, autoRepaidTotal: 0, bonusGranted: 0 });
+  Object.assign(result, { users: usersSnap.size, interestUsers: 0, interestTotal: 0, autoRepaid: 0, autoRepaidTotal: 0, bonusGranted: 0, taxUsers: 0, taxTotal: 0 });
 
   for (const userDoc of usersSnap.docs) {
     const data = userDoc.data();
     finalData.set(userDoc.id, data);
-    if (!applyDailyUserUpdate(data, today, now)) continue;
+    if (!applyDailyUserUpdate(data, today, now, prices)) continue;
     try {
       const outcome = await db.runTransaction(async (transaction) => {
         const fresh = await transaction.get(userDoc.ref);
         if (!fresh.exists) return null;
         const freshData = fresh.data();
-        const change = applyDailyUserUpdate(freshData, today, now);
+        const change = applyDailyUserUpdate(freshData, today, now, prices);
         if (change) transaction.update(userDoc.ref, change.fields);
         return { change, data: { ...freshData, ...(change ? change.fields : {}) } };
       });
@@ -370,6 +402,7 @@ export async function runDailyJobs({ db, now = new Date(), log = console.log, st
       if (change.interest > 0) { result.interestUsers++; result.interestTotal += change.interest; }
       if (change.repaid) { result.autoRepaid++; result.autoRepaidTotal += change.repaid.amount; }
       if (change.bonus) result.bonusGranted++;
+      if (change.tax > 0) { result.taxUsers++; result.taxTotal += change.tax; }
     } catch (error) {
       result.errors.push(`user ${userDoc.id}: ${error.message || error}`);
     }
@@ -396,7 +429,7 @@ export async function runDailyJobs({ db, now = new Date(), log = console.log, st
     const histRef = db.collection("economyStats").doc("history");
     const snap = await histRef.get();
     const points = (snap.exists && Array.isArray(snap.data().points) ? snap.data().points : []).filter((p) => p && p.date !== today);
-    points.push({ date: today, ...summarizeEconomy(ranking), interestUsers: result.interestUsers, interestTotal: result.interestTotal, autoRepaidTotal: result.autoRepaidTotal, bonusGranted: result.bonusGranted });
+    points.push({ date: today, ...summarizeEconomy(ranking), interestUsers: result.interestUsers, interestTotal: result.interestTotal, autoRepaidTotal: result.autoRepaidTotal, bonusGranted: result.bonusGranted, taxUsers: result.taxUsers, taxTotal: result.taxTotal });
     await histRef.set({ points: points.slice(-ECONOMY_HISTORY_DAYS), updatedAt: FieldValue.serverTimestamp(), updatedBy: "github-actions" });
   } catch (error) {
     result.errors.push(`economyStats: ${error.message || error}`);
