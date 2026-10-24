@@ -722,3 +722,20 @@ test("前日の抽選の NPC 枠は、1日に2〜3枠だけ売る。選ぶ枠は
   t.state.now = T.resultAt; resetKakuCacheForTest();
   assert.equal(slotsOf(t).filter((x) => x.npc === true).length, pre.length - 1, "売れ残りは NPC の枠のまま");
 });
+
+test("値段の上限はない：1億コインをこえる値段でも出品できる・入札の最高額にも上限がない（手数料の計算もずれない）", async () => {
+  const t = setup({ owned: ["body:titan", "body:pro"] });
+  const big = 987654321012;
+  const a = await t.act(0, { action: "martList", kind: "part", slot: "body", part: "titan", price: big });
+  assert.equal(a.ok, true);
+  assert.equal((await t.act(0, { action: "martList", kind: "part", slot: "body", part: "pro", price: 1.5 })).error, "bad_price");
+  assert.equal((await t.act(0, { action: "martList", kind: "part", slot: "body", part: "pro", price: Number.MAX_SAFE_INTEGER + 2 })).error, "bad_price", "整数として正しく扱えない値は不可");
+  t.fs.putP("users/u1", { uid: "id1", name: "u1", coins: big });
+  const r = await t.act(1, { action: "martBuy", id: a.id });
+  assert.equal(r.ok, true); assert.equal(r.fee, Math.floor(big / 10));
+  assert.equal(t.coinsOf(1), 0); assert.equal(t.coinsOf(0), 20000 + big - Math.floor(big / 10));
+  const b = await t.act(0, { action: "martList", kind: "part", slot: "body", part: "pro", price: 3000000000, auction: true, hours: 1 });
+  assert.equal(b.ok, true);
+  t.fs.putP("users/u2", { uid: "id2", name: "u2", coins: 5000000000 });
+  assert.equal((await t.act(2, { action: "martBid", id: b.id, price: 4000000000 })).ok, true);
+});
