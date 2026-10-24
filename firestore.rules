@@ -61,7 +61,7 @@ service cloud.firestore {
     //   gameInvites：送った人・送られた人だけ／fcmTokens：アプリからは読まない（通知サーバーだけが読む）
     //   gameRooms・gameRoomOwners：専用のルールで判定（gameRooms はロビー表示のため読み取りは今まで通り許可）
     function hasDedicatedReadRules(collection) {
-      return collection in ['messages', 'groups', 'fcmTokens', 'gameInvites', 'gameRooms', 'gameRoomOwners', 'yuslotSeats', 'lotteryEntries', 'lotteryRounds', 'yuslotKaku', 'yuslotPrefs', 'coinTransfers', 'yuslotRank', 'yuslotBattle', 'yuslotYacht', 'yuslotKeshi', 'yuslotKeshiLeague'];
+      return collection in ['messages', 'groups', 'fcmTokens', 'gameInvites', 'gameRooms', 'gameRoomOwners', 'yuslotSeats', 'lotteryEntries', 'lotteryRounds', 'bankujiRounds', 'bankujiEntries', 'bankujiPasses', 'bankujiApply', 'yuslotKaku', 'yuslotPrefs', 'coinTransfers', 'yuslotRank', 'yuslotBattle', 'yuslotYacht', 'yuslotKeshi', 'yuslotKeshiLeague'];
     }
 
     // 下のコレクションは管理者だけが読める
@@ -84,6 +84,8 @@ service cloud.firestore {
         'worldConfig', 'yuslotSeats',
         // 🎟 ゆう宝くじ売り場：購入枚数（lotteryEntries）と抽選結果（lotteryRounds）は通知 Worker（サービスアカウント）だけが書く
         'lotteryEntries', 'lotteryRounds',
+        // 🎊 ゆう番くじ：売れた番号・景品の残り（bankujiRounds）、買った人の券と景品（bankujiEntries）、整理券の抽選（bankujiPasses）・申込（bankujiApply）は Worker だけが書く
+        'bankujiRounds', 'bankujiEntries', 'bankujiPasses', 'bankujiApply',
         // 🌈 ゆうスロ確変台：その日の枠・申込（yuslotKaku）と通知の好み（yuslotPrefs）は通知 Worker（サービスアカウント）だけが書く
         'yuslotKaku', 'yuslotPrefs',
         // 💸 コインの送金（管理者の承認制）：申請と状態は通知 Worker（サービスアカウント）だけが書く
@@ -422,6 +424,22 @@ service cloud.firestore {
       allow read: if false;
     }
     match /lotteryRounds/{roundId} {
+      allow read: if false;
+    }
+
+    // ===== 🎊 ゆう番くじ（bankujiRounds／bankujiEntries／bankujiPasses／bankujiApply） =====
+    // 景品の残り・誰が何を引いたか・整理券の抽選は通知 Worker（サービスアカウント）だけ。ブラウザからは読み書きできない
+    // （景品の残り本数を覗いて有利に買う・景品を書き換える・整理券を自分で作ることができないように。アプリは Worker 経由で表示する）
+    match /bankujiRounds/{roundId} {
+      allow read: if false;
+    }
+    match /bankujiEntries/{entryId} {
+      allow read: if false;
+    }
+    match /bankujiPasses/{passId} {
+      allow read: if false;
+    }
+    match /bankujiApply/{applyId} {
       allow read: if false;
     }
 

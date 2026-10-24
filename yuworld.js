@@ -15,7 +15,7 @@
 /* 🎟 ゆう宝くじ売り場の画面（別ファイル。Worker の lottery* アクションを呼んで表示するだけ） */
 import { renderLottery, stopLottery } from "./yulottery.js?v=20261023-lottery9";
 /* 🎊 ゆう番くじ（発売前のお知らせの画面） */
-import { renderBankuji, stopBankuji, bankujiRemain } from "./yubankuji.js?v=20261023-bankuji1";
+import { renderBankuji, stopBankuji, BANKUJI_SALE_MS } from "./yubankuji.js?v=20261024-bankuji2";
 import { renderYacht, stopYacht } from "./yuyacht.js?v=20261023-yacht5";
 import { renderKeshi, stopKeshi } from "./yukeshi.js?v=20261023-keshi13";
 import { eraserIcon, keshiLeagueTag } from "./yukeshi-core.js?v=20261023-keshi13";
@@ -139,16 +139,16 @@ function render() {
   if (state.screen === "game") return renderGame();
   if (state.screen === "lottery") return openLotteryScreen();
   if (state.screen === "kujihub") return renderKujiHub();
-  if (state.screen === "bankuji") return renderBankuji({ root: rootEl, esc, now: serverNow, onBack: () => { state.screen = "kujihub"; render(); } });
+  if (state.screen === "bankuji") return renderBankuji({ root: rootEl, api, esc, now: serverNow, sfx: { tone: (note, vol, type, when) => playTone(note, vol, type, when) }, onBack: () => { state.screen = "kujihub"; render(); } });
 }
 /* 🎟 ゆうくじ売り場：「宝くじ売り場」と「ゆう番くじ売り場」の2つの大きなボタン（横並び） */
 function renderKujiHub() {
   stopLottery(); stopBankuji();
-  const r = bankujiRemain(serverNow());
+  const selling = serverNow() >= BANKUJI_SALE_MS;
   rootEl.innerHTML = `<div class="yw-head"><button type="button" class="yw-back" id="ywKujiBack">← お店の一覧</button><h2>🎟 ゆうくじ売り場</h2><p>どちらのくじ売り場に行く？</p></div>
     <div class="yw-kuji-grid">
       <button type="button" class="yw-kuji-btn yw-kuji-taka" id="ywKujiTaka"><span class="yw-kuji-ico">🎟</span><b>宝くじ売り場</b><small>毎週金曜 14:30 抽選<br>1等は1万コイン！</small></button>
-      <button type="button" class="yw-kuji-btn yw-kuji-ban" id="ywKujiBan"><em class="yw-kuji-new">NEW</em><span class="yw-kuji-ico">🎊</span><b>ゆう番くじ売り場</b><small>${r ? `10/26（月）8:00 発売！` : "まもなく発売！"}<br>ちょっとだけ中身を公開中</small></button>
+      <button type="button" class="yw-kuji-btn yw-kuji-ban" id="ywKujiBan"><em class="yw-kuji-new">NEW</em><span class="yw-kuji-ico">🎊</span><b>ゆう番くじ売り場</b><small>${selling ? "発売中！<br>くじを引こう" : "10/26（月）8:00 発売！<br>ちょっとだけ中身を公開中"}</small></button>
     </div>`;
   $("#ywKujiBack")?.addEventListener("click", () => { state.screen = "shop"; render(); });
   $("#ywKujiTaka")?.addEventListener("click", () => { unlockAudio(); state.screen = "lottery"; render(); });
