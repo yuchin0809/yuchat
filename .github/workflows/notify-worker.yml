@@ -22,6 +22,7 @@ on:
   pull_request:
     paths:
       - "notify-worker/**"
+      - "yuu-theft.js"
       - ".github/notify-worker/**"
       - ".github/workflows/notify-worker.yml"
   push:

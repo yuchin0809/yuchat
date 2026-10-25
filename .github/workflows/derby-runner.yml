@@ -27,7 +27,6 @@ on:
     paths:
       - "derby-runner/**"
       - "derby-odds.js"
-      - "yuu-theft.js"
       - ".github/workflows/derby-runner.yml"
   schedule:
     - cron: "41 1 * * *"   # 10:41 JST 起動 → 11:30 まで待って開催

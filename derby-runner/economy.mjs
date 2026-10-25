@@ -17,7 +17,6 @@
 import crypto from "crypto";
 import { FieldValue } from "firebase-admin/firestore";
 import { STOCK_NEWS } from "./stock-news.mjs";
-import { THEFT_MIN_TOTAL, THEFT_WEEK_MAX, THEFT_DAMAGE, THEFT_GUARDS, theftWeeklyRate, isSurge, weekStartOf, takeFromAssets, theftKind } from "../yuu-theft.js";
 
 /* ----- 株価の秘密値（事前に計算されないように） -----
    株価・ニュース・急騰／暴落の乱数は「秘密値 ＋ 日付 ＋ 会社」から HMAC-SHA256 で作る。
@@ -275,43 +274,6 @@ export function applyDailyUserUpdate(data, today, now, prices = null, opts = {})
     }
   }
 
-  /* 🥷 スリ（総資産が多い人のところに、ときどき泥棒が来る）。ゆう税のあとの総資産で決める。
-     ・来るかどうかは、秘密の値＋ユーザー＋日付から決める（予想できない・同じ日に何回実行しても同じ）。来なかった日は、何も書かない。
-     ・1週間（月〜日）に最大7回。防犯グッズ（users.guards.{週の月曜}）があれば、追い払える／被害が減る。取られたものは消える。 */
-  let theft = null;
-  if (prices && opts.secret && coins !== null && data.theft?.day !== today) {
-    const stocksNow = data.stocks && typeof data.stocks === "object" ? data.stocks : {};
-    const total = coins + bank.deposit + stockValueOf(stocksNow, prices) - bank.loan;
-    const week = weekStartOf(today);
-    const n = data.theft?.week === week ? Math.max(0, Math.floor(Number(data.theft.n) || 0)) : 0;
-    if (total >= THEFT_MIN_TOTAL && n < THEFT_WEEK_MAX) {
-      const rand = seededRandom(`${opts.secret}|theft|${data.uid || ""}|${today}`);
-      const weekly = theftWeeklyRate(total, isSurge(total, opts.baseTotal));
-      if (rand() < Math.min(0.95, weekly / 7)) {
-        const lv = Math.max(0, Math.min(5, Math.floor(Number(data.guards?.[week]?.lv) || 0)));
-        const guard = THEFT_GUARDS[lv];
-        const repelled = Boolean(guard) && rand() < guard.repel;
-        const base = { day: today, week, n: n + 1 };
-        if (repelled) {
-          theft = { fields: { ...base, last: { date: today, repelled: true, lv, lost: 0 } }, repelled: true, lost: 0, lv };
-        } else {
-          const pct = THEFT_DAMAGE.minPct + Math.floor(rand() * (THEFT_DAMAGE.maxPct - THEFT_DAMAGE.minPct + 1));   // 5〜15% の整数を、どれも同じ確率で
-          const damage = Math.max(1, Math.min(THEFT_DAMAGE.cap, Math.floor((total * pct * (1 - (guard ? guard.dmg : 0))) / 100)));
-          const took = takeFromAssets({ coins, deposit: bank.deposit, stocks: stocksNow }, damage, prices);
-          const kind = theftKind(took.from);
-          coins = took.coins; bank.deposit = took.deposit;
-          update.coins = true; update.bank = true;
-          const sold = took.sold.length > 0;
-          theft = {
-            fields: { ...base, last: { date: today, repelled: false, lv, lost: took.taken, kind: kind.id, fromCoins: took.from.coins, fromDeposit: took.from.deposit, fromStock: took.from.stock } },
-            stocks: sold ? took.stocks : null, repelled: false, lost: took.taken, lv, kind
-          };
-        }
-        if (repelled) update.theft = true;
-      }
-    }
-  }
-
   if (update.bank) bank.interestBase = bank.deposit; /* 次の利息の対象は、今日の処理のあとの残高 */
 
   if (coins !== null && data.bonus500Granted !== true) {
@@ -320,13 +282,12 @@ export function applyDailyUserUpdate(data, today, now, prices = null, opts = {})
     update.coins = true;
   }
 
-  if (!update.bank && !update.coins && !update.theft) return null;
+  if (!update.bank && !update.coins) return null;
   const fields = {};
   if (update.bank) fields.bank = bank;
   if (update.coins) fields.coins = coins;
-  if (theft) { fields.theft = theft.fields; if (theft.stocks) fields.stocks = theft.stocks; }
   if (bonus) { fields.bonus500Granted = true; fields.bonus500GrantedAt = FieldValue.serverTimestamp(); }
-  return { fields, interest, repaid, bonus, tax, theft: theft ? { repelled: theft.repelled, lost: theft.lost, lv: theft.lv, kind: theft.kind || null } : null };
+  return { fields, interest, repaid, bonus, tax };
 }
 
 /* 総資産ランキング（同額は同じ順位。並びは総資産の多い順、同額は名前の順） */
@@ -417,25 +378,20 @@ export async function runDailyJobs({ db, now = new Date(), log = console.log, st
   const prices = Object.fromEntries(Object.entries(market.data.companies).map(([code, c]) => [code, c.price]));
 
   /* 2〜4. 利息・返済期限切れ・追加ボーナス（必要な人だけ書き込む） */
-  const usersSnap = await db.collection("users").select("uid", "coins", "bank", "stocks", "bonus500Granted", "guards", "theft", "theftPush").get();
-  /* 🥷 「一気に増えた」を調べるための、1週間前の総資産（economyStats/weekBase。7日たったら、今日の値に更新する） */
-  let weekBase = null;
-  try { const b = await db.collection("economyStats").doc("weekBase").get(); weekBase = b.exists ? b.data() : null; } catch (error) { result.errors.push(`weekBase read: ${error.message || error}`); }
-  const baseTotals = weekBase && weekBase.totals && typeof weekBase.totals === "object" ? weekBase.totals : {};
+  const usersSnap = await db.collection("users").select("uid", "coins", "bank", "stocks", "bonus500Granted").get();
   const finalData = new Map();
-  Object.assign(result, { users: usersSnap.size, interestUsers: 0, interestTotal: 0, autoRepaid: 0, autoRepaidTotal: 0, bonusGranted: 0, taxUsers: 0, taxTotal: 0, theftUsers: 0, theftTotal: 0, theftRepelled: 0, theftNotices: [] });
-  const theftOpts = (name, data) => ({ secret: stockSecret?.secret || "", baseTotal: Number.isFinite(baseTotals[name]) ? baseTotals[name] : undefined });
+  Object.assign(result, { users: usersSnap.size, interestUsers: 0, interestTotal: 0, autoRepaid: 0, autoRepaidTotal: 0, bonusGranted: 0, taxUsers: 0, taxTotal: 0 });
 
   for (const userDoc of usersSnap.docs) {
     const data = userDoc.data();
     finalData.set(userDoc.id, data);
-    if (!applyDailyUserUpdate(data, today, now, prices, theftOpts(userDoc.id, data))) continue;
+    if (!applyDailyUserUpdate(data, today, now, prices)) continue;
     try {
       const outcome = await db.runTransaction(async (transaction) => {
         const fresh = await transaction.get(userDoc.ref);
         if (!fresh.exists) return null;
         const freshData = fresh.data();
-        const change = applyDailyUserUpdate(freshData, today, now, prices, theftOpts(userDoc.id, freshData));
+        const change = applyDailyUserUpdate(freshData, today, now, prices);
         if (change) transaction.update(userDoc.ref, change.fields);
         return { change, data: { ...freshData, ...(change ? change.fields : {}) } };
       });
@@ -447,14 +403,6 @@ export async function runDailyJobs({ db, now = new Date(), log = console.log, st
       if (change.repaid) { result.autoRepaid++; result.autoRepaidTotal += change.repaid.amount; }
       if (change.bonus) result.bonusGranted++;
       if (change.tax > 0) { result.taxUsers++; result.taxTotal += change.tax; }
-      if (change.theft) {
-        if (change.theft.repelled) result.theftRepelled++;
-        else { result.theftUsers++; result.theftTotal += change.theft.lost; }
-        if (outcome.data.theftPush === true && outcome.data.uid) {   // プッシュ通知をオンにしている人にだけ（run.mjs が送る）
-          const t = change.theft;
-          result.theftNotices.push({ uid: outcome.data.uid, title: t.repelled ? "🛡 スリを追い払った！" : `${t.kind.emoji} ${t.kind.name}に遭った…`, body: t.repelled ? "防犯グッズのおかげで、被害はありませんでした" : `${t.lost.toLocaleString("ja-JP")}コイン盗まれました` });
-        }
-      }
     } catch (error) {
       result.errors.push(`user ${userDoc.id}: ${error.message || error}`);
     }
@@ -476,26 +424,18 @@ export async function runDailyJobs({ db, now = new Date(), log = console.log, st
     updatedBy: "github-actions"
   });
   result.rankingUsers = ranking.length;
-  /* 1週間前の総資産の記録：7日以上たっていたら、今日の値に入れ替える（1日1回の処理で、書き込み1件） */
-  try {
-    if (!weekBase || daysBetween(weekBase.date, today) >= 7) {
-      await db.collection("economyStats").doc("weekBase").set({ date: today, totals: Object.fromEntries(ranking.map((e) => [e.name, e.total])), updatedAt: FieldValue.serverTimestamp(), updatedBy: "github-actions" });
-    }
-  } catch (error) {
-    result.errors.push(`weekBase write: ${error.message || error}`);
-  }
   /* 経済の状態の毎日の記録（1日1点。管理者の画面の推移に使う。失敗しても、今日の処理は止めない） */
   try {
     const histRef = db.collection("economyStats").doc("history");
     const snap = await histRef.get();
     const points = (snap.exists && Array.isArray(snap.data().points) ? snap.data().points : []).filter((p) => p && p.date !== today);
-    points.push({ date: today, ...summarizeEconomy(ranking), interestUsers: result.interestUsers, interestTotal: result.interestTotal, autoRepaidTotal: result.autoRepaidTotal, bonusGranted: result.bonusGranted, taxUsers: result.taxUsers, taxTotal: result.taxTotal, theftUsers: result.theftUsers, theftTotal: result.theftTotal, theftRepelled: result.theftRepelled });
+    points.push({ date: today, ...summarizeEconomy(ranking), interestUsers: result.interestUsers, interestTotal: result.interestTotal, autoRepaidTotal: result.autoRepaidTotal, bonusGranted: result.bonusGranted, taxUsers: result.taxUsers, taxTotal: result.taxTotal });
     await histRef.set({ points: points.slice(-ECONOMY_HISTORY_DAYS), updatedAt: FieldValue.serverTimestamp(), updatedBy: "github-actions" });
   } catch (error) {
     result.errors.push(`economyStats: ${error.message || error}`);
   }
   result.status = result.errors.length ? "error" : "ok";
-  log(JSON.stringify({ dailyJobs: { ...result, theftNotices: result.theftNotices.length, news: result.news.map((n) => `${n.code}:${n.kind}`), events: result.events.map((e) => `${e.code}:${e.kind}`) } }));
+  log(JSON.stringify({ dailyJobs: { ...result, news: result.news.map((n) => `${n.code}:${n.kind}`), events: result.events.map((e) => `${e.code}:${e.kind}`) } }));
   return result;
 }
 
