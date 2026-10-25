@@ -22,6 +22,10 @@ export const RACE_RESULT_DELAY_SECONDS = 3;
 export const RACE_SHOW_MAX_SECONDS = RACE_MAIN_SECONDS + RACE_TAIL_MAX_SECONDS + RACE_RESULT_DELAY_SECONDS;
 
 const STRAIGHT_START_SECONDS = RACE_MAIN_SECONDS * 0.7;
+/* ラスト200m（最後の直線の終盤）に入る時刻。実況・カメラ・音・字幕が、ここから盛り上がる */
+export const RACE_FINAL_SECONDS = RACE_MAIN_SECONDS * 0.85;
+/* 1着と2着のゴールがこの秒数以内なら「写真判定」の演出にする */
+export const PHOTO_FINISH_GAP_SECONDS = 1.0;   // 実際のレースの1割ほどが、この僅差
 const MIN_FINISH_GAP_SECONDS = 0.3;
 const CLOSE_GAP = 0.012;
 
@@ -241,6 +245,7 @@ export function buildRaceShow(raceData, { horses, raceId }) {
   let straightAnnounced = false;
   let pullAwayAnnounced = false;
   let duelAnnounced = false;
+  let finalAnnounced = false;
   const rankHistory = [];
 
   for (let t = 1.5; t < RACE_MAIN_SECONDS; t += 0.25) {
@@ -292,6 +297,18 @@ export function buildRaceShow(raceData, { horses, raceId }) {
       continue;
     }
 
+    if (!finalAnnounced && t >= RACE_FINAL_SECONDS) {
+      finalAnnounced = true;
+      const chosen = pick([
+        { text: `残り200メートル！先頭は${L}番！`, claims: [{ type: "leader", horse: L }] },
+        { text: `ラスト200！${label(L)}がリード！`, claims: [{ type: "leader", horse: L }] },
+        { text: "ラスト200メートル！さあ、ここからが勝負！", claims: [] }
+      ]);
+      addEvent(t, chosen.text, [...chosen.claims, { type: "after", time: RACE_FINAL_SECONDS }], "major");
+      lastStatusAt = t;
+      continue;
+    }
+
     if (!pullAwayAnnounced && t >= 50 && L === winner && gap > 0.02) {
       pullAwayAnnounced = true;
       addEvent(t, pick([`${L}番が抜け出した！`, `${label(L)}、リードを広げる！`, `${L}番、ここで突き放す！`]),
@@ -308,8 +325,12 @@ export function buildRaceShow(raceData, { horses, raceId }) {
       continue;
     }
 
-    if (t - lastStatusAt >= 5.5) {
+    if (t - lastStatusAt >= (t >= RACE_FINAL_SECONDS ? 1.9 : 5.5)) {   // ラスト200mは、実況のテンポを上げる
       const options = [];
+      if (t >= RACE_FINAL_SECONDS) {
+        if (gap < CLOSE_GAP) options.push({ text: pick([`${L}番と${S}番、どっちだ！`, `${L}番と${S}番、まったくの互角！`, `${L}番、${S}番、並んだまま、ゴールへ！`]), claims: [{ type: "close", horses: [L, S] }] });
+        else options.push({ text: pick([`${L}番、リードを保ってゴールへ！`, `${label(L)}が先頭、${S}番が必死に追う！`, `${L}番、${S}番を振り切れるか！`]), claims: [{ type: "leader", horse: L }] });
+      }
       if (gap < 0.006) {
         options.push({ text: `${L}番と${S}番が並んでいます！`, claims: [{ type: "close", horses: [L, S] }] });
       }
@@ -334,12 +355,23 @@ export function buildRaceShow(raceData, { horses, raceId }) {
     }
   }
 
-  /* ゴール：着順どおり。4着以降は近いものをまとめて伝える */
-  addEvent(finishTimes[winner], pick([`${label(winner)}、ゴールイン！`, `1着は${label(winner)}！`, `${label(winner)}、先頭でゴール！`]),
-    [{ type: "finished", horses: [winner] }], "finish");
-  if (resultOrder[1] !== undefined) {
-    const n = resultOrder[1];
-    addEvent(finishTimes[n], pick([`続いて${n}番もゴール！`, `2着は${n}番！`, `2番手で${n}番がゴール！`]), [{ type: "finished", horses: [n] }], "finish");
+  /* ゴール：着順どおり。4着以降は近いものをまとめて伝える。1着と2着がほぼ同時なら「写真判定」 */
+  const photoGap = resultOrder[1] !== undefined ? finishTimes[resultOrder[1]] - finishTimes[winner] : Infinity;
+  let photo = null;
+  if (photoGap <= PHOTO_FINISH_GAP_SECONDS) {
+    const second = resultOrder[1];
+    photo = { from: finishTimes[winner], resultAt: finishTimes[second] + 1.1, winner, second, gap: photoGap };
+    addEvent(finishTimes[winner], pick(["僅差のゴール！写真判定です…！", "どっちだ！？写真判定へ！", "ほぼ並んでゴール！判定を待ちます…！"]), [{ type: "finished", horses: [winner] }], "finish");
+    addEvent(photo.resultAt, pick([`写真判定の結果…${label(winner)}が1着！ 2着は${second}番！`, `判定は…${label(winner)}が僅差で1着！ 2着は${second}番！`]), [{ type: "finished", horses: [winner, second] }], "finish");
+    rawEvents[rawEvents.length - 2].photo = true;
+    rawEvents[rawEvents.length - 1].photo = true;
+  } else {
+    addEvent(finishTimes[winner], pick([`${label(winner)}、ゴールイン！`, `1着は${label(winner)}！`, `${label(winner)}、先頭でゴール！`]),
+      [{ type: "finished", horses: [winner] }], "finish");
+    if (resultOrder[1] !== undefined) {
+      const n = resultOrder[1];
+      addEvent(finishTimes[n], pick([`続いて${n}番もゴール！`, `2着は${n}番！`, `2番手で${n}番がゴール！`]), [{ type: "finished", horses: [n] }], "finish");
+    }
   }
   if (resultOrder[2] !== undefined) {
     const n = resultOrder[2];
@@ -360,6 +392,9 @@ export function buildRaceShow(raceData, { horses, raceId }) {
   });
   flushBatch();
   const allFinishedText = pick(["全馬がゴールしました！", "全馬ゴールイン！"]);
+
+  /* 写真判定のときは、判定の結果の実況が出てから、3着以降のゴールを伝える（順番が逆にならないように） */
+  if (photo) rawEvents.forEach((e) => { if (e.kind === "finish" && !e.photo && e.time > photo.from) e.time = Math.max(e.time, photo.resultAt + 1.4); });
 
   /* 表示時間をそろえる：ゴールなどの大事な実況は少し後ろにずらしてでも出す。その他は間に合わなければ出さない */
   rawEvents.sort((a, b) => a.time - b.time);
@@ -397,6 +432,27 @@ export function buildRaceShow(raceData, { horses, raceId }) {
     results: "レース終了！"
   };
 
+  /* 画面の真ん中に大きく出す一言（スタート・ラスト200m・写真判定・1着）。出さない時間は null */
+  function calloutAt(t) {
+    if (t >= 0 && t < 2) return { key: "start", text: "🏁 スタート！", kind: "start" };
+    if (t >= RACE_FINAL_SECONDS && t < RACE_FINAL_SECONDS + 2.4) return { key: "final", text: "🔥 ラスト200m！", kind: "final" };
+    if (photo) {
+      if (t >= photo.from && t < photo.resultAt) return { key: "photo", text: "📸 写真判定…！", kind: "photo" };
+      if (t >= photo.resultAt && t < photo.resultAt + 2) return { key: "photoResult", text: `🏆 ${photo.winner}番が1着！`, kind: "photoResult" };
+    } else if (t >= finishTimes[winner] && t < finishTimes[winner] + 1.8) return { key: "goal", text: `🏆 ${winner}番、1着ゴール！`, kind: "goal" };
+    return null;
+  }
+
+  /* 画面の効き：shake（ゴール前に向けて強くなる揺れ 0〜1）、flash（ゴールの瞬間の白い光 0〜1）、intense（ラスト200mの間 true） */
+  function effectsAt(t) {
+    const goal = finishTimes[winner];
+    let shake = 0;
+    if (t >= RACE_FINAL_SECONDS && t < goal) shake = 0.15 + 0.35 * Math.min(1, (t - RACE_FINAL_SECONDS) / Math.max(0.1, goal - RACE_FINAL_SECONDS));
+    else if (t >= goal && t < goal + 0.6) shake = 0.8 * (1 - (t - goal) / 0.6);
+    const flash = t >= goal && t < goal + 0.35 ? 1 - (t - goal) / 0.35 : 0;
+    return { shake, flash, intense: t >= RACE_FINAL_SECONDS && t < endTime };
+  }
+
   function commentaryAt(t) {
     if (t < 0) return "";
     let latest = null;
@@ -416,6 +472,9 @@ export function buildRaceShow(raceData, { horses, raceId }) {
     revealTime,
     usedSavedCheckpoints: hasCheckpoints,
     events,
+    photo,
+    calloutAt,
+    effectsAt,
     positionsAt,
     standingsAt,
     phaseAt,
@@ -442,6 +501,9 @@ export function getCameraTarget(show, t) {
   const lead = st[0];
   const second = st[1];
 
+  /* 写真判定：ゴール板の前で、2頭を大きく映したまま判定を待つ */
+  if (show.photo && t >= show.photo.from - 0.5 && t < show.photo.resultAt + 1.2) return { center: 0.975, zoom: 5.6 };
+
   /* ゴール前後：ゴール板の付近を映し、まだ走っている馬が入るように */
   if (t >= RACE_MAIN_SECONDS - 1.5) {
     const trailing = running.length ? running[running.length - 1].progress : 1;
@@ -452,7 +514,11 @@ export function getCameraTarget(show, t) {
   const leadP = lead.progress;
   if (t >= STRAIGHT_START_SECONDS) {
     /* 最終直線：先頭争いを大きく */
-    const zoom = 4.4 + Math.min(1.2, (t - STRAIGHT_START_SECONDS) / 15);
+    const zoom = 4.4 + Math.min(1.2, (t - STRAIGHT_START_SECONDS) / 15) + (t >= RACE_FINAL_SECONDS ? 0.5 : 0);
+    if (t >= RACE_FINAL_SECONDS && second && leadP - second.progress < CLOSE_GAP * 1.6) {
+      /* ラスト200mの接戦：先頭の2頭の間を、さらに寄りで */
+      return { center: Math.min(1, (leadP + second.progress) / 2 - 0.01), zoom: zoom + 0.6 };
+    }
     return { center: Math.min(1, leadP - 0.02), zoom };
   }
 
@@ -739,6 +805,26 @@ export function createRaceStage(container, { horses }) {
       ctx.textBaseline = "middle";
       ctx.fillText(String(n), bx, by + 0.5);
       ctx.textBaseline = "alphabetic";
+
+      /* 自分の馬券の馬：頭の上に「あなた」の印（ぴょこぴょこ動く） */
+      if (myHorses.includes(n)) {
+        const hop = Math.sin(t * 6) * r * 0.25;
+        const mx = bx, my = by - r * 1.5 + hop;
+        ctx.fillStyle = "#ff6b9d";
+        ctx.beginPath();
+        ctx.moveTo(mx - r * 0.7, my - r * 0.5);
+        ctx.lineTo(mx + r * 0.7, my - r * 0.5);
+        ctx.lineTo(mx, my + r * 0.4);
+        ctx.closePath();
+        ctx.fill();
+        ctx.font = `bold ${Math.round(r * 0.95)}px sans-serif`;
+        ctx.textAlign = "center";
+        ctx.fillStyle = "#fff";
+        ctx.strokeStyle = "rgba(190,40,100,.9)";
+        ctx.lineWidth = Math.max(2, r * 0.3);
+        ctx.strokeText("あなた", mx, my - r * 0.85);
+        ctx.fillText("あなた", mx, my - r * 0.85);
+      }
     });
   }
 
@@ -791,15 +877,25 @@ export function createRaceStage(container, { horses }) {
     const positions = show ? show.positionsAt(t) : Object.fromEntries(numbers.map((n) => [n, 0]));
     const running = Boolean(show) && t > 0 && t < (show ? show.endTime + 2 : 0);
 
+    const fx = show && running ? show.effectsAt(t) : { shake: 0, flash: 0, intense: false };
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, width, height);
+    if (fx.shake > 0) {   // ゴール前に向けて、画面がだんだん揺れる
+      const amp = 3.2 * fx.shake;
+      ctx.translate(Math.sin(t * 47) * amp, Math.cos(t * 53) * amp);
+    }
     const L = layout();
     drawBackground(L);
     drawTrack(L);
-    drawSpeedLines(L, running ? Math.min(1, (camera.zoom - 1) / 3) : 0);
+    drawSpeedLines(L, running ? Math.min(1, (camera.zoom - 1) / 3) * (fx.intense ? 1.8 : 1) : 0);
     drawHorses(L, positions, t, myHorses, running);
-    const finalStretch = show && t >= RACE_MAIN_SECONDS * 0.85 && t < show.endTime;
-    drawVignette(finalStretch ? 1 : 0);
+    const finalStretch = show && t >= RACE_FINAL_SECONDS && t < show.endTime;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    drawVignette(finalStretch ? 1.25 : 0);
+    if (fx.flash > 0) {   // ゴールの瞬間：白い光
+      ctx.fillStyle = `rgba(255,255,255,${0.7 * fx.flash})`;
+      ctx.fillRect(0, 0, width, height);
+    }
   }
 
   function destroy() {

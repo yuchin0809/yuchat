@@ -3915,6 +3915,299 @@ button:disabled {
     pointer-events: none;
 }
 
+/* ----- ゆうダービー：レースの演出（自分の馬券・一言・音のボタン・的中／外れ） ----- */
+
+.race-sound-btn {
+    position: absolute;
+    top: 34px;
+    right: 8px;
+
+    z-index: 3;
+
+    width: 30px;
+    height: 30px;
+
+    border: none;
+    border-radius: 50%;
+
+    background: rgba(0, 0, 0, .55);
+    color: #fff;
+
+    font-size: 15px;
+    line-height: 1;
+
+    cursor: pointer;
+}
+
+.race-sound-btn.on {
+    background: rgba(255, 107, 157, .85);
+}
+
+/* 画面の真ん中に大きく出る一言（スタート・ラスト200m・写真判定・1着） */
+.race-callout {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 25%;
+
+    z-index: 3;
+
+    display: flex;
+    justify-content: center;
+
+    pointer-events: none;
+}
+
+.race-callout .rc {
+    padding: 4px 16px;
+
+    border-radius: 14px;
+
+    background: rgba(0, 0, 0, .55);
+    color: #fff;
+
+    font-size: clamp(18px, 5.6vw, 28px);
+    font-weight: 900;
+    letter-spacing: .04em;
+
+    text-shadow: 0 2px 8px rgba(0, 0, 0, .7);
+
+    animation: rc-pop .45s cubic-bezier(.2, 1.4, .4, 1) both;
+}
+
+.race-callout .rc-final {
+    background: linear-gradient(135deg, rgba(255, 90, 40, .9), rgba(255, 190, 30, .9));
+}
+
+.race-callout .rc-photo {
+    background: rgba(255, 255, 255, .92);
+    color: #1b1b1b;
+    text-shadow: none;
+    animation: rc-pop .45s cubic-bezier(.2, 1.4, .4, 1) both, rc-blink .5s .45s steps(2) infinite;
+}
+
+.race-callout .rc-photoResult,
+.race-callout .rc-goal {
+    background: linear-gradient(135deg, rgba(255, 200, 40, .95), rgba(255, 130, 20, .95));
+}
+
+@keyframes rc-pop {
+    from { transform: scale(.4); opacity: 0; }
+    to { transform: scale(1); opacity: 1; }
+}
+
+@keyframes rc-blink {
+    50% { opacity: .55; }
+}
+
+/* 自分の馬への一言・馬券の様子 */
+.race-my-callout {
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    bottom: 46px;
+
+    z-index: 3;
+
+    padding: 4px 10px;
+
+    border-radius: 999px;
+
+    background: rgba(255, 107, 157, .92);
+    color: #fff;
+
+    font-size: clamp(12px, 3.4vw, 15px);
+    font-weight: 900;
+    text-align: center;
+
+    box-shadow: 0 2px 10px rgba(0, 0, 0, .35);
+
+    animation: rc-pop .35s cubic-bezier(.2, 1.4, .4, 1) both;
+
+    pointer-events: none;
+}
+
+.race-my-bets {
+    position: absolute;
+    left: 8px;
+    right: 48px;
+    top: 32px;
+
+    z-index: 3;
+
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+
+    pointer-events: none;
+}
+
+.race-my-bets .rb {
+    display: inline-flex;
+    gap: 5px;
+    align-items: center;
+
+    padding: 2px 8px;
+
+    border-radius: 999px;
+
+    background: rgba(0, 0, 0, .6);
+    color: #fff;
+
+    font-size: 11px;
+    font-weight: 800;
+}
+
+.race-my-bets .rb b {
+    color: #ffd0e2;
+}
+
+.race-my-bets .rb-good {
+    background: rgba(30, 150, 80, .9);
+}
+
+.race-my-bets .rb-good b {
+    color: #fff;
+}
+
+.race-my-bets .rb-near {
+    background: rgba(230, 150, 20, .92);
+}
+
+.race-my-bets .rb-near b {
+    color: #fff;
+}
+
+/* 的中・外れの演出 */
+.race-hit-overlay {
+    position: absolute;
+    inset: 0;
+
+    z-index: 5;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    overflow: hidden;
+
+    background: rgba(0, 0, 0, .45);
+
+    cursor: pointer;
+}
+
+.race-hit-overlay .rh-flash {
+    position: absolute;
+    inset: 0;
+
+    background: #fff;
+
+    animation: rh-flash .7s ease-out both;
+
+    pointer-events: none;
+}
+
+@keyframes rh-flash {
+    from { opacity: .85; }
+    to { opacity: 0; }
+}
+
+.race-hit-overlay .rh-confetti {
+    position: absolute;
+    top: -16px;
+
+    border-radius: 2px;
+
+    animation-name: rh-fall;
+    animation-timing-function: linear;
+    animation-iteration-count: 2;
+
+    pointer-events: none;
+}
+
+@keyframes rh-fall {
+    to { top: 105%; transform: rotate(540deg) translateX(18px); }
+}
+
+.race-hit-overlay .rh-card {
+    position: relative;
+
+    width: min(86%, 340px);
+
+    padding: 14px 16px 10px;
+
+    border-radius: 18px;
+
+    text-align: center;
+    color: #fff;
+
+    animation: rc-pop .5s cubic-bezier(.2, 1.4, .4, 1) both;
+}
+
+.race-hit-overlay .rh-win {
+    background: linear-gradient(160deg, #ff9f1c, #ff4d6d 60%, #b388ff);
+    box-shadow: 0 0 40px rgba(255, 190, 40, .8);
+}
+
+.race-hit-overlay .rh-miss {
+    background: linear-gradient(160deg, #3a4a6b, #1f2a44);
+}
+
+.race-hit-overlay .rh-title {
+    font-size: clamp(26px, 8vw, 36px);
+    font-weight: 900;
+
+    text-shadow: 0 2px 8px rgba(0, 0, 0, .5);
+}
+
+.race-hit-overlay .rh-line {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+
+    margin-top: 6px;
+    padding: 3px 10px;
+
+    border-radius: 8px;
+
+    background: rgba(0, 0, 0, .22);
+
+    font-size: 13px;
+    font-weight: 800;
+}
+
+.race-hit-overlay .rh-total {
+    margin-top: 10px;
+
+    font-size: 14px;
+    font-weight: 800;
+}
+
+.race-hit-overlay .rh-total b {
+    font-size: clamp(26px, 8vw, 36px);
+    font-variant-numeric: tabular-nums;
+    color: #fff7c2;
+}
+
+.race-hit-overlay .rh-miss-row {
+    margin-top: 8px;
+
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.race-hit-overlay .rh-miss-row b {
+    display: block;
+    color: #ffd0e2;
+}
+
+.race-hit-overlay .rh-hint {
+    margin-top: 8px;
+
+    font-size: 10.5px;
+    opacity: .8;
+}
+
 .race-replay-end {
     position: absolute;
     inset: 0;
