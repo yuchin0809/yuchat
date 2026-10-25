@@ -23,6 +23,8 @@ import { eraserIcon, keshiLeagueTag } from "./yukeshi-core.js?v=20261024-mart9";
 import { kakuInit, kakuPanelHtml, kakuBind, kakuMachineInfo, startKaku, stopKaku, refreshKaku } from "./yukaku.js?v=20261024-kaku16";
 /* 🏅 会員ランクのカード（台の一覧の上）。ランクの判定・進みは Worker の rankStatus が返す */
 import { rankInit, rankPanelHtml, rankRefresh } from "./yurank.js?v=20261023-rank2";
+/* 🎰 演出の判断（前兆・ステップアップ・連チャン）。画面には触れない */
+import { OMEN_STEP_MS, isWinLike, planOmen, omenWaitMs, nextChain, chainTier, chainLabel, chainBadge } from "./yuworld-fx.js?v=20261025-fx1";
 
 /* 6台（料金・特別役は worker.js の SLOT_MACHINES と同じ。表示用の名前・説明・絵文字・豪華さ(tier)を足す）。assetMin＝遊ぶのに必要な総資産（worker.js の SLOT_ASSET_MIN と同じ。確かめるのはサーバー） */
 const MACHINES = [
@@ -67,6 +69,7 @@ const state = {
   spinning: false, auto: false, busy: false,
   reels: [null, null, null], target: null, stopped: [false, false, false],
   reaching: false, awaitingFever: false, autoDriven: false,
+  chain: 0, spinFever: false, confirmShown: false,
   soundOn: lsGet(LS_SOUND) !== "off",
   fxLevel: lsGet(LS_FX) === "low" ? "low" : "high",
   scale: (() => { const v = lsGet(LS_SCALE); if (v === null || v === "fit") return "fit"; const n = parseFloat(v); return isFinite(n) ? n : "fit"; })(),
@@ -311,7 +314,7 @@ async function seat(machineId) {
     state.machine = MACHINE_BY_ID[machineId];
     state.balance = Number(r.balance || r.startCoins || 0);
     state.freeSpins = Number(r.freeSpins || 0);
-    state.stats = { spins: 0, wins: 0, streak: 0 };
+    state.stats = { spins: 0, wins: 0, streak: 0 }; state.chain = 0;
     state.feverUntil = 0; state.auto = false; state.spinning = false;
     state.reaching = false; state.awaitingFever = false;
     state.reels = [null, null, null]; state.target = null; state.stopped = [false, false, false];
@@ -354,6 +357,8 @@ function renderGame() {
             <div class="yw-balance">💰 <span id="ywBalance">${state.balance.toLocaleString()}</span></div>
           </div>
           <div class="yw-fever-banner" id="ywFever">🌈 FEVER 🌈</div>
+          <div class="yw-step" id="ywStep" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+          <div class="yw-chain" id="ywChain"></div>
           <div class="yw-reels" id="ywReels">
             ${[0, 1, 2].map((i) => `<div class="yw-reel" id="ywReel${i}"><div class="yw-cell top" id="ywT${i}"></div><div class="yw-cell center" id="ywC${i}"></div><div class="yw-cell bot" id="ywB${i}"></div></div>`).join("")}
             <div class="yw-payline"></div>
@@ -419,6 +424,7 @@ function resetReelFx() {
   for (let i = 0; i < 3; i++) { const r = $("#ywReel" + i); if (r) r.classList.remove("yw-reach", "yw-reach-strong", "yw-specialhit"); const c = $("#ywC" + i); if (c) c.classList.remove("yw-hit"); }
   const reels = $("#ywReels"); if (reels) reels.classList.remove("yw-reach-dim", "yw-zoomfx", "yw-win");
   rootEl && rootEl.querySelectorAll(".yw-bigtext").forEach((e) => e.remove());
+  clearOmen();
 }
 
 function canAfford() { return state.freeSpins > 0 || state.balance >= state.machine.price; }
@@ -441,8 +447,12 @@ async function startSpin(autoDriven) {
   state.target = spin.center; state.stopped = [false, false, false]; state.busy = false;
   for (let i = 0; i < 3; i++) { const b = $("#ywStop" + i); if (b) b.disabled = false; }
   state.pendingSpin = spin;
+  state.spinFever = isFever(); state.confirmShown = false;
   sfxSpinStart();
-  if (state.auto) scheduleAutoStops();
+  // 前兆・ステップアップ（結果はもう決まっている。見た目だけ。自動回転のときは、予告を見せてからリールを止める）
+  const omen = reduced() ? null : planOmen(spin, { fever: state.spinFever });
+  const omenMs = omen ? runOmen(omen) : 0;
+  if (state.auto) scheduleAutoStops(omenMs);
 }
 function handleSpinError(e) {
   if (e.code === "no_funds") { showMsg("コインが足りません。", "warn"); stopAuto(); setSpinEnabled(true); return; }
@@ -460,7 +470,7 @@ function startReelAnimation() {
   state.reelAnim = setInterval(() => { for (let i = 0; i < 3; i++) if (!state.stopped[i]) { setCell(i, randSym()); setNeighbors(i); } }, interval);
 }
 function stopReelAnimation() { if (state.reelAnim) { clearInterval(state.reelAnim); state.reelAnim = null; } }
-function scheduleAutoStops() { const k = AUTO_TIME; [0, 1, 2].forEach((i) => setTimeout(() => stopReel(i), Math.round((350 + i * 300) * k))); }
+function scheduleAutoStops(extraMs = 0) { const k = AUTO_TIME; [0, 1, 2].forEach((i) => setTimeout(() => stopReel(i), Math.round((350 + i * 300) * k) + extraMs)); }
 
 function stopReel(i) {
   if (!state.spinning || state.stopped[i] || !state.target || state.reaching) return;
@@ -484,7 +494,7 @@ function runReachReveal(i, strong, pairSym) {
   const rdc = reduced();
   // この強リーチが本物の大当たり（3つとも特別絵柄）で確定か。確定のときだけ、たまに（約1/3）確定カットインを出す
   const winSpecial = strong && state.target && state.target.every((s) => s === pairSym);
-  const showConfirm = winSpecial && !rdc && Math.random() < 0.35;
+  const showConfirm = winSpecial && !rdc && !state.confirmShown && Math.random() < 0.35;
   const base = strong ? (showConfirm ? 2100 : 1500) : (fxHigh() ? 380 : 240);
   const dur = rdc ? (strong ? 450 : 160) : base;
   const slowMs = strong ? (rdc ? 150 : 190) : 90;
@@ -524,6 +534,7 @@ function finalizeStop(i) {
 
 function finishSpin() {
   stopReelAnimation();
+  finishOmen();
   state.spinning = false; state.reaching = false;
   const spin = state.pendingSpin; state.pendingSpin = null;
   if (!spin) { setSpinEnabled(true); return; }
@@ -533,6 +544,7 @@ function finishSpin() {
   animateBalance(state.balance, spin.balance);
   state.balance = spin.balance;
   updateStats(); updateFreeLabel();
+  applyChain(spin);
 
   if (spin.feverPending) {
     // 特別役の当たり。自動を止めて余韻を楽しみ、自分で FEVER を開始する
@@ -698,6 +710,64 @@ function animateBalance(from, to) {
 }
 function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 
+
+/* ---------- 前兆・ステップアップ・連チャン（見た目だけ。結果は変えない。何を出すかの判断は yuworld-fx.js） ---------- */
+let omenTimers = [];
+function omenAt(ms, fn) { omenTimers.push(setTimeout(fn, ms)); }
+function clearLamps() { rootEl && rootEl.querySelectorAll("#ywStep i").forEach((l) => { l.className = ""; }); }
+function clearOmen() {
+  omenTimers.forEach(clearTimeout); omenTimers = [];
+  const reels = $("#ywReels"); if (reels) reels.classList.remove("yw-omen-1", "yw-omen-2", "yw-omen-3");
+  clearLamps();
+}
+/* リールが全部止まったら、予告の続きはやめる（点いたランプだけ、少し残す） */
+function finishOmen() {
+  omenTimers.forEach(clearTimeout); omenTimers = [];
+  const reels = $("#ywReels"); if (reels) reels.classList.remove("yw-omen-1", "yw-omen-2", "yw-omen-3");
+  omenAt(1500, clearLamps);
+}
+/* 予告を始める。自動回転がリールを止めはじめるまでに待つ時間（ms）を返す */
+function runOmen(omen) {
+  const reels = $("#ywReels"); if (!reels) return 0;
+  if (omen.type === "rumble") {
+    reels.classList.add("yw-omen-" + omen.level);
+    sfxOmenRumble(omen.level);
+    if (omen.level >= 2) showBigText(omen.level === 3 ? "チャンス!!" : "ゴゴゴ…", true);
+    if (omen.level === 2) screenShake();
+    if (omen.level === 3) { burstSparkles(reels, fxHigh() ? 10 : 5, "big"); screenFlash(500, "win"); }
+  } else {
+    // ステップアップ：青 → 緑 → 赤 → 金。金まで行ったら大当たり確定（本物の大当たりのときだけ金まで行く）
+    for (let k = 0; k <= omen.level; k++) {
+      omenAt(k * OMEN_STEP_MS, () => {
+        const lamp = rootEl && rootEl.querySelectorAll("#ywStep i")[k]; if (!lamp) return;
+        lamp.className = "on" + (k + 1);
+        sfxStepLamp(k);
+        if (k === 3) { state.confirmShown = true; confirmCutin(); burstSparkles($("#ywReels"), fxHigh() ? 12 : 6, "big"); }
+      });
+    }
+  }
+  return omenWaitMs(omen);
+}
+/* 連チャン：数を更新して、2連以上なら表示・音・演出（当たりの音と重ならないよう、少しあとに出す） */
+function applyChain(spin) {
+  state.chain = nextChain(state.chain, spin, state.spinFever);
+  const badge = $("#ywChain");
+  if (badge) { badge.textContent = chainBadge(state.chain); badge.className = "yw-chain" + (state.chain >= 2 ? " t" + chainTier(state.chain) : ""); }
+  if (state.chain < 2 || state.spinFever || !isWinLike(spin)) return;   // 数が増えた回だけ演出する（REPLAY などの回は、バッジだけ残す）
+  const n = state.chain;
+  setTimeout(() => {
+    if (state.screen !== "game") return;
+    showBigText(chainLabel(n), true);
+    sfxChain(n);
+    if (reduced()) return;
+    const t = chainTier(n), reels = $("#ywReels");
+    burstSparkles(reels, 6 + t * 4, t >= 3 ? "fever" : "big");
+    if (t >= 2) coinRain(6 + t * 4);
+    if (t === 2 && fxHigh()) confetti(12);
+    if (t >= 3) { confetti(24); screenFlash(900, "win"); screenShake(); }
+  }, spin.feverPending ? 800 : 350);
+}
+
 /* ---------- キラキラ演出（CSS・JavaScriptだけ。Firebase通信は増やさない。演出強弱・reduced-motion を尊重） ---------- */
 function burstSparkles(container, n, kind) {
   if (!container || reduced()) return;
@@ -857,6 +927,13 @@ function sfxTreasure() { playSeq([[500, 0.1], [700, 0.12], [950, 0.16], [1200, 0
 function sfxSpecial() { const t = state.machine.tier; const notes = [[523, 0.12], [659, 0.12], [784, 0.14], [1047, 0.24]]; if (t >= 3) notes.push([1319, 0.24]); if (t >= 5) notes.push([1568, 0.3]); playSeq(notes, tierVol(0.037), "square", 0.12); }
 function sfxFever() { playSeq([[392, 0.12], [523, 0.12], [659, 0.14], [784, 0.16], [988, 0.18], [1175, 0.3]], tierVol(0.042), "square", 0.1); }
 function sfxConfirm() { playSeq([[523, 0.1], [784, 0.1], [1047, 0.12], [1319, 0.14], [1568, 0.34]], tierVol(0.045), "square", 0.13); }
+function sfxOmenRumble(level) {
+  if (level >= 3) playSeq([[330, 0.1], [440, 0.1], [554, 0.1], [659, 0.2]], tierVol(0.03), "square", 0.09);
+  else if (level === 2) playSeq([[98, 0.25], [98, 0.25], [110, 0.3]], tierVol(0.03), "sawtooth", 0.22);
+  else playTone([110, 0.4], tierVol(0.02), "sawtooth");
+}
+function sfxStepLamp(k) { playTone([520 + k * 170, 0.1], tierVol(0.022), "square"); }
+function sfxChain(n) { const notes = Array.from({ length: Math.min(n, 6) }, (_, k) => [660 + k * 110, 0.1]); if (n >= 5) notes.push([1568, 0.3]); playSeq(notes, tierVol(0.03), n >= 5 ? "square" : "triangle", 0.07); }
 function sfxReachTick1() { playTone([620, 0.08], 0.02, "square"); }
 function sfxSpecialTease(level) { playTone([700 + level * 160, 0.12], 0.024 + level * 0.006, "square"); }
 function sfxReachTicks(durMs) { const t = state.machine.tier, beats = Math.max(4, Math.floor(durMs / 230)); for (let k = 0; k < beats; k++) playTone([480 + k * 75, 0.09], 0.02 + t * 0.001, "square", k * (durMs / 1000 / beats)); }
@@ -1008,6 +1085,24 @@ function injectStyles() {
   @keyframes yw-coinfly { 0%{transform:translateY(40px) scale(.6) rotate(0);opacity:0} 12%{opacity:1} 70%{opacity:1} 100%{transform:translateY(-170px) scale(1.1) rotate(380deg);opacity:0} }
   .yw-confetti { position: absolute; top: -12px; width: 9px; height: 14px; pointer-events: none; z-index: 6; border-radius: 2px; animation: yw-confetti 1.7s linear forwards; }
   @keyframes yw-confetti { 0%{transform:translateY(-10px) rotate(0);opacity:0} 10%{opacity:1} 100%{transform:translateY(340px) rotate(720deg);opacity:0} }
+  /* ステップアップのランプ（青→緑→赤→金）と、連チャンの表示・前兆の枠の光（見た目だけ） */
+  .yw-step { display: flex; justify-content: center; gap: 8px; height: 10px; margin-bottom: 8px; }
+  .yw-step i { width: 34px; height: 10px; border-radius: 6px; background: #2a2a3a; box-shadow: inset 0 0 0 1px rgba(255,255,255,.12); transition: background .12s, box-shadow .12s; }
+  .yw-step i.on1 { background: #2d8cff; box-shadow: 0 0 10px 2px #2d8cff; }
+  .yw-step i.on2 { background: #22d36b; box-shadow: 0 0 10px 2px #22d36b; }
+  .yw-step i.on3 { background: #ff3b3b; box-shadow: 0 0 12px 3px #ff3b3b; }
+  .yw-step i.on4 { background: #ffd24a; box-shadow: 0 0 16px 5px #ffd24a; }
+  .yw-chain { text-align: center; font-weight: 900; letter-spacing: 1px; font-size: 14px; color: #ffe14a; text-shadow: 0 0 8px #ff8a00; }
+  .yw-chain:not(:empty) { margin-bottom: 6px; animation: yw-chainpop .35s ease; }
+  .yw-chain.t2 { font-size: 16px; color: #fff3a0; text-shadow: 0 0 10px #ff8a00, 0 0 18px #ff2d78; }
+  .yw-chain.t3 { font-size: 18px; color: #fff; text-shadow: 0 0 10px #ff2d78, 0 0 22px #ffe14a; }
+  @keyframes yw-chainpop { 0%{transform:scale(.6);opacity:0} 60%{transform:scale(1.2)} 100%{transform:scale(1);opacity:1} }
+  .yw-reels.yw-omen-1 { animation: yw-omen1 .7s ease-in-out infinite alternate; }
+  .yw-reels.yw-omen-2 { animation: yw-omen2 .3s ease-in-out infinite alternate; }
+  .yw-reels.yw-omen-3 { animation: yw-omen3 .16s ease-in-out infinite alternate; }
+  @keyframes yw-omen1 { from{box-shadow:inset 0 0 0 3px #2d8cff, 0 0 12px 1px #2d8cff} to{box-shadow:inset 0 0 0 3px #7fc0ff, 0 0 30px 8px #2d8cff} }
+  @keyframes yw-omen2 { from{box-shadow:inset 0 0 0 3px #ff3b3b, 0 0 14px 2px #ff3b3b} to{box-shadow:inset 0 0 0 4px #ff9a9a, 0 0 38px 10px #ff3b3b} }
+  @keyframes yw-omen3 { from{box-shadow:inset 0 0 0 4px #ffd24a, 0 0 18px 4px #ffd24a} to{box-shadow:inset 0 0 0 5px #fff, 0 0 48px 14px #ffd24a} }
   .yw-bigtext { position: absolute; left: 0; right: 0; top: 38%; text-align: center; pointer-events: none; z-index: 7; font-weight: 900; font-size: 42px; letter-spacing: 1px;
     background: linear-gradient(90deg,#ffe14a,#ff8a00,#ff1d6c,#b14cff,#00c2ff,#ffe14a); background-size: 300% 100%; -webkit-background-clip: text; background-clip: text; color: transparent;
     -webkit-text-stroke: 2px rgba(0,0,0,.35); filter: drop-shadow(0 3px 6px rgba(0,0,0,.5)); animation: yw-bigtext .9s cubic-bezier(.2,1.4,.4,1) forwards, yw-rainbow 1.2s linear infinite; }
@@ -1058,7 +1153,7 @@ function injectStyles() {
   @keyframes yw-cutintext { 0%{transform:scale(.2) rotate(-12deg);opacity:0} 25%{transform:scale(1.3) rotate(4deg);opacity:1} 45%{transform:scale(1) rotate(-2deg)} 80%{transform:scale(1.05) rotate(1deg);opacity:1} 100%{transform:scale(1);opacity:0} }
   @media (prefers-reduced-motion: reduce) {
     .yw-game.is-fever, .yw-feverstart { animation: none; }
-    .yw-bounce, .yw-reels.yw-win, .yw-reel.yw-reach, .yw-reel.yw-reach-strong, .yw-game.yw-celebrate, .yw-game.yw-shake, .yw-spark, .yw-coin, .yw-reels.yw-zoomfx { animation: none; transform: none; }
+    .yw-bounce, .yw-reels.yw-win, .yw-reel.yw-reach, .yw-reel.yw-reach-strong, .yw-game.yw-celebrate, .yw-game.yw-shake, .yw-spark, .yw-coin, .yw-reels.yw-zoomfx, .yw-reels.yw-omen-1, .yw-reels.yw-omen-2, .yw-reels.yw-omen-3, .yw-chain { animation: none; transform: none; }
     #yw-screen-fx { display: none; }
   }
   `;

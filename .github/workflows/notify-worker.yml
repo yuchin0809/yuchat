@@ -23,6 +23,8 @@ on:
     paths:
       - "notify-worker/**"
       - "yuu-theft.js"
+      - "yuworld.js"
+      - "yuworld-fx.js"
       - ".github/notify-worker/**"
       - ".github/workflows/notify-worker.yml"
   push:

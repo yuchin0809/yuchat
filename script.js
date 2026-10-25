@@ -42,7 +42,7 @@ import {
 /* 🎡 ゆうワールド（ゆうスロなどのお店）。残高・抽選・公開・営業時間の判定はすべて Worker 任せ（Firebase には触らない） */
 import {
   initYuWorld, openYuWorldView, stopYuWorldView
-} from "./yuworld.js?v=20261024-yuworld48";
+} from "./yuworld.js?v=20261025-yuworld49";
 import { initYuMart, openYuMartView, stopYuMartView } from "./yumart.js?v=20261024-mart9";
 import { renderYachtRoom } from "./yuyacht.js?v=20261023-yacht5";
 import { renderKeshiRoom } from "./yukeshi-room.js?v=20261024-mart9";
