@@ -6613,3 +6613,12 @@ button.secondary {
     from { transform: scale(.6); opacity: 0; }
     to { transform: scale(1); opacity: 1; }
 }
+
+.guard-soon {
+    padding: 8px 10px;
+
+    border-radius: 10px;
+
+    background: #fff3d6;
+    color: #7a4a00;
+}

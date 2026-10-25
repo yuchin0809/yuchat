@@ -1810,7 +1810,8 @@ async function econSyncNameClaim(deps, uid, name) {
    ・users.guards.{その週の月曜の日付} = { lv, paid }。古い週は、買うときに消す。users.theftPush = true のとき、被害・撃退をプッシュ通知（初めは未設定＝切）。
    ・表（名前・割合・最低額）は yuu-theft.js と同じにすること（同じであることは notify-worker/test/theft.test.mjs が確かめる）。
 ========================================================= */
-export const THEFT_GUARD_TABLE = [null, { rate: 0.005, min: 30 }, { rate: 0.012, min: 80 }, { rate: 0.025, min: 200 }, { rate: 0.04, min: 400 }, { rate: 0.06, min: 700 }];
+export const THEFT_GUARD_TABLE = [null, { rate: 0.008, min: 60 }, { rate: 0.02, min: 150 }, { rate: 0.04, min: 350 }, { rate: 0.07, min: 700 }, { rate: 0.10, min: 1200 }];
+export const THEFT_GUARD_SALE_START_MS = Date.UTC(2026, 9, 25, 15, 0, 0);   // 防犯グッズは、2026-10-26（月）0:00 JST から買える（yuu-theft.js と同じ）
 export function theftGuardPrice(lv, total) {
   const g = THEFT_GUARD_TABLE[lv];
   return g ? Math.max(g.min, Math.round(Math.max(0, Number(total) || 0) * g.rate)) : 0;
@@ -1823,6 +1824,7 @@ async function econGuardBuy(deps, uid, name, body) {
   const lv = Number(body?.lv);
   if (!Number.isInteger(lv) || lv < 1 || lv > 5) return econError(400, "invalid_lv");
   const which = body?.which === "next" ? "next" : "this";
+  if (deps.now() < THEFT_GUARD_SALE_START_MS) return econError(409, "NOT_YET");   // 売り出し前
   const prices = marketPricesOf(await deps.firestore.get("market/current"));
   return runMyUserChange(deps, uid, name, ({ data, now }) => {
     const today = jstDateString(now), thisWeek = theftWeekStart(today);

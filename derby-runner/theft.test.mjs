@@ -24,7 +24,7 @@ test("表と計算：週の平均回数・一気に増えた判定・週の月�
   assert.equal(isSurge(20000, 10000), true); assert.equal(isSurge(20000, 15000), false, "+5,000 でも 1.5倍に届かない");
   assert.equal(isSurge(7000, 5000), false, "1.4倍・+2,000 は、まだ"); assert.equal(isSurge(20000, undefined), false);
   assert.equal(weekStartOf("2026-10-26"), "2026-10-26"); assert.equal(weekStartOf("2026-10-25"), "2026-10-19", "日曜は、その週の月曜から"); assert.equal(weekStartOf("2026-10-29"), "2026-10-26");
-  assert.equal(guardPriceOf(1, 20000), 100); assert.equal(guardPriceOf(3, 20000), 500); assert.equal(guardPriceOf(5, 20000), 1200); assert.equal(guardPriceOf(1, 100), 30, "最低額");
+  assert.equal(guardPriceOf(1, 20000), 160); assert.equal(guardPriceOf(3, 20000), 800); assert.equal(guardPriceOf(5, 20000), 2000); assert.equal(guardPriceOf(1, 100), 60, "最低額");
 });
 
 test("総資産15,000未満には、何日たっても来ない。秘密の値がないときも来ない", () => {
@@ -80,14 +80,15 @@ test("取られる順番：手持ち → 預金 → 株（時価で売った扱�
   assert.equal(big.taken, 10, "取れる分だけ");
 });
 
-test("被害：総資産の2〜6%（防犯なし）。手持ちが多ければスリ、預金に及べば銀行強盗、株に及べば株券泥棒。記録（theft.last）が残る", () => {
+test("被害：総資産の5〜15%（防犯なし）。手持ちが多ければスリ、預金に及べば銀行強盗、株に及べば株券泥棒。記録（theft.last）が残る", () => {
   let hits = 0;
   for (let i = 0; i < 3000 && hits < 40; i++) {
     const d = user({ coins: 20000, bank: { deposit: 0, interestBase: 0, loan: 0 } }), s = step(d, day(i), { secret: "k" });
     if (!s.r?.theft || s.r.theft.repelled) continue;
     hits++;
     const afterTax = 20000 - yuuTaxOf(20000), lost = s.r.theft.lost;   // ゆう税を引いたあとの総資産が基準
-    assert.ok(lost >= Math.floor(afterTax * 0.02) && lost <= Math.floor(afterTax * 0.06), `被害 ${lost}`);
+    assert.ok(lost >= Math.floor(afterTax * 0.05) && lost <= Math.floor(afterTax * 0.15), `被害 ${lost}`);
+    assert.ok(Array.from({ length: 11 }, (_, k) => Math.floor((afterTax * (5 + k)) / 100)).includes(lost), "5〜15% の整数のパーセントのどれか");
     assert.equal(s.data.coins, afterTax - lost); assert.equal(s.r.theft.kind.id, "pickpocket");
     assert.deepEqual([s.data.theft.last.date, s.data.theft.last.lost, s.data.theft.last.fromCoins, s.data.theft.last.repelled], [day(i), lost, lost, false]);
     assert.equal(s.data.theft.n, 1); assert.equal(s.data.theft.week, weekStartOf(day(i)));
@@ -103,6 +104,21 @@ test("被害：総資産の2〜6%（防犯なし）。手持ちが多ければ�
     assert.equal(s.data.bank.deposit >= 0 && s.data.bank.interestBase === s.data.bank.deposit, true);
   }
   assert.ok(stock >= 5, "手持ち・預金で足りないときは、株から");
+});
+
+test("被害の割合は、5〜15% の整数のパーセントが、どれも同じ確率（11通り）。上限10,000", () => {
+  const counts = new Array(11).fill(0); let hits = 0;
+  for (let i = 0; hits < 3000 && i < 200000; i++) {
+    const d = user({ uid: `u${i % 997}`, coins: 20000 }), s = step(d, day(Math.floor(i / 997)), { secret: "k" });
+    if (!s.r?.theft || s.r.theft.repelled) continue;
+    const afterTax = 20000 - yuuTaxOf(20000), pct = Math.round((s.r.theft.lost / afterTax) * 100);
+    counts[pct - 5]++; hits++;
+  }
+  assert.ok(hits >= 3000);
+  counts.forEach((c, k) => assert.ok(c / hits > 0.06 && c / hits < 0.125, `${5 + k}% が ${(100 * c / hits).toFixed(1)}%（期待 約9.1%）`));
+  const rich = step(user({ coins: 900000 }), day(0), { secret: "k" });
+  for (let i = 0; i < 4000; i++) { const s = step(user({ coins: 900000 }), day(i), { secret: "k" }); if (s.r?.theft && !s.r.theft.repelled) { assert.equal(s.r.theft.lost, 10000, "上限"); break; } }
+  assert.ok(rich);
 });
 
 test("借入は取られない（総資産は借入を引いた額で決まる）。借入で総資産が15,000未満なら来ない", () => {

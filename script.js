@@ -17,14 +17,14 @@ import {
   getHorseColors,
   RACE_SHOW_MAX_SECONDS,
   RACE_FINAL_SECONDS
-} from "./derby-show.js?v=20261025-theft1";
+} from "./derby-show.js?v=20261025-theft2";
 
 /* ゆうダービーの自分の馬券に合わせた演出・音（見せるだけ。結果・払い戻しは決めない） */
-import { betTrack, describeMiss, myMoves, totalPayout } from "./derby-extra.js?v=20261025-theft1";
-import { createRaceSound } from "./derby-sound.js?v=20261025-theft1";
+import { betTrack, describeMiss, myMoves, totalPayout } from "./derby-extra.js?v=20261025-theft2";
+import { createRaceSound } from "./derby-sound.js?v=20261025-theft2";
 
 /* 🥷 スリと防犯グッズ（毎日13:00の処理と同じ表。見せるだけ・買うのは Worker） */
-import { THEFT_MIN_TOTAL, THEFT_GUARDS, guardPriceOf, weekStartOf, nextWeekStartOf } from "./yuu-theft.js?v=20261025-theft1";
+import { THEFT_MIN_TOTAL, THEFT_GUARDS, THEFT_GUARD_SALE_START_MS, guardPriceOf, weekStartOf, nextWeekStartOf } from "./yuu-theft.js?v=20261025-theft2";
 
 /* ゆうダービーの固定オッズ（derby-runner と同じ計算） */
 import {
@@ -9808,6 +9808,7 @@ const ECONOMY_ERROR_MESSAGES = {
   NO_LOAN: "借入はありません。",
   NOT_LOGGED_IN: "ログインしてください。",
   TOO_EARLY: "来週の分は、金曜日から買えます。",
+  NOT_YET: "防犯グッズは、10/26（月）から買えます。",
   ALREADY_HAVE: "その週は、同じかもっと強い防犯グッズをすでに持っています。"
 };
 
@@ -10063,13 +10064,14 @@ function renderGuardCard(data, assets, now) {
   const owned = (w) => Math.max(0, Math.floor(Number(guards[w]?.lv) || 0));
   const haveThis = owned(thisWeek), haveNext = owned(nextWeek), have = guardWhich === "next" ? haveNext : haveThis;
   const paid = Math.max(0, Math.floor(Number(guards[week]?.paid) || 0));
+  const beforeSale = now.getTime() < THEFT_GUARD_SALE_START_MS;   // 売り出し前（10/26 から）
   const disabled = economyBusy ? "disabled" : "";
   const label = (lv) => (lv > 0 ? `${THEFT_GUARDS[lv].emoji} ${THEFT_GUARDS[lv].name}` : "なし");
   const stars = (lv) => "★".repeat(lv) + "☆".repeat(5 - lv);
   const rows = THEFT_GUARDS.slice(1).map((g) => {
     const price = guardPriceOf(g.lv, assets.total), pay = Math.max(0, price - paid);
     const state = have >= g.lv ? `<span class="guard-own">${have === g.lv ? "✅ 持っている" : "✅ 含まれる"}</span>`
-      : `<button type="button" class="econ-button ${assets.coins >= pay ? "primary" : ""}" data-guard-buy="${g.lv}" ${disabled} ${assets.coins >= pay ? "" : "disabled"}>🪙 ${formatCoins(pay)}${paid > 0 && have > 0 ? "（差額）" : ""} で買う</button>`;
+      : `<button type="button" class="econ-button ${assets.coins >= pay && !beforeSale ? "primary" : ""}" data-guard-buy="${g.lv}" ${disabled} ${assets.coins >= pay && !beforeSale ? "" : "disabled"}>🪙 ${formatCoins(pay)}${paid > 0 && have > 0 ? "（差額）" : ""} で買う</button>`;
     return `<div class="guard-row"><div class="guard-name"><b>${g.emoji} ${escapeHTML(g.name)}</b><small>防御力 ${stars(g.lv)}</small></div>${state}</div>`;
   }).join("");
   const last = data.theft?.last;
@@ -10079,6 +10081,7 @@ function renderGuardCard(data, assets, now) {
       <h3>🥷 スリ対策 <small>（毎週買い直し）</small></h3>
       <p class="econ-note">総資産が ${formatCoins(THEFT_MIN_TOTAL)} コイン以上の人のところに、ときどきスリ・銀行強盗・株券泥棒が来ます（毎日13:00）。総資産が多い人・最近急に増えた人ほど、よく来ます。盗まれるのは、手持ち → 預金 → 株の順で、盗まれたものは戻りません。防犯グッズを買うと、泥棒を追い払いやすくなり、盗まれる額も減ります。</p>
       ${assets.total >= THEFT_MIN_TOTAL ? `<p class="econ-note"><b>あなたの総資産は対象です。</b></p>` : `<p class="econ-note">いまの総資産は ${formatCoins(assets.total)} コインなので、まだ対象ではありません。</p>`}
+      ${beforeSale ? `<p class="econ-note guard-soon"><b>🛒 防犯グッズは、${mdLabel(new Date(THEFT_GUARD_SALE_START_MS + 9 * 3600000).toISOString().slice(0, 10))}（月）から買えます。</b></p>` : ""}
       <div class="guard-status">
         <div>今週（${mdLabel(thisWeek)}〜${mdLabel(addDaysText(thisWeek, 6))}）：<b>${label(haveThis)}</b></div>
         <div>来週（${mdLabel(nextWeek)}〜）：<b>${label(haveNext)}</b>${canNext ? "" : "<small>（金曜から買えます）</small>"}</div>
