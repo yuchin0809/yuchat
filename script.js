@@ -15,16 +15,14 @@ import {
   buildRaceShow,
   createRaceStage,
   getHorseColors,
-  RACE_SHOW_MAX_SECONDS,
-  RACE_FINAL_SECONDS
-} from "./derby-show.js?v=20261025-theft4";
+  RACE_SHOW_MAX_SECONDS
+} from "./derby-show.js?v=20261025-nosound5";
 
-/* ゆうダービーの自分の馬券に合わせた演出・音（見せるだけ。結果・払い戻しは決めない） */
-import { betTrack, describeMiss, myMoves, totalPayout } from "./derby-extra.js?v=20261025-theft4";
-import { createRaceSound } from "./derby-sound.js?v=20261025-theft4";
+/* ゆうダービーの自分の馬券に合わせた演出（見せるだけ。結果・払い戻しは決めない） */
+import { betTrack, describeMiss, myMoves, totalPayout } from "./derby-extra.js?v=20261025-nosound5";
 
 /* 🥷 スリと防犯グッズ（Worker と同じ表。見せるだけ・買うのは Worker） */
-import { THEFT_MIN_TOTAL, THEFT_GUARDS, THEFT_GUARD_SALE_START_MS, guardPriceOf, weekStartOf, nextWeekStartOf } from "./yuu-theft.js?v=20261025-theft4";
+import { THEFT_MIN_TOTAL, THEFT_GUARDS, THEFT_GUARD_SALE_START_MS, guardPriceOf, weekStartOf, nextWeekStartOf } from "./yuu-theft.js?v=20261025-nosound5";
 
 /* ゆうダービーの固定オッズ（derby-runner と同じ計算） */
 import {
@@ -5130,7 +5128,6 @@ let derbyReplay = null;
 let recentRacesCache = [];
 let revealedLiveRaceId = null;
 const raceStageOverlayCache = {};
-const raceSound = createRaceSound();
 /* 演出の途中の状態（レースごとに作り直す）：音の合図を出したか・自分の馬の順位・自分の馬への一言 */
 let raceFx = { key: "", cues: new Set(), prevRanks: null, myText: "", myUntil: 0, moveKeys: new Map(), missTimer: null };
 const stageHitBuffer = new Map();   // raceId → 的中した馬券（まとめて1回の演出にする）
@@ -5188,18 +5185,12 @@ function ensureRaceStage() {
   raceTrack.insertAdjacentHTML("beforeend", `
     <div id="raceStageBadge" class="race-stage-badge"></div>
     <div id="raceStageTop3" class="race-stage-top3"></div>
-    <button id="raceSoundBtn" class="race-sound-btn" type="button" aria-label="レースの音を入／切"></button>
     <div id="raceStageCallout" class="race-callout hidden" aria-live="polite"></div>
     <div id="raceMyCallout" class="race-my-callout hidden" aria-live="polite"></div>
     <div id="raceMyBets" class="race-my-bets hidden"></div>
     <div id="raceSubtitle" class="race-subtitle hidden" aria-live="polite"></div>
     <div id="raceHitOverlay" class="race-hit-overlay hidden"></div>
     <div id="raceReplayEnd" class="race-replay-end hidden"></div>`);
-  const soundBtn = document.getElementById("raceSoundBtn");
-  const paintSound = (on) => { if (soundBtn) { soundBtn.textContent = on ? "🔊" : "🔇"; soundBtn.title = on ? "音を切る" : "音を入れる"; soundBtn.classList.toggle("on", on); } };
-  paintSound(raceSound.enabled);
-  raceSound.onChange(paintSound);
-  soundBtn?.addEventListener("click", (event) => { event.stopPropagation(); raceSound.toggle(); });
   document.getElementById("raceHitOverlay")?.addEventListener("click", () => hideStageHit());
   startRaceStageLoop();
 }
@@ -5282,7 +5273,6 @@ function showStageHit(raceId, hits) {
   const total = totalPayout(hits);
   const lines = hits.slice(0, 5).map((h) => `<div class="rh-line"><span>${betLineHtml(h.bet)}</span><b>+${Number(h.payout).toLocaleString("ja-JP")}</b></div>`).join("") + (hits.length > 5 ? `<div class="rh-line"><span>ほか ${hits.length - 5} 件</span><b></b></div>` : "");
   setStageOverlay("raceHitOverlay", `<div class="rh-flash"></div>${confettiHtml()}<div class="rh-card rh-win"><div class="rh-title">🎯 的中！</div>${lines}<div class="rh-total">合計 <b id="rhCount">0</b> ゆうcoin</div><div class="rh-hint">タップで閉じる</div></div>`);
-  raceSound.cue("win");
   const countEl = document.getElementById("rhCount");
   const t0 = performance.now(), dur = 1400;
   const step = () => {
@@ -5304,24 +5294,16 @@ function showStageMiss(raceId, resultOrder) {
   const rows = bets.slice(0, 3).map((b) => ({ b, d: describeMiss(b, resultOrder) }));
   const close = rows.some((r) => r.d.close);
   setStageOverlay("raceHitOverlay", `<div class="rh-card rh-miss"><div class="rh-title">${close ? "😣 惜しい！" : "😢 残念…"}</div>${rows.map((r) => `<div class="rh-miss-row"><b>${betLineHtml(r.b)}</b><span>${escapeHTML(r.d.text)}</span></div>`).join("")}<div class="rh-hint">タップで閉じる　次のレースで取り返そう！</div></div>`);
-  raceSound.cue("lose");
   const marker = document.getElementById("raceHitOverlay")?.firstElementChild;
   setTimeout(() => { if (document.getElementById("raceHitOverlay")?.firstElementChild === marker) hideStageHit(); }, 6500);
 }
 
-/* ----- 自分の馬券に合わせた表示と、音の合図（ライブとリプレイで同じ） ----- */
+/* ----- 自分の馬券に合わせた表示（ライブとリプレイで同じ） ----- */
 
 function raceFxReset(key) {
   if (raceFx.key === key) return;
   clearTimeout(raceFx.missTimer);
   raceFx = { key, cues: new Set(), prevRanks: null, myText: "", myUntil: 0, moveKeys: new Map(), missTimer: null };
-}
-
-/* 合図は1回だけ。途中から見始めたときに、過ぎた合図が一度に鳴らないよう、すぐ前のものだけ鳴らす */
-function raceFxFire(id, name, nowT, atT) {
-  if (nowT < atT || raceFx.cues.has(id)) return;
-  raceFx.cues.add(id);
-  if (nowT - atT < 2.5) raceSound.cue(name);
 }
 
 function updateRaceExtras({ show, t, raceId, key, isReplay }) {
@@ -5371,16 +5353,6 @@ function updateRaceExtras({ show, t, raceId, key, isReplay }) {
   }
   setStageOverlay("raceMyCallout", escapeHTML(raceFx.myText), nowMs < raceFx.myUntil);
 
-  /* 音：合図（1回ずつ）と、観客・蹄（毎フレーム） */
-  const goal = show.finishTimes[show.resultOrder[0]];
-  raceFxFire("start", "start", t, 0);
-  raceFxFire("final", "final", t, RACE_FINAL_SECONDS);
-  raceFxFire("goal", "goal", t, goal);
-  if (show.photo) { raceFxFire("photo", "photo", t, show.photo.from); raceFxFire("photoResult", "photoResult", t, show.photo.resultAt); }
-  const running = t > 0 && t < show.endTime;
-  const crowd = t < 0 ? 0 : t < RACE_MAIN_SECONDS * 0.7 ? 0.25 : t < RACE_FINAL_SECONDS ? 0.5 : t < goal ? 0.8 : t < show.endTime ? 0.45 : 0.15;
-  raceSound.update({ crowd, hooves: running ? 0.35 + 0.65 * Math.min(1, t / RACE_FINAL_SECONDS) : 0 });
-
   /* ライブのレースが終わったら：的中は精算の返事が来たときに出す。ぜんぶ外れなら、少し待って「あと一歩」を出す */
   if (!isReplay && done && !raceFx.cues.has("miss-check")) {
     raceFx.cues.add("miss-check");
@@ -5391,7 +5363,7 @@ function updateRaceExtras({ show, t, raceId, key, isReplay }) {
   }
 }
 
-/* 画面が出ていないとき・発走前：演出の表示と音を止める */
+/* 画面が出ていないとき・発走前：演出の表示を止める */
 function clearRaceExtras() {
   setStageOverlay("raceStageCallout", "", false);
   setStageOverlay("raceMyBets", "", false);
@@ -5400,7 +5372,7 @@ function clearRaceExtras() {
 
 /* 毎フレーム：今の場面を描き、字幕・表示を更新する（ライブとリプレイで同じ仕組み） */
 function drawRaceStageFrame() {
-  if (!raceStage || !derbyView || !derbyView.classList.contains("active") || document.hidden) { raceSound.pause(); return; }
+  if (!raceStage || !derbyView || !derbyView.classList.contains("active") || document.hidden) return;
 
   if (derbyReplay) {
     const show = derbyReplay.show;
@@ -5412,7 +5384,7 @@ function drawRaceStageFrame() {
     const subtitle = t < 0 ? `まもなくスタート… ${Math.ceil(-t)}` : show.commentaryAt(t);
     setStageOverlay("raceSubtitle", escapeHTML(subtitle), !derbyReplay.ended);
     if (t >= 0 && !derbyReplay.ended) updateRaceExtras({ show, t, raceId: derbyReplay.raceId, key: `replay:${derbyReplay.raceId}:${derbyReplay.startedAt}`, isReplay: true });
-    else { clearRaceExtras(); raceSound.update({ crowd: 0, hooves: 0 }); }
+    else clearRaceExtras();
     if (!derbyReplay.ended && t >= show.revealTime + 1) finishDerbyReplay();
     return;
   }
@@ -5434,8 +5406,6 @@ function drawRaceStageFrame() {
     setStageOverlay("raceSubtitle", `まもなく発走です（あと${Math.max(0, Math.ceil(secondsToNext))}秒）`);
     clearRaceExtras();
     raceFxReset(`pre:${next.raceId}`);
-    if (secondsToNext <= 8 && secondsToNext > 0 && !raceFx.cues.has("fanfare")) { raceFx.cues.add("fanfare"); raceSound.cue("fanfare"); }   // 発走の直前のファンファーレ
-    raceSound.update({ crowd: secondsToNext <= 8 ? 0.1 : 0, hooves: 0 });
   } else if (!show) {
     /* 発走したが、結果（展開）がまだ届いていない数秒間 */
     raceStage.render({ show: null, t: 0, myHorses, snapCamera: raceStageSnapCamera });
@@ -5443,7 +5413,6 @@ function drawRaceStageFrame() {
     setStageOverlay("raceStageTop3", "", false);
     setStageOverlay("raceSubtitle", "ゲートオープン！");
     clearRaceExtras();
-    raceSound.update({ crowd: 0.1, hooves: 0 });
   } else if (elapsed < show.revealTime + 4) {
     /* 最後の馬のゴール →「レース終了」の字幕を少し見せてから、次のレースの案内に切り替える */
     raceStage.render({ show, t: elapsed, myHorses, snapCamera: raceStageSnapCamera });
@@ -5459,7 +5428,6 @@ function drawRaceStageFrame() {
     const dayLabel = next.dayId === formatRaceId(now) ? "本日" : "明日";
     setStageOverlay("raceSubtitle", `次のレースは${dayLabel} ${formatJstHourMinute(next.raceTime)} 発走`);
     clearRaceExtras();
-    raceSound.update({ crowd: 0, hooves: 0 });
   }
   raceStageSnapCamera = false;
 }
