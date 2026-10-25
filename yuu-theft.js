@@ -5,7 +5,7 @@
      防犯グッズの買い物のために、同じ表（THEFT_GUARDS・guardPriceOf・weekStartOf）を写してある（同じであることは notify-worker/test/theft.test.mjs が確かめる）。
    ・来るかどうかは、毎日13:00の処理が、秘密の値と日付とユーザーから決める（ずるい予想ができない）。結果は、users の theft・手持ち・預金・株に書く。
    ・総資産15,000コイン以上の人が対象。総資産が多いほど、また最近一気に増えた人ほど、来やすい。1週間（月〜日）に最大3回。
-   ・奪うのは、総資産の2〜6%。手持ちコイン → 預金 → 株（時価で売った扱い）の順に取る。借入は取られない。取られたものは消える（コインの総量が減る）。
+   ・奪うのは、総資産の 5〜15%（整数のパーセントを、どれも同じ確率で）。手持ちコイン → 預金 → 株（時価で売った扱い）の順に取る。借入は取られない。取られたものは消える（コインの総量が減る）。
    ・防犯グッズ（毎週買い直し・暦の週が対象）：来た泥棒を追い払う確率と、取られる額を減らす割合。
 ========================================================= */
 
@@ -13,16 +13,18 @@ export const THEFT_MIN_TOTAL = 15000;                     // この総資産か�
 export const THEFT_WEEK_MAX = 3;                          // 1週間（月〜日）に来る回数の上限（追い払った回も数える）
 export const THEFT_RATE_TABLE = [[15000, 1.0], [30000, 1.5], [60000, 2.0], [100000, 2.5], [200000, 3.0]];   // [総資産, 防犯なしの週の平均回数]
 export const THEFT_SURGE = { minGain: 3000, ratio: 1.5, extra: 0.7 };   // 先週の総資産から +3,000 以上かつ 1.5倍以上：週の平均回数に +0.7
-export const THEFT_DAMAGE = { lo: 0.02, hi: 0.06, cap: 10000 };       // 1回に取られる額：総資産の2〜6%（上限10,000）
+export const THEFT_DAMAGE = { minPct: 5, maxPct: 15, cap: 10000 };    // 1回に取られる額：総資産の 5〜15%（整数のパーセントを、どれも同じ確率で。上限10,000）
+/* 防犯グッズを買えるようになる時刻（2026-10-26（月）0:00 JST）。スリが始まった日が週の途中なので、キリのよい週のはじめから */
+export const THEFT_GUARD_SALE_START_MS = Date.UTC(2026, 9, 25, 15, 0, 0);
 
 /* 防犯グッズ。rate：1週間の値段＝総資産 × rate（最低 min）／repel：来た泥棒を追い払う確率／dmg：追い払えなかったときの被害を減らす割合 */
 export const THEFT_GUARDS = [
   null,
-  { lv: 1, name: "丈夫な鍵", emoji: "🔒", rate: 0.005, min: 30, repel: 0.2, dmg: 0 },
-  { lv: 2, name: "防犯ブザー", emoji: "📢", rate: 0.012, min: 80, repel: 0.4, dmg: 0 },
-  { lv: 3, name: "防犯カメラ", emoji: "📹", rate: 0.025, min: 200, repel: 0.6, dmg: 0.3 },
-  { lv: 4, name: "警備員", emoji: "💂", rate: 0.04, min: 400, repel: 0.75, dmg: 0.5 },
-  { lv: 5, name: "大金庫", emoji: "🏦", rate: 0.06, min: 700, repel: 0.9, dmg: 0.7 }
+  { lv: 1, name: "丈夫な鍵", emoji: "🔒", rate: 0.008, min: 60, repel: 0.2, dmg: 0 },
+  { lv: 2, name: "防犯ブザー", emoji: "📢", rate: 0.02, min: 150, repel: 0.4, dmg: 0 },
+  { lv: 3, name: "防犯カメラ", emoji: "📹", rate: 0.04, min: 350, repel: 0.6, dmg: 0.3 },
+  { lv: 4, name: "警備員", emoji: "💂", rate: 0.07, min: 700, repel: 0.75, dmg: 0.5 },
+  { lv: 5, name: "大金庫", emoji: "🏦", rate: 0.10, min: 1200, repel: 0.9, dmg: 0.7 }
 ];
 
 /* 1週間の値段（総資産に応じて、増える） */

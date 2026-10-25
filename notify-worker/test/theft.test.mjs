@@ -2,8 +2,8 @@
    実行：node --test "notify-worker/test/*.test.mjs" */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { handleEconomyAction, THEFT_GUARD_TABLE, theftGuardPrice, theftWeekStart } from "../worker.js";
-import { THEFT_GUARDS, guardPriceOf, weekStartOf } from "../../yuu-theft.js";
+import { handleEconomyAction, THEFT_GUARD_TABLE, THEFT_GUARD_SALE_START_MS, theftGuardPrice, theftWeekStart } from "../worker.js";
+import { THEFT_GUARDS, THEFT_GUARD_SALE_START_MS as SALE_START, guardPriceOf, weekStartOf } from "../../yuu-theft.js";
 
 console.warn = () => {};
 
@@ -71,7 +71,8 @@ function setup({ now = JST(2026, 10, 27, 12), coins = 20000, extra = {} } = {}) 
 }
 
 test("表：Worker の防犯グッズの値段・週の月曜は、yuu-theft.js（アプリ・毎日の処理）と同じ", () => {
-  assert.equal(THEFT_GUARD_TABLE.length, THEFT_GUARDS.length);
+  assert.equal(THEFT_GUARD_TABLE.length, THEFT_GUARDS.length); assert.equal(THEFT_GUARD_SALE_START_MS, SALE_START);
+  assert.equal(SALE_START, Date.UTC(2026, 9, 26, 0, 0) - 9 * 3600000, "2026-10-26（月）0:00 JST");
   for (let lv = 1; lv <= 5; lv++) {
     assert.deepEqual(THEFT_GUARD_TABLE[lv], { rate: THEFT_GUARDS[lv].rate, min: THEFT_GUARDS[lv].min });
     for (const total of [0, 100, 5000, 15000, 20958, 123456, 1e7]) assert.equal(theftGuardPrice(lv, total), guardPriceOf(lv, total), `lv${lv} ${total}`);
@@ -82,25 +83,25 @@ test("表：Worker の防犯グッズの値段・週の月曜は、yuu-theft.js�
 test("防犯グッズを買う：総資産に応じた値段のコインが引かれ、今週の分が付く（コインは消える）。上のレベルへは差額だけ", async () => {
   const t = setup();   // 10/27（火）・総資産20,000
   const r = await t.act({ action: "guardBuy", lv: 3 });
-  assert.equal(r.ok, true); assert.equal(r.price, 500); assert.equal(r.week, "2026-10-26"); assert.equal(r.lv, 3);
-  assert.equal(t.user().coins, 19500);
-  assert.deepEqual(t.user().guards, { "2026-10-26": { lv: 3, paid: 500 } });
+  assert.equal(r.ok, true); assert.equal(r.price, 800); assert.equal(r.week, "2026-10-26"); assert.equal(r.lv, 3);
+  assert.equal(t.user().coins, 19200);
+  assert.deepEqual(t.user().guards, { "2026-10-26": { lv: 3, paid: 800 } });
   assert.equal((await t.act({ action: "guardBuy", lv: 3 })).error, "ALREADY_HAVE");
   assert.equal((await t.act({ action: "guardBuy", lv: 2 })).error, "ALREADY_HAVE", "下のレベルは買えない");
-  const up = await t.act({ action: "guardBuy", lv: 5 });   // 総資産19,500 × 6% ＝ 1,170 から、払った500を引く
-  assert.equal(up.price, 670); assert.equal(t.user().coins, 18830);
-  assert.deepEqual(t.user().guards, { "2026-10-26": { lv: 5, paid: 1170 } });
+  const up = await t.act({ action: "guardBuy", lv: 5 });   // 総資産19,200 × 10% ＝ 1,920 から、払った800を引く
+  assert.equal(up.price, 1120); assert.equal(t.user().coins, 18080);
+  assert.deepEqual(t.user().guards, { "2026-10-26": { lv: 5, paid: 1920 } });
 });
 
 test("値段は、手持ち・預金・株を合わせた総資産（借入を引く）で決まる。コインが足りないと買えない。レベルの範囲外は不可", async () => {
-  const t = setup({ coins: 500, extra: { bank: { deposit: 9000, interestBase: 9000, loan: 0 }, stocks: { YEN: { qty: 20, cost: 5000 } } } });   // 総資産 500＋9,000＋5,600＝15,100
-  assert.equal((await t.act({ action: "guardBuy", lv: 5 })).error, "NOT_ENOUGH_COINS", "906 コイン必要（手持ちは500）");
+  const t = setup({ coins: 700, extra: { bank: { deposit: 9000, interestBase: 9000, loan: 0 }, stocks: { YEN: { qty: 20, cost: 5000 } } } });   // 総資産 500＋9,000＋5,600＝15,100
+  assert.equal((await t.act({ action: "guardBuy", lv: 5 })).error, "NOT_ENOUGH_COINS", "1,530 コイン必要（手持ちは700）");
   const ok = await t.act({ action: "guardBuy", lv: 3 });
-  assert.equal(ok.price, 378); assert.equal(t.user().coins, 122);
+  assert.equal(ok.price, 612); assert.equal(t.user().coins, 88);
   for (const lv of [0, 6, 1.5, "x", null]) assert.equal((await t.act({ action: "guardBuy", lv })).error, "invalid_lv");
   const loaned = setup({ coins: 20000, extra: { bank: { deposit: 0, interestBase: 0, loan: 10000 } } });
-  assert.equal((await loaned.act({ action: "guardBuy", lv: 5 })).price, 700, "借入を引いた総資産 10,000 × 6%＝600 だが、最低額は700");
-  assert.equal((await setup({ coins: 20000, extra: { bank: { deposit: 0, interestBase: 0, loan: 2000 } } }).act({ action: "guardBuy", lv: 4 })).price, 720, "18,000 × 4%");
+  assert.equal((await loaned.act({ action: "guardBuy", lv: 5 })).price, 1200, "借入を引いた総資産 10,000 × 10%＝1,000 だが、最低額は1,200");
+  assert.equal((await setup({ coins: 20000, extra: { bank: { deposit: 0, interestBase: 0, loan: 2000 } } }).act({ action: "guardBuy", lv: 4 })).price, 1260, "18,000 × 7%");
 });
 
 test("来週の分は、金曜から買える（それ以前は買えない）。今週の分と別々に持てる。過ぎた週の分は、買うときに消える", async () => {
@@ -123,4 +124,13 @@ test("スリの通知の入／切：初めは未設定（切）。本人が入�
   assert.equal((await t.act({ action: "theftPush", on: true })).theftPush, true); assert.equal(t.user().theftPush, true);
   assert.equal((await t.act({ action: "theftPush", on: false })).theftPush, false); assert.equal(t.user().theftPush, false);
   assert.equal((await t.act({ action: "theftPush", on: "yes" })).error, "invalid_request");
+});
+
+test("防犯グッズは、2026-10-26（月）0:00（日本時間）から買える。それより前は、だれも買えない", async () => {
+  const before = setup({ now: SALE_START - 60000 });   // 10/25（日）23:59
+  assert.equal((await before.act({ action: "guardBuy", lv: 1 })).error, "NOT_YET");
+  assert.equal(before.user().guards, undefined); assert.equal(before.user().coins, 20000);
+  const at = setup({ now: SALE_START });
+  assert.equal((await at.act({ action: "guardBuy", lv: 1 })).ok, true);
+  assert.equal(at.user().guards["2026-10-26"].lv, 1);
 });

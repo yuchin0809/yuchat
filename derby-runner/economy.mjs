@@ -295,8 +295,8 @@ export function applyDailyUserUpdate(data, today, now, prices = null, opts = {})
         if (repelled) {
           theft = { fields: { ...base, last: { date: today, repelled: true, lv, lost: 0 } }, repelled: true, lost: 0, lv };
         } else {
-          const ratio = THEFT_DAMAGE.lo + (THEFT_DAMAGE.hi - THEFT_DAMAGE.lo) * rand();
-          const damage = Math.max(1, Math.min(THEFT_DAMAGE.cap, Math.floor(total * ratio * (1 - (guard ? guard.dmg : 0)))));
+          const pct = THEFT_DAMAGE.minPct + Math.floor(rand() * (THEFT_DAMAGE.maxPct - THEFT_DAMAGE.minPct + 1));   // 5〜15% の整数を、どれも同じ確率で
+          const damage = Math.max(1, Math.min(THEFT_DAMAGE.cap, Math.floor((total * pct * (1 - (guard ? guard.dmg : 0))) / 100)));
           const took = takeFromAssets({ coins, deposit: bank.deposit, stocks: stocksNow }, damage, prices);
           const kind = theftKind(took.from);
           coins = took.coins; bank.deposit = took.deposit;
