@@ -357,11 +357,11 @@ function renderGame() {
             <div class="yw-balance">💰 <span id="ywBalance">${state.balance.toLocaleString()}</span></div>
           </div>
           <div class="yw-fever-banner" id="ywFever">🌈 FEVER 🌈</div>
-          <div class="yw-step" id="ywStep" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
           <div class="yw-chain" id="ywChain"></div>
           <div class="yw-reels" id="ywReels">
             ${[0, 1, 2].map((i) => `<div class="yw-reel" id="ywReel${i}"><div class="yw-cell top" id="ywT${i}"></div><div class="yw-cell center" id="ywC${i}"></div><div class="yw-cell bot" id="ywB${i}"></div></div>`).join("")}
             <div class="yw-payline"></div>
+            <div class="yw-step" id="ywStep" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
           </div>
           <div class="yw-msg" id="ywMsg"></div>
           <div class="yw-feverstart-slot" id="ywFeverStartSlot"></div>
@@ -714,7 +714,7 @@ function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => (
 /* ---------- 前兆・ステップアップ・連チャン（見た目だけ。結果は変えない。何を出すかの判断は yuworld-fx.js） ---------- */
 let omenTimers = [];
 function omenAt(ms, fn) { omenTimers.push(setTimeout(fn, ms)); }
-function clearLamps() { rootEl && rootEl.querySelectorAll("#ywStep i").forEach((l) => { l.className = ""; }); }
+function clearLamps() { if (!rootEl) return; rootEl.querySelectorAll("#ywStep i").forEach((l) => { l.className = ""; }); $("#ywStep")?.classList.remove("show"); }
 function clearOmen() {
   omenTimers.forEach(clearTimeout); omenTimers = [];
   const reels = $("#ywReels"); if (reels) reels.classList.remove("yw-omen-1", "yw-omen-2", "yw-omen-3");
@@ -741,6 +741,7 @@ function runOmen(omen) {
       omenAt(k * OMEN_STEP_MS, () => {
         const lamp = rootEl && rootEl.querySelectorAll("#ywStep i")[k]; if (!lamp) return;
         lamp.className = "on" + (k + 1);
+        $("#ywStep")?.classList.add("show");
         sfxStepLamp(k);
         if (k === 3) { state.confirmShown = true; confirmCutin(); burstSparkles($("#ywReels"), fxHigh() ? 12 : 6, "big"); }
       });
@@ -1086,7 +1087,8 @@ function injectStyles() {
   .yw-confetti { position: absolute; top: -12px; width: 9px; height: 14px; pointer-events: none; z-index: 6; border-radius: 2px; animation: yw-confetti 1.7s linear forwards; }
   @keyframes yw-confetti { 0%{transform:translateY(-10px) rotate(0);opacity:0} 10%{opacity:1} 100%{transform:translateY(340px) rotate(720deg);opacity:0} }
   /* ステップアップのランプ（青→緑→赤→金）と、連チャンの表示・前兆の枠の光（見た目だけ） */
-  .yw-step { display: flex; justify-content: center; gap: 8px; height: 10px; margin-bottom: 8px; }
+  .yw-step { position: absolute; top: -6px; left: 0; right: 0; display: flex; justify-content: center; gap: 8px; pointer-events: none; z-index: 5; opacity: 0; transition: opacity .15s; }
+  .yw-step.show { opacity: 1; }
   .yw-step i { width: 34px; height: 10px; border-radius: 6px; background: #2a2a3a; box-shadow: inset 0 0 0 1px rgba(255,255,255,.12); transition: background .12s, box-shadow .12s; }
   .yw-step i.on1 { background: #2d8cff; box-shadow: 0 0 10px 2px #2d8cff; }
   .yw-step i.on2 { background: #22d36b; box-shadow: 0 0 10px 2px #22d36b; }
