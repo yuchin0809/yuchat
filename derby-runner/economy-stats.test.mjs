@@ -58,14 +58,15 @@ test("毎日の記録：13:00 の処理のあと economyStats/history に今日�
 /* ---- ゆう税（累進課税） ---- */
 import { yuuTaxOf, applyDailyUserUpdate, YUU_TAX_FREE } from "./economy.mjs";
 
-test("ゆう税の計算：5,000 以下は0。超えた部分だけに 5,000〜1万＝1%・1万〜3万＝2%・3万〜＝3%（切り捨て）", () => {
+test("ゆう税の計算：5,000 以下は0。超えた部分だけに 5,000〜1万＝2%・1万〜1.5万＝4%・1.5万〜2万＝6%・2万〜＝8%（切り捨て）", () => {
   assert.equal(YUU_TAX_FREE, 5000);
-  assert.equal(yuuTaxOf(0), 0); assert.equal(yuuTaxOf(2500), 0); assert.equal(yuuTaxOf(5000), 0); assert.equal(yuuTaxOf(5001), 0, "50.01 → 切り捨てで 0");
-  assert.equal(yuuTaxOf(8000), 30, "(8000−5000)×1%");
-  assert.equal(yuuTaxOf(10000), 50);
-  assert.equal(yuuTaxOf(21147), 50 + Math.floor(11147 * 0.02), "10,000 を超えた部分は 2%");
-  assert.equal(yuuTaxOf(30000), 50 + 400);
-  assert.equal(yuuTaxOf(50000), 50 + 400 + 600, "30,000 を超えた部分は 3%");
+  assert.equal(yuuTaxOf(0), 0); assert.equal(yuuTaxOf(2500), 0); assert.equal(yuuTaxOf(5000), 0); assert.equal(yuuTaxOf(5001), 0, "0.02 → 切り捨てで 0");
+  assert.equal(yuuTaxOf(8000), 60, "(8000−5000)×2%");
+  assert.equal(yuuTaxOf(10000), 100);
+  assert.equal(yuuTaxOf(12286), 100 + Math.floor(2286 * 0.04), "10,000 を超えた部分は 4%");
+  assert.equal(yuuTaxOf(20000), 100 + 200 + 300);
+  assert.equal(yuuTaxOf(20958), 600 + Math.floor(958 * 0.08), "20,000 を超えた部分は 8%");
+  assert.equal(yuuTaxOf(50000), 600 + 2400);
   assert.equal(yuuTaxOf(-100), 0);
 });
 
@@ -73,14 +74,14 @@ const PRICES = { YGM: 100 };
 const NOW = new Date(Date.UTC(2026, 9, 25, 4, 5, 0));
 test("ゆう税の払い方：手持ちコインから先に引く。足りなければ預金から。株は売らない。借入は総資産から引く。5,000 以下の人には何も書かない", () => {
   const rich = applyDailyUserUpdate({ bonus500Granted: true, coins: 9000, bank: { deposit: 0, interestBase: 0, loan: 0 } }, "2026-10-25", NOW, PRICES);
-  assert.equal(rich.tax, 40); assert.equal(rich.fields.coins, 8960); assert.equal(rich.fields.bank.taxDate, "2026-10-25"); assert.equal(rich.fields.bank.lastTax, 40);
+  assert.equal(rich.tax, 80); assert.equal(rich.fields.coins, 8920); assert.equal(rich.fields.bank.taxDate, "2026-10-25"); assert.equal(rich.fields.bank.lastTax, 80);
   const poor = applyDailyUserUpdate({ bonus500Granted: true, coins: 2500, bank: { deposit: 0, interestBase: 0, loan: 0 } }, "2026-10-25", NOW, PRICES);
   assert.equal(poor, null, "税0の人は書き込まない");
   const edge = applyDailyUserUpdate({ bonus500Granted: true, coins: 5000, bank: { deposit: 0, interestBase: 0, loan: 0 } }, "2026-10-25", NOW, PRICES);
   assert.equal(edge, null, "ちょうど 5,000 はかからない");
   // 手持ちが足りない人：預金から引く（株は売らない）。総資産＝手持ち100＋預金0＋株 10,000×100…（株は評価額に入るが、引くのは手持ち・預金だけ）
   const stocky = applyDailyUserUpdate({ bonus500Granted: true, coins: 100, bank: { deposit: 0, interestBase: 0, loan: 0 }, stocks: { YGM: { qty: 200, cost: 0 } } }, "2026-10-25", NOW, PRICES);
-  assert.equal(stocky.tax, 100, "総資産20,100の税は 50+201=251 だが、払えるのは手持ち100まで");
+  assert.equal(stocky.tax, 100, "総資産20,100の税は 608 だが、払えるのは手持ち100まで");
   assert.equal(stocky.fields.coins, 0);
   const dep = applyDailyUserUpdate({ bonus500Granted: true, coins: 10, bank: { deposit: 8000, interestBase: 8000, loan: 0 } }, "2026-10-25", NOW, PRICES);
   assert.equal(dep.interest, 80); // 利息が先
@@ -95,14 +96,14 @@ test("ゆう税は同じ日に2回かからない。prices が無いとき（税
   const again = applyDailyUserUpdate({ bonus500Granted: true, coins: first.fields.coins, bank: first.fields.bank }, "2026-10-25", NOW, PRICES);
   assert.equal(again, null, "同じ日の再実行は何もしない");
   const tomorrow = applyDailyUserUpdate({ bonus500Granted: true, coins: first.fields.coins, bank: first.fields.bank }, "2026-10-26", NOW, PRICES);
-  assert.equal(tomorrow.tax, yuuTaxOf(8960), "次の日はまたかかる");
+  assert.equal(tomorrow.tax, yuuTaxOf(8920), "次の日はまたかかる");
   assert.equal(applyDailyUserUpdate({ bonus500Granted: true, coins: 9000, bank: { deposit: 0, interestBase: 0, loan: 0 } }, "2026-10-25", NOW), null);
 });
 
 test("13:00 の処理：税の合計と人数が、毎日の記録（economyStats/history）に入る。税を引いたあとの値でランキングが作られる", async () => {
   const db = mockDb({ users: { a: { uid: "ua", coins: 9000, bonus500Granted: true, bank: { deposit: 0, interestBase: 0, loan: 0 } }, b: { uid: "ub", coins: 2500, bonus500Granted: true } } });
   const r = await runDailyJobs({ db, now: new Date(Date.UTC(2026, 9, 25, 4, 5, 0)), log: () => {}, stockSecret: { secret: "s", source: "test" } });
-  assert.equal(r.taxUsers, 1); assert.equal(r.taxTotal, 40);
+  assert.equal(r.taxUsers, 1); assert.equal(r.taxTotal, 80);
   const pts = db.writes.find((x) => x.path === "economyStats/history").v.points;
-  assert.equal(pts.at(-1).taxTotal, 40); assert.equal(pts.at(-1).taxUsers, 1);
+  assert.equal(pts.at(-1).taxTotal, 80); assert.equal(pts.at(-1).taxUsers, 1);
 });

@@ -17,14 +17,14 @@ import {
   getHorseColors,
   RACE_SHOW_MAX_SECONDS,
   RACE_FINAL_SECONDS
-} from "./derby-show.js?v=20261025-theft2";
+} from "./derby-show.js?v=20261025-tax3";
 
 /* ゆうダービーの自分の馬券に合わせた演出・音（見せるだけ。結果・払い戻しは決めない） */
-import { betTrack, describeMiss, myMoves, totalPayout } from "./derby-extra.js?v=20261025-theft2";
-import { createRaceSound } from "./derby-sound.js?v=20261025-theft2";
+import { betTrack, describeMiss, myMoves, totalPayout } from "./derby-extra.js?v=20261025-tax3";
+import { createRaceSound } from "./derby-sound.js?v=20261025-tax3";
 
 /* 🥷 スリと防犯グッズ（毎日13:00の処理と同じ表。見せるだけ・買うのは Worker） */
-import { THEFT_MIN_TOTAL, THEFT_GUARDS, THEFT_GUARD_SALE_START_MS, guardPriceOf, weekStartOf, nextWeekStartOf } from "./yuu-theft.js?v=20261025-theft2";
+import { THEFT_MIN_TOTAL, THEFT_GUARDS, THEFT_GUARD_SALE_START_MS, guardPriceOf, weekStartOf, nextWeekStartOf } from "./yuu-theft.js?v=20261025-tax3";
 
 /* ゆうダービーの固定オッズ（derby-runner と同じ計算） */
 import {
@@ -9938,7 +9938,7 @@ function renderEconomyView() {
         <span class="econ-sub">利息 1日1%（上限${BANK_INTEREST_MAX}コイン）・毎日13:00${bank.deposit > 0 ? `／次回 +${formatCoins(expectedInterest)}コイン（見込み）` : ""}</span>
         ${bank.deposit > bank.interestBase ? `<span class="econ-sub">新しく預けた分は、次の13:00の処理のあとから利息の対象になります。</span>` : ""}
         ${bank.lastInterest > 0 && bank.interestDate ? `<span class="econ-sub">${escapeHTML(formatEconomyDate(bank.interestDate))} の利息 +${formatCoins(bank.lastInterest)}コイン</span>` : ""}
-        <span class="econ-sub">🏛 ゆう税：総資産が ${formatCoins(5000)} コインを超えた部分に、毎日13:00にかかります（5,000〜1万＝1%・1万〜3万＝2%・3万〜＝3%）。5,000以下の人はかかりません。</span>
+        <span class="econ-sub">🏛 ゆう税：総資産が ${formatCoins(5000)} コインを超えた部分に、毎日13:00にかかります（5,000〜1万＝2%・1万〜1.5万＝4%・1.5万〜2万＝6%・2万〜＝8%）。5,000以下の人はかかりません。</span>
         ${bank.lastTax > 0 && bank.taxDate ? `<span class="econ-sub">${escapeHTML(formatEconomyDate(bank.taxDate))} のゆう税 −${formatCoins(bank.lastTax)}コイン</span>` : ""}
       </div>
       <label class="econ-field">
@@ -10079,7 +10079,7 @@ function renderGuardCard(data, assets, now) {
   return `
     <section class="econ-card econ-guard" aria-label="スリ対策">
       <h3>🥷 スリ対策 <small>（毎週買い直し）</small></h3>
-      <p class="econ-note">総資産が ${formatCoins(THEFT_MIN_TOTAL)} コイン以上の人のところに、ときどきスリ・銀行強盗・株券泥棒が来ます（毎日13:00）。総資産が多い人・最近急に増えた人ほど、よく来ます。盗まれるのは、手持ち → 預金 → 株の順で、盗まれたものは戻りません。防犯グッズを買うと、泥棒を追い払いやすくなり、盗まれる額も減ります。</p>
+      <p class="econ-note">総資産が ${formatCoins(THEFT_MIN_TOTAL)} コイン以上の人のところに、たびたびスリ・銀行強盗・株券泥棒が来ます（毎日13:00・多い人は週に何回も）。総資産が多い人・最近急に増えた人ほど、もっとよく来ます。盗まれるのは、手持ち → 預金 → 株の順で、盗まれたものは戻りません。防犯グッズを買うと、泥棒を追い払いやすくなり、盗まれる額も減ります。</p>
       ${assets.total >= THEFT_MIN_TOTAL ? `<p class="econ-note"><b>あなたの総資産は対象です。</b></p>` : `<p class="econ-note">いまの総資産は ${formatCoins(assets.total)} コインなので、まだ対象ではありません。</p>`}
       ${beforeSale ? `<p class="econ-note guard-soon"><b>🛒 防犯グッズは、${mdLabel(new Date(THEFT_GUARD_SALE_START_MS + 9 * 3600000).toISOString().slice(0, 10))}（月）から買えます。</b></p>` : ""}
       <div class="guard-status">

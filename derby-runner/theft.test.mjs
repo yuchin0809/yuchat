@@ -17,10 +17,10 @@ function step(data, d, opts) {
 
 test("表と計算：週の平均回数・一気に増えた判定・週の月曜・防犯グッズの値段", () => {
   assert.equal(theftWeeklyRate(14999), 0);
-  assert.equal(theftWeeklyRate(15000), 1);
-  assert.equal(theftWeeklyRate(30000), 1.5); assert.equal(theftWeeklyRate(60000), 2); assert.equal(theftWeeklyRate(100000), 2.5); assert.equal(theftWeeklyRate(200000), 3); assert.equal(theftWeeklyRate(9e9), 3);
-  assert.ok(Math.abs(theftWeeklyRate(22500) - 1.25) < 1e-9, "表のあいだは直線");
-  assert.equal(theftWeeklyRate(15000, true), 1.7); assert.equal(theftWeeklyRate(200000, true), THEFT_WEEK_MAX, "上限は週3回");
+  assert.equal(theftWeeklyRate(15000), 2.5);
+  assert.equal(theftWeeklyRate(30000), 3.5); assert.equal(theftWeeklyRate(60000), 4.5); assert.equal(theftWeeklyRate(100000), 5.5); assert.equal(theftWeeklyRate(200000), 6); assert.equal(theftWeeklyRate(9e9), 6);
+  assert.ok(Math.abs(theftWeeklyRate(22500) - 3) < 1e-9, "表のあいだは直線");
+  assert.equal(theftWeeklyRate(15000, true), 3.5); assert.equal(theftWeeklyRate(200000, true), THEFT_WEEK_MAX, "上限は週7回");
   assert.equal(isSurge(20000, 10000), true); assert.equal(isSurge(20000, 15000), false, "+5,000 でも 1.5倍に届かない");
   assert.equal(isSurge(7000, 5000), false, "1.4倍・+2,000 は、まだ"); assert.equal(isSurge(20000, undefined), false);
   assert.equal(weekStartOf("2026-10-26"), "2026-10-26"); assert.equal(weekStartOf("2026-10-25"), "2026-10-19", "日曜は、その週の月曜から"); assert.equal(weekStartOf("2026-10-29"), "2026-10-26");
@@ -33,7 +33,7 @@ test("総資産15,000未満には、何日たっても来ない。秘密の値�
   for (let i = 0; i < 400; i++) assert.ok(!applyDailyUserUpdate(user(), day(i), NOW, PRICES, {})?.theft, "秘密の値なし");
 });
 
-test("来る頻度：総資産2万の人は週に平均1.2回ほど。1週間に3回を超えない。同じ日に2回は来ない（再実行しても同じ）", () => {
+test("来る頻度：総資産2万の人は週に平均2.8回ほど。1週間に7回を超えない。同じ日に2回は来ない（再実行しても同じ）", () => {
   let d = user({ coins: 1e9 }), perWeek = new Map(), attempts = 0, total = 20000;
   d = user({ coins: total });
   const DAYS = 7 * 300;
@@ -50,7 +50,7 @@ test("来る頻度：総資産2万の人は週に平均1.2回ほど。1週間に
   const weeks = DAYS / 7;
   assert.ok(Math.max(...perWeek.values()) <= THEFT_WEEK_MAX);
   const mean = attempts / weeks;
-  assert.ok(mean > 0.95 && mean < 1.4, `週の平均 ${mean.toFixed(2)} 回（期待 約1.17）`);
+  assert.ok(mean > 2.4 && mean < 3.2, `週の平均 ${mean.toFixed(2)} 回（期待 約2.83）`);
 });
 
 test("総資産が大きいほど、また一気に増えた人ほど、よく来る", () => {

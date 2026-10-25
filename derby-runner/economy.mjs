@@ -213,7 +213,7 @@ export function totalAssetsOf(data, prices) {
    ・手持ちコインから先に引き、足りなければ預金から。株は売らない。集めたコインは消える（コインの総量が減る）。
    ・同じ日に2回かけない（bank.taxDate）。税が0の人には何も書かない（書き込みを増やさない）。 */
 export const YUU_TAX_FREE = 5000;
-export const YUU_TAX_BRACKETS = [{ upTo: 10000, rate: 0.01 }, { upTo: 30000, rate: 0.02 }, { upTo: Infinity, rate: 0.03 }];
+export const YUU_TAX_BRACKETS = [{ upTo: 10000, rate: 0.02 }, { upTo: 15000, rate: 0.04 }, { upTo: 20000, rate: 0.06 }, { upTo: Infinity, rate: 0.08 }];
 export function yuuTaxOf(total) {
   let tax = 0, lo = YUU_TAX_FREE;
   for (const b of YUU_TAX_BRACKETS) {
@@ -277,7 +277,7 @@ export function applyDailyUserUpdate(data, today, now, prices = null, opts = {})
 
   /* 🥷 スリ（総資産が多い人のところに、ときどき泥棒が来る）。ゆう税のあとの総資産で決める。
      ・来るかどうかは、秘密の値＋ユーザー＋日付から決める（予想できない・同じ日に何回実行しても同じ）。来なかった日は、何も書かない。
-     ・1週間（月〜日）に最大3回。防犯グッズ（users.guards.{週の月曜}）があれば、追い払える／被害が減る。取られたものは消える。 */
+     ・1週間（月〜日）に最大7回。防犯グッズ（users.guards.{週の月曜}）があれば、追い払える／被害が減る。取られたものは消える。 */
   let theft = null;
   if (prices && opts.secret && coins !== null && data.theft?.day !== today) {
     const stocksNow = data.stocks && typeof data.stocks === "object" ? data.stocks : {};
@@ -287,7 +287,7 @@ export function applyDailyUserUpdate(data, today, now, prices = null, opts = {})
     if (total >= THEFT_MIN_TOTAL && n < THEFT_WEEK_MAX) {
       const rand = seededRandom(`${opts.secret}|theft|${data.uid || ""}|${today}`);
       const weekly = theftWeeklyRate(total, isSurge(total, opts.baseTotal));
-      if (rand() < Math.min(0.9, weekly / 7)) {
+      if (rand() < Math.min(0.95, weekly / 7)) {
         const lv = Math.max(0, Math.min(5, Math.floor(Number(data.guards?.[week]?.lv) || 0)));
         const guard = THEFT_GUARDS[lv];
         const repelled = Boolean(guard) && rand() < guard.repel;
