@@ -1,11 +1,10 @@
-/* 🏇 ゆうダービーの演出（derby-show.js の写真判定・ラスト200m・derby-extra.js・derby-sound.js）のテスト
+/* 🏇 ゆうダービーの演出（derby-show.js の写真判定・ラスト200m・derby-extra.js）のテスト
    実行：node --test "notify-worker/test/*.test.mjs" */
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { buildRaceShow, getCameraTarget, RACE_FINAL_SECONDS, PHOTO_FINISH_GAP_SECONDS, RACE_MAIN_SECONDS } from "../../derby-show.js";
 import { evaluateBetWin, betTrack, describeMiss, myMoves, totalPayout } from "../../derby-extra.js";
-import { createRaceSound } from "../../derby-sound.js";
 
 const horses = Array.from({ length: 10 }, (_, i) => ({ number: i + 1, name: `馬${i + 1}` }));
 let seed = 12345;
@@ -128,23 +127,4 @@ test("字幕の一言・画面の効き・カメラ：スタート／ラスト20
     s.commentaryAt(t);
   }
   assert.equal(RACE_FINAL_SECONDS, RACE_MAIN_SECONDS * 0.85);
-});
-
-test("レースの音：ブラウザ（AudioContext）がなくても、呼んでも落ちない。初めは切。入／切を覚える（覚えられなくても動く）", () => {
-  const store = {};
-  globalThis.localStorage = { getItem: (k) => store[k] ?? null, setItem: (k, v) => { store[k] = v; } };
-  try {
-    const snd = createRaceSound();
-    assert.equal(snd.enabled, false, "初めは切");
-    snd.cue("fanfare"); snd.update({ crowd: 1, hooves: 1 }); snd.pause();
-    let seen = null; snd.onChange((on) => { seen = on; });
-    snd.setEnabled(true);
-    assert.equal(snd.enabled, true); assert.equal(seen, true); assert.equal(store.derbySound, "on");
-    snd.cue("win"); snd.update({ crowd: 0.5, hooves: 0.5 });
-    assert.equal(snd.toggle(), false); assert.equal(store.derbySound, "off");
-    assert.equal(createRaceSound().enabled, false);
-    store.derbySound = "on";
-    assert.equal(createRaceSound().enabled, true, "覚えていた状態");
-  } finally { delete globalThis.localStorage; }
-  const noStore = createRaceSound(); noStore.setEnabled(true); noStore.cue("goal");
 });

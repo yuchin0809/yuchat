@@ -3915,33 +3915,7 @@ button:disabled {
     pointer-events: none;
 }
 
-/* ----- ゆうダービー：レースの演出（自分の馬券・一言・音のボタン・的中／外れ） ----- */
-
-.race-sound-btn {
-    position: absolute;
-    top: 34px;
-    right: 8px;
-
-    z-index: 3;
-
-    width: 30px;
-    height: 30px;
-
-    border: none;
-    border-radius: 50%;
-
-    background: rgba(0, 0, 0, .55);
-    color: #fff;
-
-    font-size: 15px;
-    line-height: 1;
-
-    cursor: pointer;
-}
-
-.race-sound-btn.on {
-    background: rgba(255, 107, 157, .85);
-}
+/* ----- ゆうダービー：レースの演出（自分の馬券・一言・的中／外れ） ----- */
 
 /* 画面の真ん中に大きく出る一言（スタート・ラスト200m・写真判定・1着） */
 .race-callout {
