@@ -565,19 +565,6 @@ if (isMain) {
     console.error("1日1回の処理のエラー:", error);
   }
 
-  /* 🥷 スリの通知：プッシュ通知をオンにしている被害者・防いだ人だけに送る（初めはオフ。失敗しても、ほかの処理には影響しない） */
-  if (dailyResult?.theftNotices?.length) {
-    try {
-      const { createDefaultDeps, sendBroadcastNotification } = await import("../notify-worker/worker.js");
-      const deps = createDefaultDeps({ FIREBASE_SERVICE_ACCOUNT: process.env.FIREBASE_SERVICE_ACCOUNT, FIREBASE_PROJECT_ID: JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT || "{}").project_id });
-      const byUid = new Map(dailyResult.theftNotices.map((n) => [n.uid, n]));
-      const r = await sendBroadcastNotification(deps, `theft-${dailyResult.date}`, { kind: "theft", title: "ゆうChat", body: "", link: "./?open=economy", tag: `theft-${dailyResult.date}` }, (uid) => byUid.has(uid), (uid) => { const n = byUid.get(uid); return n ? { kind: "theft", title: n.title, body: n.body, link: "./?open=economy", tag: `theft-${dailyResult.date}` } : null; });
-      console.log("スリの通知:", JSON.stringify(r));
-    } catch (error) {
-      console.error("スリの通知に失敗（ほかの処理は続けます）:", String(error?.message || error).slice(0, 200));
-    }
-  }
-
   writeStepSummary(summary, startedAt, new Date(), dailyResult);
   const failed = summary.filter((e) => e.status !== "ok");
   if (failed.length || dailyResult.status === "error") {

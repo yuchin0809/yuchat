@@ -64,6 +64,8 @@ export default {
     ctx.waitUntil(runRankTick(env, event.scheduledTime).catch((error) => console.error("rank tick error", String(error?.message || error).slice(0, 300))));
     /* 🤖 NPC 枠のキャンセル：1日1〜3回、10:00〜14:30 のランダムな時刻（日付から決まる）。予定の時刻から30分の間以外は Firestore に触れずにすぐ戻る */
     ctx.waitUntil(runKakuCancelTick(env, event.scheduledTime).catch((error) => console.error("kaku cancel error", String(error?.message || error).slice(0, 300))));
+    /* 🥷 スリ：平日の授業のない時間に、ランダムな分だけ動く。それ以外の分は Firestore に触れずにすぐ戻る */
+    ctx.waitUntil(runTheftTick(env, event.scheduledTime).catch((error) => console.error("theft tick error", String(error?.message || error).slice(0, 300))));
     /* 🛠 ゆう経済の1日1回の処理（株価・利息など）の見守り：GitHub Actions の定期実行が来なかった日の保険。決まった数回の分だけ動く */
     ctx.waitUntil(runDailyWatchdogTick(env, event.scheduledTime).catch((error) => console.error("daily watchdog error", String(error?.message || error).slice(0, 300))));
     /* 🎫 先着ゲームの週間ランキング：毎週金曜 15:10（日本時間）に結果発表（1位500・2位250・3位100コイン）。それ以外の分は Firestore に触れずにすぐ戻る */
@@ -1804,13 +1806,14 @@ async function econSyncNameClaim(deps, uid, name) {
 
 /* =========================================================
    🥷 スリ対策（防犯グッズ）の購入・スリの通知の設定
-   ・スリが来るかどうか・取られる額は、毎日13:00の処理（derby-runner/economy.mjs）が決める。ここは「防犯グッズを買う」と「プッシュ通知の入／切」だけ。
+   ・スリが来るかどうか・取られる額は、このあとの runTheftTick が決める（平日の授業以外の時間に、毎分の cron から）。ここは「防犯グッズを買う」と「プッシュ通知の入／切」。
    ・防犯グッズは1週間（月曜〜日曜）ごとの買い直し。今週の分と、金曜から来週の分が買える。値段は総資産 × 割合（最低額あり）。
      同じ週に上のレベルへ買い足すときは、払った額との差額だけ払う。下のレベル・同じレベルは買えない。払ったコインは消える。
    ・users.guards.{その週の月曜の日付} = { lv, paid }。古い週は、買うときに消す。users.theftPush = true のとき、被害・撃退をプッシュ通知（初めは未設定＝切）。
    ・表（名前・割合・最低額）は yuu-theft.js と同じにすること（同じであることは notify-worker/test/theft.test.mjs が確かめる）。
 ========================================================= */
-export const THEFT_GUARD_TABLE = [null, { rate: 0.008, min: 60 }, { rate: 0.02, min: 150 }, { rate: 0.04, min: 350 }, { rate: 0.07, min: 700 }, { rate: 0.10, min: 1200 }];
+/* rate・min：1週間の値段（総資産 × rate・最低 min）／repel：泥棒を追い払う確率／dmg：追い払えなかったときに、被害を減らす割合 */
+export const THEFT_GUARD_TABLE = [null, { rate: 0.008, min: 60, repel: 0.2, dmg: 0 }, { rate: 0.02, min: 150, repel: 0.4, dmg: 0 }, { rate: 0.04, min: 350, repel: 0.6, dmg: 0.3 }, { rate: 0.07, min: 700, repel: 0.75, dmg: 0.5 }, { rate: 0.10, min: 1200, repel: 0.9, dmg: 0.7 }];
 export const THEFT_GUARD_SALE_START_MS = Date.UTC(2026, 9, 25, 15, 0, 0);   // 防犯グッズは、2026-10-26（月）0:00 JST から買える（yuu-theft.js と同じ）
 export function theftGuardPrice(lv, total) {
   const g = THEFT_GUARD_TABLE[lv];
@@ -1844,6 +1847,147 @@ async function econGuardBuy(deps, uid, name, body) {
 async function econTheftPush(deps, uid, name, body) {
   if (typeof body?.on !== "boolean") return econError(400, "invalid_request");
   return runMyUserChange(deps, uid, name, () => ({ userFields: { theftPush: { booleanValue: body.on } }, result: { theftPush: body.on } }));
+}
+
+/* =========================================================
+   🥷 スリ：平日（月〜金）の、授業のない時間に、ランダムな時刻で泥棒が来る
+   ・総資産が THEFT_MIN_TOTAL（15,000）以上の人が対象。防犯なしなら、月〜金のほぼ毎日（1日に1回まで）。土日は来ない。
+   ・毎分の cron から呼ぶ。授業中・土日・夜は、計算だけで終わり Firestore に触れない。授業のない時間の分には、少しの確率（1日に平均 THEFT_RAIDS_PER_DAY 回）で「泥棒が動く」。
+     動いたときだけ、総資産ランキング（rankings/assets）から対象の人を探して、人ごとの確率で来る。どの分に動くかは、そのときの乱数で決める（予想できない）。
+   ・授業の時間割（授業時間帯の表）：Ⅰ 8:30〜9:15・Ⅱ 9:25〜10:10・Ⅲ 10:55〜11:40・Ⅳ 11:50〜12:35・Ⅴ 13:20〜14:05・Ⅵ 14:15〜15:00・Ⅶ（月曜だけ）15:10〜15:55。
+     礼拝・アッセンブリー・昼休み・終礼は授業ではないので、動いてよい。動くのは 7:00〜21:00。
+   ・奪うのは総資産の 5〜15%（整数のパーセントを、どれも同じ確率で。上限10,000）。手持ち → 預金 → 株（時価で売った扱い）の順。借入は取られない。取られたものは消える。
+     防犯グッズ（users.guards.{週の月曜}）：追い払える確率・被害を減らす割合（THEFT_GUARD_TABLE）。
+   ・書くもの：users のその人の coins・bank・（株を売ったとき）stocks・theft（day・week・n・last）。更新時刻の条件つきで、読み直してやり直す。
+     プッシュ通知は、users.theftPush が true の人だけ。
+========================================================= */
+export const THEFT_FROM_DAY = "2026-10-26";                 // この日（月）から
+export const THEFT_MIN_TOTAL = 15000;
+export const THEFT_DAMAGE = { minPct: 5, maxPct: 15, cap: 10000 };
+export const THEFT_RAIDS_PER_DAY = 4;                       // 泥棒が動く回数の平均（授業のない時間の、ランダムな分に）
+export const THEFT_HIT = 0.55, THEFT_HIT_RICH = 0.75, THEFT_RICH_TOTAL = 60000;   // 泥棒が動いたとき、その人のところに来る確率（防犯なし）。1日に平均4回動くので、来ない日はまれ（約11%・総資産6万以上は約5%）
+const THEFT_ACTIVE_MIN = [420, 1260];                       // 動く時間：7:00〜21:00（0:00 からの分）
+const THEFT_CLASSES = [[510, 555], [565, 610], [655, 700], [710, 755], [800, 845], [855, 900]];   // Ⅰ〜Ⅵ時限（0:00 からの分）
+const THEFT_CLASS_7 = [910, 955];                           // Ⅶ時限（月曜だけ）
+/* 泥棒が動いてよい時間（0:00 からの分の区間）。dow＝曜日（0＝日曜） */
+export function theftFreeWindows(dow) {
+  const classes = dow === 1 ? [...THEFT_CLASSES, THEFT_CLASS_7] : THEFT_CLASSES;
+  const out = [];
+  let from = THEFT_ACTIVE_MIN[0];
+  for (const [a, b] of classes) { if (a > from) out.push([from, a]); from = b; }
+  if (from < THEFT_ACTIVE_MIN[1]) out.push([from, THEFT_ACTIVE_MIN[1]]);
+  return out;
+}
+const theftSecureRandom = () => crypto.getRandomValues(new Uint32Array(1))[0] / 4294967296;
+
+/* 取る：手持ち → 預金 → 株の順。株は時価の高い会社から、必要な額に足りる株数だけ売った扱いにして、取った額を超えた分は手持ちに戻す。
+   coins・deposit・stocks（{ code: { qty, cost, … } }）は変えずに、新しい値を返す。 */
+export function theftTake({ coins, deposit, stocks }, amount, prices) {
+  let need = Math.max(0, Math.floor(amount));
+  const out = { coins: Number(coins) || 0, deposit: Math.max(0, Math.floor(Number(deposit) || 0)), stocks: structuredClone(stocks && typeof stocks === "object" ? stocks : {}), from: { coins: 0, deposit: 0, stock: 0 }, sold: [], taken: 0 };
+  const c = Math.min(Math.max(0, Math.floor(out.coins)), need);
+  out.coins -= c; need -= c; out.from.coins = c;
+  const d = Math.min(out.deposit, need);
+  out.deposit -= d; need -= d; out.from.deposit = d;
+  if (need > 0) {
+    const codes = Object.keys(out.stocks)
+      .map((code) => ({ code, qty: Math.max(0, Math.floor(Number(out.stocks[code]?.qty) || 0)), price: Number(prices?.[code]) || 0 }))
+      .filter((x) => x.qty > 0 && x.price > 0)
+      .sort((a, b) => (b.qty * b.price - a.qty * a.price) || (a.code < b.code ? -1 : 1));
+    for (const x of codes) {
+      if (need <= 0) break;
+      const sell = Math.min(x.qty, Math.ceil(need / x.price)), value = sell * x.price, take = Math.min(need, value);
+      const h = out.stocks[x.code], left = x.qty - sell;
+      out.stocks[x.code] = { ...h, qty: left, cost: left > 0 ? Math.round((Number(h.cost) || 0) * (left / x.qty)) : 0 };
+      need -= take; out.from.stock += take; out.sold.push({ code: x.code, qty: sell });
+      out.coins += value - take;   // 取った額を超えた分は、手持ちに戻す
+    }
+  }
+  out.taken = out.from.coins + out.from.deposit + out.from.stock;
+  return out;
+}
+const theftKindOf = (from) => from.stock > 0 ? { id: "stock", emoji: "📈", name: "株券泥棒" } : from.deposit > 0 ? { id: "bank", emoji: "🏦", name: "銀行強盗" } : { id: "pickpocket", emoji: "🥷", name: "スリ" };
+
+/* 毎分の cron から。泥棒が動くのは、平日の授業のない時間の、ランダムな分だけ */
+export async function runTheftTick(env = {}, scheduledTime = Date.now(), deps = null, random = theftSecureRandom) {
+  const day = jstDateString(scheduledTime);
+  if (day < THEFT_FROM_DAY) return { skipped: "outside" };
+  const dow = new Date(`${day}T00:00:00Z`).getUTCDay();
+  if (dow < 1 || dow > 5) return { skipped: "weekend" };
+  const minute = Math.floor(((scheduledTime + JST_OFFSET_MS) % 86400000) / 60000);
+  const windows = theftFreeWindows(dow);
+  if (!windows.some(([a, b]) => minute >= a && minute < b)) return { skipped: "class" };
+  const freeMinutes = windows.reduce((sum, [a, b]) => sum + (b - a), 0);
+  if (random() >= THEFT_RAIDS_PER_DAY / freeMinutes) return { skipped: "quiet" };
+  return theftRaid({ ...(deps || createDefaultDeps(env)), now: () => scheduledTime }, day, random);
+}
+
+/* 泥棒が動いた：総資産ランキングの対象の人のところに、人ごとの確率で来る */
+export async function theftRaid(deps, day, random = theftSecureRandom) {
+  const fs = deps.firestore;
+  const ranking = await fs.get("rankings/assets");
+  const targets = (Array.isArray(ranking?.users) ? ranking.users : []).filter((r) => r && typeof r.name === "string" && r.name && !r.name.includes("/") && Number(r.total) >= THEFT_MIN_TOTAL).slice(0, 50);
+  const out = { raid: true, targets: targets.length, hit: 0, repelled: 0, lost: 0 };
+  if (!targets.length) return out;
+  const prices = marketPricesOf(await fs.get("market/current"));
+  for (const t of targets) {
+    if (random() >= (Number(t.total) >= THEFT_RICH_TOTAL ? THEFT_HIT_RICH : THEFT_HIT)) continue;
+    try {
+      const r = await theftApply(deps, t.name, day, prices, random);
+      if (!r) continue;
+      if (r.repelled) out.repelled++; else { out.hit++; out.lost += r.lost; }
+    } catch (error) {
+      console.warn("theft failed", String(error?.message || error).slice(0, 160));
+    }
+  }
+  return out;
+}
+
+/* 1人のところに来る（その日にまだ来ていなければ）。更新時刻の条件つきで書く。来なかった・対象でなかったときは null */
+async function theftApply(deps, name, day, prices, random) {
+  const fs = deps.firestore;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const raw = await fs.getRaw(`users/${name}`);
+    if (!raw) return null;
+    const data = decodeFields(raw.fields);
+    if (typeof data.coins !== "number" || !Number.isSafeInteger(data.coins) || data.theft?.day === day) return null;
+    const total = assetBreakdown(data, prices).total;
+    if (!(total >= THEFT_MIN_TOTAL)) return null;
+    const week = theftWeekStart(day);
+    const n = data.theft?.week === week ? Math.max(0, Math.floor(Number(data.theft.n) || 0)) : 0;
+    const lv = Math.max(0, Math.min(5, Math.floor(Number(data.guards?.[week]?.lv) || 0)));
+    const guard = THEFT_GUARD_TABLE[lv];
+    const base = { day, week, n: n + 1 };
+    const fields = {};
+    let result;
+    if (guard && random() < guard.repel) {
+      fields.theft = encodeFields({ t: { ...base, last: { date: day, repelled: true, lv, lost: 0 } } }).t;
+      result = { repelled: true, lost: 0, lv };
+    } else {
+      const pct = THEFT_DAMAGE.minPct + Math.floor(random() * (THEFT_DAMAGE.maxPct - THEFT_DAMAGE.minPct + 1));   // 5〜15% の整数を、どれも同じ確率で
+      const damage = Math.max(1, Math.min(THEFT_DAMAGE.cap, Math.floor((total * pct * (1 - (guard ? guard.dmg : 0))) / 100)));
+      const bank = econBank(data);
+      const took = theftTake({ coins: data.coins, deposit: bank.deposit, stocks: data.stocks }, damage, prices);
+      const kind = theftKindOf(took.from);
+      fields.coins = restInt(took.coins);
+      fields.bank = bankWith(raw.fields, { deposit: restInt(took.deposit), interestBase: restInt(Math.min(bank.interestBase, took.deposit)) });   // 次の利息の対象は、取られたあとの残高まで
+      if (took.sold.length) fields.stocks = encodeFields({ s: took.stocks }).s;
+      fields.theft = encodeFields({ t: { ...base, last: { date: day, repelled: false, lv, lost: took.taken, kind: kind.id, fromCoins: took.from.coins, fromDeposit: took.from.deposit, fromStock: took.from.stock } } }).t;
+      result = { repelled: false, lost: took.taken, lv, kind };
+    }
+    try {
+      await fs.commit([{ update: { name: fs.docName(`users/${name}`), fields }, updateMask: { fieldPaths: Object.keys(fields) }, currentDocument: { updateTime: raw.updateTime } }]);
+    } catch (error) {
+      if (!isRetryableCommitError(error)) throw error;
+      continue;
+    }
+    if (data.theftPush === true && typeof data.uid === "string" && data.uid) {   // プッシュ通知をオンにしている人にだけ（失敗しても、スリの結果は変わらない）
+      const payload = { kind: "theft", title: result.repelled ? "🛡 スリを追い払った！" : `${result.kind.emoji} ${result.kind.name}に遭った…`, body: result.repelled ? "防犯グッズのおかげで、被害はありませんでした" : `${result.lost.toLocaleString("ja-JP")}コイン盗まれました`, link: "./?open=economy", tag: `theft-${day}` };
+      await sendBroadcastNotification(deps, `theft-${day}-${data.uid}`, payload, (uid) => uid === data.uid).catch((error) => console.warn("theft notify failed", String(error?.message || error).slice(0, 120)));
+    }
+    return result;
+  }
+  return null;
 }
 
 /* 初期コイン（1000）：コインがまだ無いときだけ付ける（アプリが users を作った直後に呼ぶ） */

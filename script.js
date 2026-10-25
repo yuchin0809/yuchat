@@ -17,14 +17,14 @@ import {
   getHorseColors,
   RACE_SHOW_MAX_SECONDS,
   RACE_FINAL_SECONDS
-} from "./derby-show.js?v=20261025-tax3";
+} from "./derby-show.js?v=20261025-theft4";
 
 /* ゆうダービーの自分の馬券に合わせた演出・音（見せるだけ。結果・払い戻しは決めない） */
-import { betTrack, describeMiss, myMoves, totalPayout } from "./derby-extra.js?v=20261025-tax3";
-import { createRaceSound } from "./derby-sound.js?v=20261025-tax3";
+import { betTrack, describeMiss, myMoves, totalPayout } from "./derby-extra.js?v=20261025-theft4";
+import { createRaceSound } from "./derby-sound.js?v=20261025-theft4";
 
-/* 🥷 スリと防犯グッズ（毎日13:00の処理と同じ表。見せるだけ・買うのは Worker） */
-import { THEFT_MIN_TOTAL, THEFT_GUARDS, THEFT_GUARD_SALE_START_MS, guardPriceOf, weekStartOf, nextWeekStartOf } from "./yuu-theft.js?v=20261025-tax3";
+/* 🥷 スリと防犯グッズ（Worker と同じ表。見せるだけ・買うのは Worker） */
+import { THEFT_MIN_TOTAL, THEFT_GUARDS, THEFT_GUARD_SALE_START_MS, guardPriceOf, weekStartOf, nextWeekStartOf } from "./yuu-theft.js?v=20261025-theft4";
 
 /* ゆうダービーの固定オッズ（derby-runner と同じ計算） */
 import {
@@ -10079,7 +10079,7 @@ function renderGuardCard(data, assets, now) {
   return `
     <section class="econ-card econ-guard" aria-label="スリ対策">
       <h3>🥷 スリ対策 <small>（毎週買い直し）</small></h3>
-      <p class="econ-note">総資産が ${formatCoins(THEFT_MIN_TOTAL)} コイン以上の人のところに、たびたびスリ・銀行強盗・株券泥棒が来ます（毎日13:00・多い人は週に何回も）。総資産が多い人・最近急に増えた人ほど、もっとよく来ます。盗まれるのは、手持ち → 預金 → 株の順で、盗まれたものは戻りません。防犯グッズを買うと、泥棒を追い払いやすくなり、盗まれる額も減ります。</p>
+      <p class="econ-note">総資産が ${formatCoins(THEFT_MIN_TOTAL)} コイン以上の人のところに、平日（月〜金）はほぼ毎日、スリ・銀行強盗・株券泥棒が来ます（来る時間はランダム。土日は来ません）。盗まれるのは、手持ち → 預金 → 株の順で、盗まれたものは戻りません。防犯グッズを買うと、泥棒を追い払いやすくなり、盗まれる額も減ります。</p>
       ${assets.total >= THEFT_MIN_TOTAL ? `<p class="econ-note"><b>あなたの総資産は対象です。</b></p>` : `<p class="econ-note">いまの総資産は ${formatCoins(assets.total)} コインなので、まだ対象ではありません。</p>`}
       ${beforeSale ? `<p class="econ-note guard-soon"><b>🛒 防犯グッズは、${mdLabel(new Date(THEFT_GUARD_SALE_START_MS + 9 * 3600000).toISOString().slice(0, 10))}（月）から買えます。</b></p>` : ""}
       <div class="guard-status">
