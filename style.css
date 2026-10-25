@@ -6448,3 +6448,168 @@ button.secondary {
 /* 🎮 ゲーム（オセロ・将棋・大富豪）は、ゆうワールドのお店から開く。種類の切り替えはお店のカードで行うので、ここでは出さない */
 #gamesView .game-type-selector { display: none; }
 .games-back { background: none; border: none; color: #4a7; font-size: 14px; cursor: pointer; padding: 4px 0 8px; }
+
+/* ===== 🥷 スリ対策（ゆう経済）・被害の知らせ ===== */
+
+.econ-guard h3 small {
+    font-size: 11px;
+    font-weight: 700;
+    color: #777;
+}
+
+.guard-status {
+    display: grid;
+    gap: 2px;
+
+    margin: 8px 0;
+    padding: 8px 10px;
+
+    border-radius: 10px;
+
+    background: #f3f6fb;
+
+    font-size: 13px;
+}
+
+.guard-status small {
+    margin-left: 4px;
+    color: #888;
+}
+
+.guard-tabs {
+    display: flex;
+    gap: 6px;
+
+    margin: 6px 0;
+}
+
+.guard-tab {
+    flex: 1;
+
+    padding: 8px 4px;
+
+    border: 1px solid #d5dbe6;
+    border-radius: 10px;
+
+    background: #fff;
+
+    font-size: 13px;
+    font-weight: 800;
+}
+
+.guard-tab.on {
+    background: #1f2a44;
+    color: #fff;
+    border-color: #1f2a44;
+}
+
+.guard-tab:disabled {
+    opacity: .45;
+}
+
+.guard-list {
+    display: grid;
+    gap: 6px;
+
+    margin: 6px 0;
+}
+
+.guard-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+
+    padding: 8px 10px;
+
+    border: 1px solid #e3e7ef;
+    border-radius: 12px;
+
+    background: #fff;
+}
+
+.guard-name {
+    display: grid;
+}
+
+.guard-name small {
+    color: #e59a00;
+    letter-spacing: .08em;
+}
+
+.guard-own {
+    font-size: 12px;
+    font-weight: 800;
+    color: #1b7a43;
+}
+
+.guard-last {
+    margin: 8px 0;
+    padding: 8px 10px;
+
+    border-radius: 10px;
+
+    background: #fff3e6;
+    color: #7a4300;
+
+    font-size: 12.5px;
+    font-weight: 700;
+    line-height: 1.6;
+}
+
+.theft-modal {
+    position: fixed;
+    inset: 0;
+
+    z-index: 9999;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    background: rgba(0, 0, 0, .55);
+}
+
+.theft-card {
+    width: min(86%, 320px);
+
+    padding: 20px 18px 16px;
+
+    border-radius: 18px;
+
+    text-align: center;
+    color: #fff;
+
+    animation: theft-pop .35s cubic-bezier(.2, 1.4, .4, 1) both;
+}
+
+.theft-card.hit {
+    background: linear-gradient(160deg, #3a2a4a, #1b1530);
+}
+
+.theft-card.safe {
+    background: linear-gradient(160deg, #1e6f4a, #123d2c);
+}
+
+.theft-emoji {
+    font-size: 54px;
+}
+
+.theft-title {
+    margin-top: 4px;
+
+    font-size: 22px;
+    font-weight: 900;
+}
+
+.theft-body {
+    margin: 8px 0 14px;
+
+    font-size: 14px;
+    line-height: 1.6;
+}
+
+@keyframes theft-pop {
+    from { transform: scale(.6); opacity: 0; }
+    to { transform: scale(1); opacity: 1; }
+}

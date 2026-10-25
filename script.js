@@ -17,11 +17,14 @@ import {
   getHorseColors,
   RACE_SHOW_MAX_SECONDS,
   RACE_FINAL_SECONDS
-} from "./derby-show.js?v=20261025-derby2";
+} from "./derby-show.js?v=20261025-theft1";
 
 /* ゆうダービーの自分の馬券に合わせた演出・音（見せるだけ。結果・払い戻しは決めない） */
-import { betTrack, describeMiss, myMoves, totalPayout } from "./derby-extra.js?v=20261025-derby2";
-import { createRaceSound } from "./derby-sound.js?v=20261025-derby2";
+import { betTrack, describeMiss, myMoves, totalPayout } from "./derby-extra.js?v=20261025-theft1";
+import { createRaceSound } from "./derby-sound.js?v=20261025-theft1";
+
+/* 🥷 スリと防犯グッズ（毎日13:00の処理と同じ表。見せるだけ・買うのは Worker） */
+import { THEFT_MIN_TOTAL, THEFT_GUARDS, guardPriceOf, weekStartOf, nextWeekStartOf } from "./yuu-theft.js?v=20261025-theft1";
 
 /* ゆうダービーの固定オッズ（derby-runner と同じ計算） */
 import {
@@ -3473,7 +3476,7 @@ function parseNotificationTarget(search) {
     const params = new URLSearchParams(search || "");
     const open = params.get("open");
     /* 🏇 ゆうダービー開始前・📢 新しいお知らせの通知は、その画面を開く */
-    if (open === "derby" || open === "announcements" || open === "games") return { open };   // games：ゲームの招待の通知（招待のバナーが出る画面）
+    if (open === "derby" || open === "announcements" || open === "games" || open === "economy") return { open };   // games：ゲームの招待の通知（招待のバナーが出る画面）
     if (open !== "chat") return null;
     return { open: "chat", friendship: params.get("friendship") || null, group: params.get("group") || null };
   } catch (error) {
@@ -4211,6 +4214,7 @@ function listenMyCoins() {
          やり直しになり、読み書きが増えないように）。「💰 ゆう経済」の表示も、この購読で受け取った内容を使う（新しい読み取りは無い） */
       if (data.bonus500Granted !== true) grantBonusCoinsIfNeeded();
       else grantLoginBonusIfNeeded(data);
+      notifyTheftIfNew(data);
       if (isEconomyViewActive()) renderEconomyView();
       updateAnnouncementUnreadMark();
     },
@@ -9622,6 +9626,7 @@ const ECONOMY_MAX_TRADE_QTY = 100000;
 let marketCache = null;   /* { data, fetchedAt } */
 let rankingCache = null;  /* { data, fetchedAt } */
 let economyBusy = false;
+let guardWhich = "this";   // スリ対策：どの週の分を買うか（this＝今週／next＝来週。来週は金曜から）
 let economyBankAmount = "";
 const stockTradeQty = {};
 
@@ -9801,7 +9806,9 @@ const ECONOMY_ERROR_MESSAGES = {
   LOAN_ACTIVE: "借入中は、預け入れ・新しい借入はできません。先に返済してください。",
   TOO_MANY_COINS: `緊急融資は、手持ちのゆうcoinが${BANK_LOAN_MAX_COINS}コイン以下のときだけ利用できます。`,
   NO_LOAN: "借入はありません。",
-  NOT_LOGGED_IN: "ログインしてください。"
+  NOT_LOGGED_IN: "ログインしてください。",
+  TOO_EARLY: "来週の分は、金曜日から買えます。",
+  ALREADY_HAVE: "その週は、同じかもっと強い防犯グッズをすでに持っています。"
 };
 
 async function runEconomyAction(action, successMessage) {
@@ -10011,6 +10018,9 @@ function renderEconomyView() {
       ${holdingsHtml}
     </section>`;
 
+  /* 🥷 スリ対策（毎週買い直しの防犯グッズ） */
+  const guardHtml = renderGuardCard(data, assets, now);
+
   /* 入力中の値・フォーカス・スクロール位置を、描き直しても保つ
      （中身を丸ごと入れ替えるので、Safari などでは新しい入力欄への focus やスクロール領域の作り直しで位置が動くことがある） */
   const active = document.activeElement;
@@ -10018,13 +10028,99 @@ function renderEconomyView() {
     ? (active.id || (active.closest(".stock-card")?.dataset.code || "") + (active.matches("[data-qty-input]") ? ":qty" : ""))
     : null;
   const scrollTop = economyView?.scrollTop ?? 0;
-  economyContent.innerHTML = `${summaryHtml}<div class="econ-columns">${bankHtml}${stocksHtml}</div>`;
+  economyContent.innerHTML = `${summaryHtml}${guardHtml}<div class="econ-columns">${bankHtml}${stocksHtml}</div>`;
   if (activeKey) {
     const target = activeKey === "econBankAmount" ? document.getElementById("econBankAmount")
       : activeKey.endsWith(":qty") ? economyContent.querySelector(`.stock-card[data-code="${activeKey.split(":")[0]}"] [data-qty-input]`) : null;
     if (target) { target.focus({ preventScroll: true }); const v = target.value; target.value = ""; target.value = v; }
   }
   if (economyView && economyView.scrollTop !== scrollTop) economyView.scrollTop = scrollTop;
+}
+
+
+/* ----- 🥷 スリ対策 ----- */
+
+const THEFT_KIND_LABEL = { pickpocket: { emoji: "🥷", name: "スリ" }, bank: { emoji: "🏦", name: "銀行強盗" }, stock: { emoji: "📈", name: "株券泥棒" } };
+const mdLabel = (dateText) => { const [, m, d] = String(dateText || "").split("-"); return m ? `${Number(m)}/${Number(d)}` : ""; };
+const addDaysText = (dateText, n) => new Date(Date.parse(`${dateText}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
+
+function theftSummaryText(last) {
+  if (!last) return "";
+  if (last.repelled) return `🛡 ${mdLabel(last.date)} 泥棒を追い払いました`;
+  const k = THEFT_KIND_LABEL[last.kind] || THEFT_KIND_LABEL.pickpocket;
+  const parts = [["手持ち", last.fromCoins], ["預金", last.fromDeposit], ["株", last.fromStock]].filter(([, v]) => Number(v) > 0).map(([n, v]) => `${n} −${formatCoins(v)}`);
+  return `${k.emoji} ${mdLabel(last.date)} ${k.name}に ${formatCoins(last.lost)}コイン盗まれました（${parts.join("・")}）`;
+}
+
+function renderGuardCard(data, assets, now) {
+  const today = getTodayRaceId();
+  const thisWeek = weekStartOf(today), nextWeek = nextWeekStartOf(today);
+  const dow = new Date(now.getTime() + 9 * 3600000).getUTCDay();
+  const canNext = dow === 5 || dow === 6 || dow === 0;
+  if (guardWhich === "next" && !canNext) guardWhich = "this";
+  const week = guardWhich === "next" ? nextWeek : thisWeek;
+  const guards = data.guards && typeof data.guards === "object" ? data.guards : {};
+  const owned = (w) => Math.max(0, Math.floor(Number(guards[w]?.lv) || 0));
+  const haveThis = owned(thisWeek), haveNext = owned(nextWeek), have = guardWhich === "next" ? haveNext : haveThis;
+  const paid = Math.max(0, Math.floor(Number(guards[week]?.paid) || 0));
+  const disabled = economyBusy ? "disabled" : "";
+  const label = (lv) => (lv > 0 ? `${THEFT_GUARDS[lv].emoji} ${THEFT_GUARDS[lv].name}` : "なし");
+  const stars = (lv) => "★".repeat(lv) + "☆".repeat(5 - lv);
+  const rows = THEFT_GUARDS.slice(1).map((g) => {
+    const price = guardPriceOf(g.lv, assets.total), pay = Math.max(0, price - paid);
+    const state = have >= g.lv ? `<span class="guard-own">${have === g.lv ? "✅ 持っている" : "✅ 含まれる"}</span>`
+      : `<button type="button" class="econ-button ${assets.coins >= pay ? "primary" : ""}" data-guard-buy="${g.lv}" ${disabled} ${assets.coins >= pay ? "" : "disabled"}>🪙 ${formatCoins(pay)}${paid > 0 && have > 0 ? "（差額）" : ""} で買う</button>`;
+    return `<div class="guard-row"><div class="guard-name"><b>${g.emoji} ${escapeHTML(g.name)}</b><small>防御力 ${stars(g.lv)}</small></div>${state}</div>`;
+  }).join("");
+  const last = data.theft?.last;
+  const pushOn = data.theftPush === true;
+  return `
+    <section class="econ-card econ-guard" aria-label="スリ対策">
+      <h3>🥷 スリ対策 <small>（毎週買い直し）</small></h3>
+      <p class="econ-note">総資産が ${formatCoins(THEFT_MIN_TOTAL)} コイン以上の人のところに、ときどきスリ・銀行強盗・株券泥棒が来ます（毎日13:00）。総資産が多い人・最近急に増えた人ほど、よく来ます。盗まれるのは、手持ち → 預金 → 株の順で、盗まれたものは戻りません。防犯グッズを買うと、泥棒を追い払いやすくなり、盗まれる額も減ります。</p>
+      ${assets.total >= THEFT_MIN_TOTAL ? `<p class="econ-note"><b>あなたの総資産は対象です。</b></p>` : `<p class="econ-note">いまの総資産は ${formatCoins(assets.total)} コインなので、まだ対象ではありません。</p>`}
+      <div class="guard-status">
+        <div>今週（${mdLabel(thisWeek)}〜${mdLabel(addDaysText(thisWeek, 6))}）：<b>${label(haveThis)}</b></div>
+        <div>来週（${mdLabel(nextWeek)}〜）：<b>${label(haveNext)}</b>${canNext ? "" : "<small>（金曜から買えます）</small>"}</div>
+      </div>
+      <div class="guard-tabs" role="group" aria-label="買う週">
+        <button type="button" class="guard-tab ${guardWhich === "this" ? "on" : ""}" data-guard-week="this">今週の分</button>
+        <button type="button" class="guard-tab ${guardWhich === "next" ? "on" : ""}" data-guard-week="next" ${canNext ? "" : "disabled"}>来週の分</button>
+      </div>
+      <div class="guard-list">${rows}</div>
+      <p class="econ-note">値段は、いまの総資産に応じて決まります（買った週の日曜まで有効）。同じ週に強いものへ買い足すときは、差額だけです。</p>
+      ${last ? `<div class="guard-last">${escapeHTML(theftSummaryText(last))}</div>` : ""}
+      <button type="button" class="econ-button ${pushOn ? "primary" : ""}" data-theft-push="${pushOn ? "off" : "on"}" ${disabled}>${pushOn ? "🔔 スリのプッシュ通知：入（押すと切）" : "🔕 スリのプッシュ通知：切（押すと入）"}</button>
+      <p class="econ-note">プッシュ通知は、アプリの通知を許可している端末に届きます。画面での知らせは、通知が切でも出ます。</p>
+    </section>`;
+}
+
+/* 新しい被害・撃退があったら、ログインしたとき（開いたとき）に大きく知らせる（端末ごとに、見た日付を覚える） */
+let theftModalShown = false;
+function notifyTheftIfNew(data) {
+  const last = data?.theft?.last;
+  if (!last?.date || !username) return;
+  const key = `theftSeen:${username}`;
+  let seen = "";
+  try { seen = localStorage.getItem(key) || ""; } catch { /* 覚えられなくても動く */ }
+  if (seen === last.date) return;
+  try { localStorage.setItem(key, last.date); } catch { /* 同上 */ }
+  const age = (Date.parse(`${getTodayRaceId()}T00:00:00Z`) - Date.parse(`${last.date}T00:00:00Z`)) / 86400000;
+  if (age > 2 || theftModalShown) return;
+  theftModalShown = true;
+  const repelled = last.repelled === true;
+  const k = THEFT_KIND_LABEL[last.kind] || THEFT_KIND_LABEL.pickpocket;
+  const overlay = document.createElement("div");
+  overlay.className = "theft-modal";
+  overlay.innerHTML = `<div class="theft-card ${repelled ? "safe" : "hit"}">
+      <div class="theft-emoji">${repelled ? "🛡" : k.emoji}</div>
+      <div class="theft-title">${repelled ? "泥棒を追い払った！" : `${escapeHTML(k.name)}に遭った…`}</div>
+      <div class="theft-body">${repelled ? "防犯グッズのおかげで、被害はありませんでした。" : escapeHTML(theftSummaryText(last).replace(/^.*?に /, ""))}</div>
+      <button type="button" class="econ-button primary">OK</button>
+    </div>`;
+  overlay.addEventListener("click", () => { overlay.remove(); theftModalShown = false; });
+  document.body.appendChild(overlay);
+  if (isEconomyViewActive()) renderEconomyView();
 }
 
 /* 株を売買するときの値（カードの表示・ボタンの有効／無効に使う） */
@@ -10084,6 +10180,23 @@ economyContent?.addEventListener("click", (event) => {
       : key === "deposit" ? normalizeBankData(data.bank).deposit : Number(key);
     economyBankAmount = value > 0 ? String(value) : "";
     renderEconomyView();
+    return;
+  }
+
+  if (button.dataset.guardWeek) {
+    guardWhich = button.dataset.guardWeek === "next" ? "next" : "this";
+    renderEconomyView();
+    return;
+  }
+  if (button.dataset.guardBuy) {
+    const lv = Number(button.dataset.guardBuy), g = THEFT_GUARDS[lv], which = guardWhich;
+    if (!g) return;
+    runEconomyAction(() => callEconomyApi("guardBuy", { lv, which }), (r) => `${g.emoji} ${g.name}を買いました（${formatCoins(r.price)}コイン・${which === "next" ? "来週" : "今週"}の分）`);
+    return;
+  }
+  if (button.dataset.theftPush) {
+    const on = button.dataset.theftPush === "on";
+    runEconomyAction(() => callEconomyApi("theftPush", { on }), on ? "スリのプッシュ通知を入にしました" : "スリのプッシュ通知を切にしました");
     return;
   }
 

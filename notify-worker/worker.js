@@ -1375,7 +1375,7 @@ const DERBY_SERVER_GENERATORS = ["github-actions", "worker"];
    null のあいだは確かめない（Firestore Rules でブラウザからの書き込みを止めるときに日付を入れる） */
 const DERBY_SERVER_RESULTS_FROM = null;
 
-const ECONOMY_ACTIONS = ["bankDeposit", "bankWithdraw", "bankBorrow", "bankRepay", "stockTrade", "loginBonus", "bonus500", "placeBet", "ensureRaceResult", "settleMyBets", "startingCoins", "renameCarry", "syncNameClaim", "transferRequest", "transferCancel", "transferMine"];
+const ECONOMY_ACTIONS = ["bankDeposit", "bankWithdraw", "bankBorrow", "bankRepay", "stockTrade", "loginBonus", "bonus500", "placeBet", "ensureRaceResult", "settleMyBets", "startingCoins", "renameCarry", "syncNameClaim", "transferRequest", "transferCancel", "transferMine", "guardBuy", "theftPush"];
 const ECON_CARRY_FIELDS = ["coins", "bonus500Granted", "bonus500GrantedAt", "totalBetAmount", "bank", "stocks", "lastLoginBonusDate", "lastAnnouncementReadAt", "slotSpins", "slotWagered", "slotKakuSpins", "slotKakuWagered"];
 
 export function jstDateString(ms) {
@@ -1769,6 +1769,8 @@ export async function handleEconomyAction(deps, uid, body) {
       case "transferRequest": return await transferRequest(deps, uid, body);
       case "transferCancel": return await transferCancel(deps, uid, body);
       case "transferMine": return await transferMine(deps, uid);
+      case "guardBuy": return await econGuardBuy(deps, uid, name, body);
+      case "theftPush": return await econTheftPush(deps, uid, name, body);
       default: return econError(400, "unknown_action");
     }
   } catch (error) {
@@ -1797,6 +1799,49 @@ async function econSyncNameClaim(deps, uid, name) {
   const changed = await setNameClaim(deps, uid, me.name);
   // changed が true のとき、アプリ側はトークンを再取得（getIdToken(true)）してから購読を始める
   return { ok: true, name: me.name, changed };
+}
+
+
+/* =========================================================
+   🥷 スリ対策（防犯グッズ）の購入・スリの通知の設定
+   ・スリが来るかどうか・取られる額は、毎日13:00の処理（derby-runner/economy.mjs）が決める。ここは「防犯グッズを買う」と「プッシュ通知の入／切」だけ。
+   ・防犯グッズは1週間（月曜〜日曜）ごとの買い直し。今週の分と、金曜から来週の分が買える。値段は総資産 × 割合（最低額あり）。
+     同じ週に上のレベルへ買い足すときは、払った額との差額だけ払う。下のレベル・同じレベルは買えない。払ったコインは消える。
+   ・users.guards.{その週の月曜の日付} = { lv, paid }。古い週は、買うときに消す。users.theftPush = true のとき、被害・撃退をプッシュ通知（初めは未設定＝切）。
+   ・表（名前・割合・最低額）は yuu-theft.js と同じにすること（同じであることは notify-worker/test/theft.test.mjs が確かめる）。
+========================================================= */
+export const THEFT_GUARD_TABLE = [null, { rate: 0.005, min: 30 }, { rate: 0.012, min: 80 }, { rate: 0.025, min: 200 }, { rate: 0.04, min: 400 }, { rate: 0.06, min: 700 }];
+export function theftGuardPrice(lv, total) {
+  const g = THEFT_GUARD_TABLE[lv];
+  return g ? Math.max(g.min, Math.round(Math.max(0, Number(total) || 0) * g.rate)) : 0;
+}
+export function theftWeekStart(dateText) {
+  const t = Date.parse(`${dateText}T00:00:00Z`), dow = new Date(t).getUTCDay();
+  return new Date(t - ((dow + 6) % 7) * 86400000).toISOString().slice(0, 10);
+}
+async function econGuardBuy(deps, uid, name, body) {
+  const lv = Number(body?.lv);
+  if (!Number.isInteger(lv) || lv < 1 || lv > 5) return econError(400, "invalid_lv");
+  const which = body?.which === "next" ? "next" : "this";
+  const prices = marketPricesOf(await deps.firestore.get("market/current"));
+  return runMyUserChange(deps, uid, name, ({ data, now }) => {
+    const today = jstDateString(now), thisWeek = theftWeekStart(today);
+    const jstDow = new Date(now + 9 * 3600000).getUTCDay();
+    if (which === "next" && !(jstDow === 5 || jstDow === 6 || jstDow === 0)) return econError(409, "TOO_EARLY");   // 来週の分は、金曜から
+    const week = which === "next" ? new Date(Date.parse(`${thisWeek}T00:00:00Z`) + 7 * 86400000).toISOString().slice(0, 10) : thisWeek;
+    const cur = data.guards && typeof data.guards === "object" ? data.guards[week] : null;
+    const have = Math.max(0, Math.floor(Number(cur?.lv) || 0)), paid = Math.max(0, Math.floor(Number(cur?.paid) || 0));
+    if (have >= lv) return econError(409, "ALREADY_HAVE");
+    const price = theftGuardPrice(lv, assetBreakdown(data, prices).total), pay = Math.max(0, price - paid);
+    if (data.coins < pay) return econError(409, "NOT_ENOUGH_COINS");
+    const guards = Object.fromEntries(Object.entries(data.guards && typeof data.guards === "object" ? data.guards : {}).filter(([w]) => w >= thisWeek));   // 過ぎた週は消す
+    guards[week] = { lv, paid: paid + pay };
+    return { userFields: { coins: restInt(data.coins - pay), guards: encodeFields({ g: guards }).g }, result: { coins: data.coins - pay, week, lv, price: pay } };
+  });
+}
+async function econTheftPush(deps, uid, name, body) {
+  if (typeof body?.on !== "boolean") return econError(400, "invalid_request");
+  return runMyUserChange(deps, uid, name, () => ({ userFields: { theftPush: { booleanValue: body.on } }, result: { theftPush: body.on } }));
 }
 
 /* 初期コイン（1000）：コインがまだ無いときだけ付ける（アプリが users を作った直後に呼ぶ） */

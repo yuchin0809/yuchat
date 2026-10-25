@@ -35,6 +35,7 @@ async function ok(name, p) { try { await assertSucceeds(p); pass++; log.push(`PA
     await ng(`${who}：自分の stocks を増やす`, updateDoc(doc(U, `users/${self}`), { "stocks.YEN": { qty: 99999, cost: 0 } }));
     await ng(`${who}：ログインボーナス日・累計賭け金・ボーナスを書き換える`, updateDoc(doc(U, `users/${self}`), { lastLoginBonusDate: "2000-01-01", totalBetAmount: 0, bonus500Granted: false }));
     await ng(`${who}：ゆうスロの記録（回転数・使ったコイン）を書き換える`, updateDoc(doc(U, `users/${self}`), { slotSpins: 999999, slotWagered: 999999, slotKakuSpins: 1, slotKakuWagered: 1 }));
+    await ng(`${who}：防犯グッズ・スリの記録・通知の設定を書き換える`, updateDoc(doc(U, `users/${self}`), { guards: { "2030-01-07": { lv: 5, paid: 0 } }, theft: { n: 0 }, theftPush: true }));
     await ng(`${who}：ゆうスロの記録を入れて新しい users を作る`, setDoc(doc(U, "users/newslot"), { uid: self, name: "newslot", slotSpins: 999999 }));
     await ng(`${who}：経済項目入りで新しい users を作る`, setDoc(doc(U, "users/newrich"), { uid: self, name: "newrich", coins: 1000000 }));
     // ゆうダービー
