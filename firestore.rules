@@ -193,7 +193,9 @@ service cloud.firestore {
       function economyFields() {
         return ['coins', 'bank', 'stocks', 'totalBetAmount', 'bonus500Granted', 'bonus500GrantedAt', 'lastLoginBonusDate',
           // 🎰 ゆうスロの記録（有料の回転数・使ったコイン。会員ランクに使う）。Worker だけが足す
-          'slotSpins', 'slotWagered', 'slotKakuSpins', 'slotKakuWagered'];
+          'slotSpins', 'slotWagered', 'slotKakuSpins', 'slotKakuWagered',
+          // 🥷 スリ対策：防犯グッズ（guards）・スリの被害の記録（theft）・スリの通知の設定（theftPush）は Worker・毎日の処理だけが書く
+          'guards', 'theft', 'theftPush'];
       }
       function hasEconomyFields(data) {
         return data.keys().hasAny(economyFields());

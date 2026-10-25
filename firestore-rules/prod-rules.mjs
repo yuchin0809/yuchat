@@ -244,6 +244,8 @@ const TEST_CASES = [
   testCase("ALLOW", "users：ランキング（他人のデータの読み取り）", userA, "get", "users/bob", { existing: { uid: "bob", coins: 1000 } }),
   testCase("DENY", "users：他人の名前の書き換え", userA, "update", "users/bob", { data: { uid: "bob", name: "へんななまえ", coins: 1000 }, existing: { uid: "bob", name: "bob", coins: 1000 } }),
   testCase("DENY", "users：ゆうスロの記録（回転数・使ったコイン）をブラウザから書き換える", userA, "update", "users/alice", { data: { uid: userA.uid, coins: 1000, slotSpins: 999999, slotWagered: 999999 }, existing: { uid: userA.uid, coins: 1000 } }),
+  testCase("DENY", "users：防犯グッズ（最強）をタダで自分に付ける", userA, "update", "users/alice", { data: { uid: userA.uid, coins: 1000, guards: { "2030-01-07": { lv: 5, paid: 0 } } }, existing: { uid: userA.uid, coins: 1000 } }),
+  testCase("DENY", "users：スリの被害の記録を消す", userA, "update", "users/alice", { data: { uid: userA.uid, coins: 1000, theft: { week: "2030-01-07", n: 0 } }, existing: { uid: userA.uid, coins: 1000, theft: { week: "2030-01-07", n: 3 } } }),
   testCase("DENY", "users：新規登録でゆうスロの記録を入れる", userA, "create", "users/alice4", { data: { uid: userA.uid, name: "alice4", slotSpins: 999999 } }),
   testCase("DENY", "users：他人のコインの書き換え", userA, "update", "users/bob", { data: { uid: "bob", coins: 999999 }, existing: { uid: "bob", coins: 1000 } }),
   testCase("DENY", "users：他人のデータの削除", userA, "delete", "users/bob", { existing: { uid: "bob", coins: 1000 } }),
