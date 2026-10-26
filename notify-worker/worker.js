@@ -5232,10 +5232,8 @@ async function yachtRanking(deps, uid) {
 /* ----- 2人用（ゲームルーム gameRooms/{roomId} の yacht フィールド。Worker だけが書く：サイコロの目・点数をブラウザが書き換えられないように） -----
    ・ルームの作成・参加・退出は、オセロ・将棋と同じ（ブラウザが gameRooms を書く）。ゲームの進み（振る・記録する・時間切れ）だけ Worker を通る。
    ・1回の操作で、ルームの書類を1回読んで1回書く（相手の画面にも、今までと同じルームの監視でそのまま届く）。
-   ・持ち時間は1ターン60秒。過ぎたら、いまの目でいちばん高い役に自動で記録して次の人へ。続けて2回放置した人は負け。
+   ・時間制限はない（考える時間は、何分かかってもよい）。自動で記録したり、放置した人を負けにしたりはしない。
    ・準備中のあいだは最上位管理者だけ。ただし、最上位管理者の入っているルームなら、招待された友達も遊べる（動作確認のため）。 */
-const YACHT_TURN_MS = 60000;
-const YACHT_MISS_LIMIT = 2;
 const yachtOpts = (card, dice) => card.map((v, i) => (v < 0 ? yachtCategoryScore(i, dice) : -1));
 async function yachtRoomLoad(deps, uid, roomId) {
   if (typeof roomId !== "string" || !/^[A-Za-z0-9]{10,40}$/.test(roomId)) return { error: { status: 400, error: "bad_request" } };
@@ -5265,14 +5263,14 @@ function yachtRoomAdvance(deps, y, now) {
   const done = y.c0.every((v) => v >= 0) && y.c1.every((v) => v >= 0);
   if (done) { y.done = true; y.winner = yachtRoomWinner(y); y.reason = "finished"; y.opts = []; y.at = now; return; }
   if (y.cur === 0) y.cur = 1; else { y.cur = 0; y.round += 1; }
-  y.roll = 1; y.dice = yachtRoll5(deps); y.deadline = now + YACHT_TURN_MS; y.at = now;
+  y.roll = 1; y.dice = yachtRoll5(deps); y.at = now;
   y.opts = yachtOpts(y.cur === 0 ? y.c0 : y.c1, y.dice);
 }
 const yachtRoomTotals = (y) => [yachtTotals(y.c0).total, yachtTotals(y.c1).total];
 function yachtRoomWinner(y) { const [a, b] = yachtRoomTotals(y); return a > b ? 0 : b > a ? 1 : 2; }
 function yachtRoomNew(deps, room, now) {
   const dice = yachtRoll5(deps), c = Array(12).fill(-1);
-  return { gid: slotRandomHex(6), order: room.memberUids.slice(0, 2), names: room.members.slice(0, 2), round: 1, cur: 0, roll: 1, dice, c0: c.slice(), c1: c.slice(), miss: [0, 0], deadline: now + YACHT_TURN_MS, at: now, opts: yachtOpts(c, dice), done: false, winner: -1, reason: "" };
+  return { gid: slotRandomHex(6), order: room.memberUids.slice(0, 2), names: room.members.slice(0, 2), round: 1, cur: 0, roll: 1, dice, c0: c.slice(), c1: c.slice(), at: now, opts: yachtOpts(c, dice), done: false, winner: -1, reason: "" };
 }
 /* ゲームを始める（2人そろったあと、どちらの画面からでも呼べる。同じゲームを二重に始めない）。終わったあとの「もう一度」は rematch: true */
 async function yachtRoomStart(deps, uid, body) {
@@ -5287,18 +5285,17 @@ async function yachtRoomStart(deps, uid, body) {
   if (!(await yachtRoomWrite(deps, cur, fresh))) { const again = await yachtRoomLoad(deps, uid, body.roomId); return again.error || yachtRoomView(again.data.yacht || fresh, now); }
   return yachtRoomView(fresh, now);
 }
-function yachtRoomTurn(cur, uid, body, now, { allowLate = false } = {}) {
+function yachtRoomTurn(cur, uid, body) {
   const y = cur.data.yacht;
   if (!y || y.done === true) return { error: { status: 409, error: "no_game" } };
   if (body?.gid !== y.gid) return { error: { status: 409, error: "stale" } };
   if (y.order[y.cur] !== uid) return { error: { status: 409, error: "not_your_turn" } };
-  if (!allowLate && now > y.deadline + 2000) return { error: { status: 409, error: "timeout" } };
   return { y };
 }
 async function yachtRoomRoll(deps, uid, body) {
   const cur = await yachtRoomLoad(deps, uid, body?.roomId);
   if (cur.error) return cur.error;
-  const now = deps.now(), t = yachtRoomTurn(cur, uid, body, now);
+  const now = deps.now(), t = yachtRoomTurn(cur, uid, body);
   if (t.error) return t.error;
   const y = t.y;
   if (y.roll >= 3) return { status: 409, error: "no_rolls" };
@@ -5313,33 +5310,20 @@ async function yachtRoomRoll(deps, uid, body) {
 async function yachtRoomScore(deps, uid, body) {
   const cur = await yachtRoomLoad(deps, uid, body?.roomId);
   if (cur.error) return cur.error;
-  const now = deps.now(), t = yachtRoomTurn(cur, uid, body, now);
+  const now = deps.now(), t = yachtRoomTurn(cur, uid, body);
   if (t.error) return t.error;
   const y = t.y, card = y.cur === 0 ? y.c0 : y.c1, cat = Number(body?.cat);
   if (!Number.isInteger(cat) || cat < 0 || cat > 11 || card[cat] !== -1) return { status: 400, error: "bad_request" };
   card[cat] = yachtCategoryScore(cat, y.dice);
-  y.miss[y.cur] = 0;
   yachtRoomAdvance(deps, y, now);
   if (!(await yachtRoomWrite(deps, cur, y))) return { status: 409, error: "busy" };
   return yachtRoomView(y, now);
 }
-/* 持ち時間が過ぎたとき（どちらの画面からでも呼べる）。いまの目でいちばん高い役に自動で記録。2回続けて放置した人は負け */
+/* 時間制限はなくした。古い画面（まだタイマーが動いているもの）からの呼び出しには、何もせずに、いまの状態を返す */
 async function yachtRoomTimeout(deps, uid, body) {
   const cur = await yachtRoomLoad(deps, uid, body?.roomId);
   if (cur.error) return cur.error;
-  const y = cur.data.yacht, now = deps.now();
-  if (!y || y.done === true) return yachtRoomView(y || null, now);
-  if (body?.gid !== y.gid || Number(body?.round) !== y.round || Number(body?.turn) !== y.cur) return yachtRoomView(y, now);   // もう次の番に進んでいる
-  if (now < y.deadline) return { status: 409, error: "too_early" };
-  const card = y.cur === 0 ? y.c0 : y.c1;
-  let best = -1, bestPts = -1;
-  card.forEach((v, i) => { if (v < 0) { const p = yachtCategoryScore(i, y.dice); if (p >= bestPts) { bestPts = p; best = i; } } });   // 同じ点なら、後ろの役（取りにくい役）から埋める
-  card[best] = bestPts;
-  y.miss[y.cur] += 1;
-  if (y.miss[y.cur] >= YACHT_MISS_LIMIT) { y.done = true; y.winner = y.cur === 0 ? 1 : 0; y.reason = "timeout"; y.opts = []; y.at = now; }
-  else yachtRoomAdvance(deps, y, now);
-  if (!(await yachtRoomWrite(deps, cur, y))) { const again = await yachtRoomLoad(deps, uid, body.roomId); return again.error || yachtRoomView(again.data.yacht, now); }
-  return yachtRoomView(y, now);
+  return yachtRoomView(cur.data.yacht || null, deps.now());
 }
 
 const yachtWeekTickDone = new Set();

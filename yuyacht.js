@@ -148,7 +148,7 @@ function drawStart(game) {
       <button type="button" class="yw-btn yy-go" id="yyPlay">${game ? `続きから遊ぶ（ターン ${game.turn}/12）` : "遊ぶ"}</button>
       ${game ? `<button type="button" class="yw-btn yw-btn-sub yy-go" id="yyRestart">あきらめて新しく始める</button>` : ""}</div>
     <div class="yy-card yy-mode"><div class="yy-mode-name">2人用</div>
-      <p class="yy-sub">友達とルームで対戦。交互にサイコロを振って、12ターンの合計点が高いほうが勝ち。1ターンの持ち時間は60秒です。</p>
+      <p class="yy-sub">友達とルームで対戦。交互にサイコロを振って、12ターンの合計点が高いほうが勝ち。時間制限はないので、ゆっくり考えられます。</p>
       <button type="button" class="yw-btn yy-go" id="yyRooms">対戦ルームへ</button></div>
     ${rankingHtml()}
     <div class="yy-card"><h3>役と点数</h3><div class="yy-rules">
@@ -271,27 +271,27 @@ function drawResult() {
 /* =========================================================
    2人用（ゲームルーム）：script.js の renderCurrentGame から、ルームが更新されるたびに呼ばれる
    ・サイコロの目・点数・手番は、Worker が gameRooms/{roomId} の yacht に書く（ブラウザは「ふる」「記録する」を頼むだけ）。
-   ・相手の画面には、ルームの監視（onSnapshot）でそのまま届く。持ち時間は1ターン60秒（過ぎたら Worker が自動で記録する）。
+   ・相手の画面には、ルームの監視（onSnapshot）でそのまま届く。時間制限はない。
 ========================================================= */
-const rm = { roomId: "", gid: "", key: "", held: [false, false, false, false, false], sel: -1, phase: "idle", shownKey: "", lastDice: "", busy: false, y: null, offset: 0, tm: null, started: "", sentKey: "", error: "" };
+const rm = { roomId: "", gid: "", key: "", held: [false, false, false, false, false], sel: -1, phase: "idle", shownKey: "", lastDice: "", busy: false, y: null, offset: 0, started: "", error: "" };
 const roomKey = (y) => `${y.gid}:${y.round}:${y.cur}:${y.roll}`;
 
 export function renderYachtRoom(boardEl, room, c) {
   initGL();
   injectStyles();
   rm.api = c.api; rm.uid = c.uid; rm.esc = c.esc; rm.boardEl = boardEl; rm.room = room;
-  if (rm.roomId !== room.id) { Object.assign(rm, { roomId: room.id, gid: "", key: "", held: [false, false, false, false, false], sel: -1, phase: "idle", shownKey: "", lastDice: "", busy: false, y: null, started: "", sentKey: "", error: "" }); }
+  if (rm.roomId !== room.id) { Object.assign(rm, { roomId: room.id, gid: "", key: "", held: [false, false, false, false, false], sel: -1, phase: "idle", shownKey: "", lastDice: "", busy: false, y: null, started: "", error: "" }); }
   const uids = Array.isArray(room.memberUids) ? room.memberUids : [];
   const members = Array.isArray(room.members) ? room.members : [];
   if (room.status !== "playing" || uids.length < 2) {
-    stopRoomTimer(); rm.y = null;
+    rm.y = null;
     boardEl.innerHTML = `<div class="yy-card yy-msg"><b>対戦相手を待っています…</b><p class="yy-sub">2人そろうと、自動でゲームが始まります。上の「友達を招待」から誘うか、ルーム一覧から参加してもらおう。</p></div>`;
     return;
   }
   const y = room.yacht;
   const sameOrder = y && Array.isArray(y.order) && y.order[0] === uids[0] && y.order[1] === uids[1];
   if (!sameOrder) {
-    stopRoomTimer(); rm.y = null;
+    rm.y = null;
     const k = uids.join(",");
     if (rm.started !== k) { rm.started = k; roomStart(false); }
     boardEl.innerHTML = rm.error ? roomErrorHtml() : `<div class="yy-card yy-msg">ゲームを準備しています…</div>`;
@@ -300,7 +300,7 @@ export function renderYachtRoom(boardEl, room, c) {
   if (!rm.y || y.at >= rm.y.at || y.gid !== rm.y.gid) {
     rm.y = y;
     rm.offset = y.at - Date.now();
-    if (y.gid !== rm.gid) { rm.gid = y.gid; rm.key = ""; rm.sentKey = ""; }
+    if (y.gid !== rm.gid) { rm.gid = y.gid; rm.key = ""; }
     const key = `${y.round}:${y.cur}`;
     if (key !== rm.key) { rm.key = key; rm.held = [false, false, false, false, false]; rm.sel = -1; rm.phase = "idle"; rm.shownKey = y.roll > 1 ? roomKey(y) : ""; }
   }
@@ -315,8 +315,6 @@ async function roomStart(rematch) {
   try { const r = await rm.api("yachtRoomStart", { roomId: rm.roomId, ...(rematch ? { rematch: true } : {}) }); if (r.yacht) { rm.y = r.yacht; rm.offset = r.yacht.at - Date.now(); drawRoom(); } rm.error = ""; }
   catch (e) { rm.error = (e && e.code) || "error"; if (rm.boardEl && !rm.y) rm.boardEl.innerHTML = roomErrorHtml(); }
 }
-function stopRoomTimer() { if (rm.tm) { clearInterval(rm.tm); rm.tm = null; } }
-const roomNow = () => Date.now() + rm.offset;
 function myIndex() { return rm.y ? rm.y.order.indexOf(rm.uid) : -1; }
 
 /* いまの目を見せてよいか（自分の番は、カップを振って転がしたあと。相手の番は、いつでも） */
@@ -352,14 +350,14 @@ function yachtTotalsClient(card) {
 function resultHtml(y, me) {
   const t = [yachtTotalsClient(y.c0), yachtTotalsClient(y.c1)];
   const title = y.winner === 2 ? "引き分け！" : y.winner === me ? "あなたの勝ち！🎉" : "あなたの負け…";
-  const sub = y.reason === "timeout" ? `<p class="yy-sub">${rm.esc(String(y.names[1 - y.winner] || "相手"))}さんが続けて時間切れになったため、ゲームを終了しました。</p>` : "";
+  const sub = "";
   return `<div class="yy-card yy-result"><div class="yy-result-title">${title}</div>
     <div class="yy-vs"><span>${rm.esc(String(y.names[0]))}<b>${t[0].total}</b></span><span>${rm.esc(String(y.names[1]))}<b>${t[1].total}</b></span></div>${sub}
     <div class="yy-btns"><button type="button" class="yw-btn yy-go" id="yrAgain">もう一度対戦する</button></div></div>`;
 }
 function drawRoom() {
   const el = rm.boardEl, y = rm.y;
-  if (!el || !y || !document.body.contains(el)) { stopRoomTimer(); return; }
+  if (!el || !y || !document.body.contains(el)) return;
   const me = myIndex();
   if (me < 0) { el.innerHTML = `<div class="yy-card yy-msg">観戦中です</div>`; return; }
   const mineTurn = !y.done && y.cur === me;
@@ -371,8 +369,8 @@ function drawRoom() {
   const canHold = mineTurn && idle && shown && y.roll < 3, canRoll = mineTurn && idle && left > 0;
   const turnName = rm.esc(String(y.names[y.cur] || ""));
   const status = y.done ? "" : mineTurn
-    ? `<div class="yy-turnbar mine">あなたの番です <span id="yrTimer" class="yy-timer"></span></div>`
-    : `<div class="yy-turnbar">${turnName}さんの番です <span id="yrTimer" class="yy-timer"></span></div>`;
+    ? `<div class="yy-turnbar mine">あなたの番です</div>`
+    : `<div class="yy-turnbar">${turnName}さんの番です</div>`;
   const play = y.done ? resultHtml(y, me) : `<div class="yy-play"><div class="yy-wood">${trayHtml(y.dice, mineTurn ? rm.held : [false, false, false, false, false], { phase: mineTurn ? rm.phase : "idle", shown, canHold, canRoll, tumble, hl: mineTurn && shown ? hitDice(rm.sel, y.dice) : null })}</div>
       <p class="yy-hint">${mineTurn ? (rm.sel >= 0 ? `「${rm.esc(CATS[rm.sel].name)}」に記録します` : !shown ? "カップをタップして、サイコロを振ろう" : left > 0 ? "残したいサイコロをタップでキープ → 「振り直す」。点数表の役をタップして記録" : "もう振れません。点数表の役をタップして記録しよう") : "相手の操作を待っています"}</p>
       ${mineTurn ? `<div class="yy-btns"><button type="button" class="yw-btn yy-roll" id="yrRoll" ${canRoll ? "" : "disabled"}>${!shown ? "🥤 カップを振る" : left > 0 ? `🥤 振り直す（あと${left}回）` : "もう振れません"}</button>
@@ -385,27 +383,6 @@ function drawRoom() {
   el.querySelector("#yyCup")?.addEventListener("click", roomRoll);
   el.querySelector("#yrRec")?.addEventListener("click", roomScore);
   el.querySelector("#yrAgain")?.addEventListener("click", () => roomStart(true));
-  startRoomTimer();
-}
-function startRoomTimer() {
-  stopRoomTimer();
-  const y = rm.y;
-  if (!y || y.done) return;
-  const tick = () => {
-    if (!rm.boardEl || !document.body.contains(rm.boardEl) || !rm.y || rm.y.done) { stopRoomTimer(); return; }
-    const left = Math.max(0, Math.ceil((rm.y.deadline - roomNow()) / 1000));
-    const t = rm.boardEl.querySelector("#yrTimer");
-    if (t) { t.textContent = `残り ${left}秒`; t.classList.toggle("warn", left <= 10); }
-    // 時間切れ：番の人の画面がすぐ、相手の画面は少し待ってから Worker に頼む（Worker が時刻を確かめて、二重には処理しない）
-    const over = roomNow() - rm.y.deadline;
-    const mine = rm.y.order[rm.y.cur] === rm.uid;
-    const key = `${rm.y.gid}:${rm.y.round}:${rm.y.cur}`;
-    if (over >= (mine ? 600 : 3500) && rm.sentKey !== key) {
-      rm.sentKey = key;
-      rm.api("yachtRoomTimeout", { roomId: rm.roomId, gid: rm.y.gid, round: rm.y.round, turn: rm.y.cur }).then((r) => { if (r && r.yacht) { rm.y = r.yacht; rm.offset = r.yacht.at - Date.now(); drawRoom(); } }).catch(() => { rm.sentKey = ""; });
-    }
-  };
-  tick(); rm.tm = setInterval(tick, 1000);
 }
 async function roomRoll() {
   const y = rm.y; if (!y || rm.busy || rm.phase !== "idle" || y.done || y.order[y.cur] !== rm.uid) return;
@@ -439,7 +416,6 @@ async function roomScore() {
 }
 function roomError(e) {
   const code = e && e.code;
-  if (code === "timeout") return;   // 時間切れ：タイマーが Worker に頼む
   if (code === "not_your_turn" || code === "stale" || code === "no_game") return;   // 手番が進んでいた：ルームの更新で画面が直る
   if (code === "busy") { alert("通信が重なりました。もう一度お試しください。"); return; }
   alert("うまくいきませんでした（" + (code || "エラー") + "）。もう一度お試しください。");
@@ -551,7 +527,6 @@ function injectStyles() {
   .yy-sheet2 .yy-me-h.turn { background: #ffe56a !important; } .yy-sheet2 .yy-me-h.me { text-decoration: underline; }
   .yy-cell.cand.other { cursor: default; opacity: .65; }
   .yy-turnbar { text-align: center; background: #3b3f46; color: #fff; border-radius: 10px; padding: 8px; font-weight: 800; margin-bottom: 8px; font-size: 14px; } .yy-turnbar.mine { background: #e0902f; }
-  .yy-timer { margin-left: 8px; font-weight: 700; font-size: 13px; } .yy-timer.warn { color: #ff6b6b; }
   .yy-vs { display: flex; justify-content: space-around; gap: 8px; margin: 12px 0; font-size: 13px; } .yy-vs span { display: flex; flex-direction: column; align-items: center; } .yy-vs b { font-size: 34px; color: #14507a; }
   @media (prefers-reduced-motion: reduce) { .yy-3d.tumble .yy-cube, .yy-dwrap.pour, .yy-dwrap.pour .yy-3d, .yy-dwrap.in, .yy-cup.shake, .yy-cup.pour, .yy-cup.ready { animation: none !important; } }
   `;
