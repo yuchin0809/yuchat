@@ -8,8 +8,8 @@ console.warn = () => {};
 const jst = (d, h, m) => Date.UTC(2026, 9, d, h, m) - 9 * 3600000;   // 2026-10-d の h:m（日本時間）
 function make({ doc, token = "tok", status = 204 } = {}) {
   resetDailyWatchForTest();
-  const calls = { gets: 0, fetch: [] };
-  const deps = { firestore: { async get(path) { calls.gets++; assert.equal(path, "rankings/assets"); return doc ?? null; } } };
+  const calls = { gets: 0, fetch: [], sets: [] };
+  const deps = { firestore: { async get(path) { calls.gets++; assert.equal(path, "rankings/assets"); return doc ?? null; }, async set(path, data) { calls.sets.push({ path, data }); } } };
   const fetchImpl = async (url, init) => { calls.fetch.push({ url, init }); return { status }; };
   const env = token ? { GITHUB_DISPATCH_TOKEN: token } : {};
   return { calls, deps, run: (t) => runDailyWatchdogTick(env, t, deps, fetchImpl) };
@@ -54,4 +54,15 @@ test("見守り：鍵（GITHUB_DISPATCH_TOKEN）が無ければ何もしない�
   const r = await bad.run(jst(22, 13, 10)); assert.equal(r.dispatched, false); assert.equal(r.status, 403);
   assert.equal((await bad.run(jst(22, 13, 25))).dispatched, false, "次の時刻にも、もう一度頼む");
   assert.equal(bad.calls.fetch.length, 2);
+});
+
+test("見守り：何をしたかを economyStats/dailyWatch に残す（管理者の画面で分かるように）。済んでいる日は書かない", async () => {
+  const ok = make({ doc: null }); await ok.run(jst(22, 13, 10));
+  assert.deepEqual(ok.calls.sets, [{ path: "economyStats/dailyWatch", data: { date: "2026-10-22", result: "dispatched", status: 204, atMs: jst(22, 13, 10) } }]);
+  const none = make({ doc: null, token: "" }); await none.run(jst(22, 13, 10));
+  assert.equal(none.calls.sets[0].data.result, "no_token");
+  const bad = make({ doc: null, status: 403 }); await bad.run(jst(22, 13, 10));
+  assert.deepEqual([bad.calls.sets[0].data.result, bad.calls.sets[0].data.status], ["dispatch_failed", 403]);
+  const done = make({ doc: { date: "2026-10-22", complete: true } }); await done.run(jst(22, 13, 10));
+  assert.equal(done.calls.sets.length, 0);
 });

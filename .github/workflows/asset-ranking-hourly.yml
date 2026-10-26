@@ -5,6 +5,7 @@
 # ・やること：users を1回読んで、rankings/assets の users・userCount・liveUpdatedAt だけを書く（株価・利息などの1日1回の処理には触れない）。
 #   読み取りは「ユーザー数 + 1」、書き込みは1回。
 # ・13:00 の1日1回の処理（derby-runner.yml）とは別。何回実行されても安全（その時点の最新の値で作り直すだけ）。
+#   ただし、13:00 以降に実行されたとき、その日の1日1回の処理（株価・利息）が済んでいなければ、ここからも行う（GitHub の定期実行が来なかった日の予備）。
 # ・鍵：FIREBASE_SERVICE_ACCOUNT（ゆうダービーと同じ）。未登録なら何もしない。
 # ・テストは derby-runner/** を変更する PR で derby-runner.yml が実行する（ここでは回さない）。
 
@@ -57,4 +58,5 @@ jobs:
         if: steps.secret.outputs.ready == 'true'
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          STOCK_SEED_SECRET: ${{ secrets.STOCK_SEED_SECRET }}
         run: node ranking-hourly.mjs
