@@ -16,13 +16,13 @@ import {
   createRaceStage,
   getHorseColors,
   RACE_SHOW_MAX_SECONDS
-} from "./derby-show.js?v=20261026-ltd7";
+} from "./derby-show.js?v=20261026-ticket8";
 
 /* ゆうダービーの自分の馬券に合わせた演出（見せるだけ。結果・払い戻しは決めない） */
-import { betTrack, describeMiss, myMoves, totalPayout } from "./derby-extra.js?v=20261026-ltd7";
+import { betTrack, describeMiss, myMoves, totalPayout } from "./derby-extra.js?v=20261026-ticket8";
 
 /* 🥷 スリと防犯グッズ（Worker と同じ表。見せるだけ・買うのは Worker） */
-import { THEFT_MIN_TOTAL, THEFT_GUARDS, THEFT_GUARD_SALE_START_MS, guardPriceOf, weekStartOf, nextWeekStartOf } from "./yuu-theft.js?v=20261026-ltd7";
+import { THEFT_MIN_TOTAL, THEFT_GUARDS, THEFT_GUARD_SALE_START_MS, guardPriceOf, weekStartOf, nextWeekStartOf } from "./yuu-theft.js?v=20261026-ticket8";
 
 /* ゆうダービーの固定オッズ（derby-runner と同じ計算） */
 import {
@@ -40,7 +40,7 @@ import {
 /* 🎡 ゆうワールド（ゆうスロなどのお店）。残高・抽選・公開・営業時間の判定はすべて Worker 任せ（Firebase には触らない） */
 import {
   initYuWorld, openYuWorldView, stopYuWorldView
-} from "./yuworld.js?v=20261026-yuworld52";
+} from "./yuworld.js?v=20261026-yuworld53";
 import { initYuMart, openYuMartView, stopYuMartView } from "./yumart.js?v=20261026-ltd10";
 import { renderYachtRoom } from "./yuyacht.js?v=20261023-yacht5";
 import { renderKeshiRoom } from "./yukeshi-room.js?v=20261026-ltd10";

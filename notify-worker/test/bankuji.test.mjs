@@ -208,6 +208,22 @@ test("ラストワン賞：最後の1枚を買った人だけがもらえる。�
   assert.equal((await buy("uH", "はなこ", { random: 1 })).error, "sold_out");
 });
 
+test("ラストワン賞の「全5社5株」も、買った瞬間にゆう株へ自動で入る（すでに持っている株には足される）。当たった株の景品も同じ", async () => {
+  const { fs, state, buy, apply } = setup({ random: rngOf(8), users: { "たろう": { uid: "uT", name: "たろう", coins: 5000, stocks: { YGM: { qty: 2, cost: 400 } } } } });
+  seedSold(fs, 285);
+  state.now = DAY2 + MIN; await apply("uT", "たろう");
+  state.now = DAY2 + 31 * MIN;
+  const r = await buy("uT", "たろう", { random: 15 });
+  assert.equal(r.lastOne, true);
+  const user = fs.plain("users/たろう");
+  const prizeStock = {}; r.results.filter((x) => x.kind === "stock").forEach((x) => { prizeStock[x.code] = (prizeStock[x.code] || 0) + x.qty; });
+  for (const code of ["YGM", "YMT", "YFD", "YEN", "YPY"]) {
+    const want = (code === "YGM" ? 2 : 0) + 5 + (prizeStock[code] || 0);
+    assert.equal(user.stocks[code].qty, want, `${code}：もとの株＋ラストワン賞の5株＋当たった株`);
+    assert.ok(user.stocks[code].cost > (code === "YGM" ? 400 : 0), `${code} の取得額も増えている`);
+  }
+});
+
 test("同時に買われたとき：どちらか一方だけが成功し、もう一方は「もう一度」（番号が重ならない）", async () => {
   const { fs, deps, buy } = setup({ random: rngOf(9) });
   const real = fs.commit;

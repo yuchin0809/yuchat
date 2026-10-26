@@ -45,7 +45,7 @@ const ticketLeft = (r) => Math.max(0, (TICKET_USES[r.kind] || 0) - Math.max(0, M
 function prizeLine(r) {
   const p = (st && st.prizes || []).find((x) => x.id === r.id) || {};
   const nm = r.name || p.name || (r.id === "L" ? "ラストワン賞" : `${r.id}賞`);
-  if (r.id === "L") return `${ICON.L} ${nm}（伝説セット）　確変の予約 残り${ticketLeft(r)}回`;
+  if (r.id === "L") return `${ICON.L} ${nm}（伝説セット）　確変の予約 残り${ticketLeft(r)}回・全5社5株はゆう株に入っています`;
   if (r.kind === "stock") return `${ICON[r.id]} ${nm}　ゆう株 ${r.code} ${r.qty}株`;
   if (r.kind === "coin") return `${ICON[r.id]} ${nm}　ゆうコイン ${fmt(r.amount)}`;
   if (r.kind === "gear") return `${ICON[r.id]} ${nm}　消しバトの限定${GEAR[r.code] || "パーツ"}`;
