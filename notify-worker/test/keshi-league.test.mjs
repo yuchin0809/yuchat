@@ -250,19 +250,24 @@ test("金曜の cron が動かなくても、あとで画面を開いた人が�
   assert.equal([0, 1, 2, 3].map((i) => ctx.coinsOf(i) - 1000).reduce((a, b) => a + b, 0), 5600);
 });
 
-test("エントリー：途中から入った人は、いまのセットから参加。やめた人は次のセットから抜ける（戦績は残る）", async () => {
+test("エントリー：対戦表は前のセットが終わったときに決まる。そのあとに入った人は、その次のセットから参加。やめた人も、決まったセットまでは出る（戦績は残る）", async () => {
   const ctx = setup({ users: 6, entered: 4 });
   await ctx.tick(JST(2026, 10, 26, 10, 30));
   assert.deepEqual(Object.keys(ctx.wk().p).sort(), ["id0", "id1", "id2", "id3"]);
+  assert.deepEqual(Object.keys(ctx.wk().nx.s).sort(), ["id0", "id1", "id2", "id3"], "次のセットの対戦表（12:40 の分）は、もう決まっている");
   await ctx.act(4, { action: "keshiLeagueEntry", enter: true });
   await ctx.act(0, { action: "keshiLeagueEntry", enter: false });
   await ctx.tick(JST(2026, 10, 26, 12, 40));
-  const p = ctx.wk().p;
-  assert.deepEqual(Object.keys(p).sort(), ["id0", "id1", "id2", "id3", "id4"]);
-  assert.equal(p.id4.w + p.id4.l > 0, true); assert.equal(p.id4.d[0] + p.id4.d[1], 5, "入ってからの1セットだけ");
-  assert.equal(p.id0.w + p.id0.l, 5, "やめたあとの試合はしない（最初のセットの分だけ）");
+  let p = ctx.wk().p;
+  assert.deepEqual(Object.keys(p).sort(), ["id0", "id1", "id2", "id3"], "決まったあとに入った id4 は、まだ出ない");
+  assert.equal(p.id0.w + p.id0.l, 10, "やめた id0 も、決まっていた12:40のセットまでは出る");
+  assert.deepEqual(Object.keys(ctx.wk().nx.s).sort(), ["id1", "id2", "id3", "id4"], "次の15:00の表には、id4 が入り、id0 は抜ける");
+  await ctx.tick(JST(2026, 10, 26, 15, 0));
+  p = ctx.wk().p;
+  assert.equal(p.id4.w + p.id4.l, 5); assert.equal(p.id4.d[0] + p.id4.d[1], 5, "入ってから2つ目のセットから");
+  assert.equal(p.id0.w + p.id0.l, 10, "やめたあとの試合はしない");
   const out = await ctx.act(0, { action: "keshiLeagueState" });
-  assert.equal(out.entered, false); assert.equal(out.me.w + out.me.l, 5, "やめても、これまでの戦績は見られる");
+  assert.equal(out.entered, false); assert.equal(out.me.w + out.me.l, 10, "やめても、これまでの戦績は見られる");
 });
 
 test("週の途中で最初のエントリーがあった場合：入った時刻より前のセットには参加しない。次のセットから戦う", async () => {
@@ -287,4 +292,45 @@ test("消しゴムが強いほど、リーグでも有利（パーツを買っ�
   const total = { w: 0 };
   for (let k = 0; k < 6; k++) { const p = {}; for (let s = 0; s < 40; s++) keshiLeagueSimulateSet(p, [{ uid: "a", n: "a", r: ctx.wk().p.id0.r }, { uid: "b", n: "b", r: 50 }], `x${k}`, s); total.w += p.a.w; }
   assert.ok(total.w / (6 * 40 * 5) > 0.75, `強い消しゴムの勝率：${total.w / (6 * 40 * 5)}`);
+});
+
+test("次の試合：前のセットが終わると、次のセットの5試合の相手・順位・消しゴムが見える。実際の試合の相手と同じ", async () => {
+  const ctx = setup({ users: 8, entered: 8 });
+  await ctx.tick(JST(2026, 10, 26, 10, 30));
+  const views = [];
+  for (let i = 0; i < 8; i++) views.push(await ctx.act(i, { action: "keshiLeagueState" }));
+  views.forEach((v, i) => {
+    const nx = v.next;
+    assert.equal(nx.fixed, true); assert.equal(nx.entered, true); assert.equal(nx.k, 1); assert.equal(nx.startMs, JST(2026, 10, 26, 12, 40));
+    assert.equal(nx.rounds.length, 5);
+    assert.equal(new Set(nx.rounds.map((r) => r.name)).size, 5, "8人なら、5試合とも別の相手");
+    nx.rounds.forEach((r) => { assert.ok(r.name && r.name !== `u${i}`); assert.equal(typeof r.stats.rating, "number"); assert.ok(r.eq && r.eq.body); assert.ok(r.rank >= 1 && r.rank <= 8); });
+    assert.equal(typeof nx.mine.stats.rating, "number");
+  });
+  const plan = views.map((v) => v.next.rounds.map((r) => r.name));
+  views.forEach((v, i) => v.next.rounds.forEach((r, k) => assert.equal(plan[Number(r.name.slice(1))][k], `u${i}`, "相手から見ても、同じ試合")));
+  await ctx.tick(JST(2026, 10, 26, 12, 40));
+  const p = ctx.wk().p;
+  for (let i = 0; i < 8; i++) assert.deepEqual(p[`id${i}`].m.map((x) => x.split("|")[2]), plan[i], `u${i} の相手は、見せたとおり`);
+  const after = await ctx.act(0, { action: "keshiLeagueState" });
+  assert.equal(after.next.k, 2); assert.equal(after.next.startMs, JST(2026, 10, 26, 15, 0));
+});
+
+test("次の試合：人数が奇数なら休みの試合が出る。エントリーしていない人・最初のセットの前は、相手の表がない", async () => {
+  const ctx = setup({ users: 6, entered: 5, now: JST(2026, 10, 26, 9, 0) });
+  const before = await ctx.act(0, { action: "keshiLeagueState" });
+  assert.equal(before.next, null, "最初のセットの前は、表がまだない（試合の書類もない）");
+  await ctx.tick(JST(2026, 10, 26, 10, 30));
+  const v = await ctx.act(0, { action: "keshiLeagueState" });
+  assert.equal(v.next.rounds.filter((r) => r.rest).length, 1);
+  assert.equal(v.next.rounds.filter((r) => !r.rest).length, 4);
+  assert.equal((await ctx.act(5, { action: "keshiLeagueState" })).next, null, "エントリーしていない人には出さない");
+});
+
+test("ランキング：20人より多くても、全員ぶんを返す", async () => {
+  const ctx = setup({ users: 30, entered: 30 });
+  await ctx.tick(JST(2026, 10, 26, 10, 30));
+  const v = await ctx.act(0, { action: "keshiLeagueState" });
+  assert.equal(v.total, 30); assert.equal(v.top.length, 30);
+  assert.deepEqual(v.top.map((t) => t.rank), Array.from({ length: 30 }, (_, i) => i + 1));
 });

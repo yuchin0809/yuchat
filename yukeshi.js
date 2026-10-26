@@ -9,10 +9,10 @@ import { createEraserStage, SLEEVE_COLORS, sleeveCss } from "./yukeshi3d.js?v=20
 
 const SLOT_NAMES = { body: "本体", edge: "ふち", sole: "そこ", weight: "おもり" };
 const STAT_NAMES = [["m", "重さ"], ["s", "すべり"], ["b", "反発"], ["z", "大きさ"]];
-let ctx = null, st = null, table = null, sel = { tab: "body", picks: {} }, busy = false, stage = null, stylesDone = false, token = 0, practice = null;
+let ctx = null, st = null, table = null, sel = { tab: "body", picks: {} }, busy = false, stage = null, cmpStage = null, stylesDone = false, token = 0, practice = null;
 const $ = (s) => ctx && ctx.root.querySelector(s);
 
-export function stopKeshi() { token++; if (stage) { try { stage.dispose(); } catch (_) {} stage = null; } if (practice) practice.stopPractice(); }
+export function stopKeshi() { token++; if (stage) { try { stage.dispose(); } catch (_) {} stage = null; } disposeCmp(); if (practice) practice.stopPractice(); }
 
 export function renderKeshi(c) {
   stopKeshi();
@@ -187,11 +187,48 @@ async function openLeague() {
   try { const r = await ctx.api("keshiLeagueState"); if (t !== token) return; L = r; drawLeague(); }
   catch (e) { if (t !== token) return; ctx.root.querySelector(".yk2-msg").innerHTML = `<b>${ctx.esc(e && e.code === "not_published" ? "消しバトはまだ公開されていません。" : "読み込みに失敗しました。もう一度お試しください。")}</b>`; }
 }
-function sheet(title, html) {
+function disposeCmp() { if (cmpStage) { try { cmpStage.dispose(); } catch (_) {} cmpStage = null; } }
+function sheet(title, html, onClose) {
   const el = document.createElement("div"); el.className = "yl2-sheet";
   el.innerHTML = `<div class="yl2-sheet-box"><h3>${ctx.esc(title)}</h3><div class="yl2-sheet-body">${html}</div><button type="button" class="yw-btn yk2-go" data-close>閉じる</button></div>`;
-  el.addEventListener("click", (e) => { if (e.target === el || e.target.hasAttribute("data-close")) el.remove(); });
+  el.addEventListener("click", (e) => { if (e.target === el || e.target.hasAttribute("data-close")) { el.remove(); if (onClose) onClose(); } });
   ctx.root.appendChild(el);
+  return el;
+}
+const DOW = "日月火水木金土";
+const SWATCH = (color) => `background:${sleeveCss(SLEEVE_COLORS[color] || SLEEVE_COLORS[0])}`;
+/* 🥊 次の試合：次のセットの5試合の相手（前のセットが終わると決まる）。相手の順位・戦績・消しゴムの強さと、「戦力比較」 */
+function nextMatchesHtml() {
+  const nx = L.next;
+  if (!nx) return "";
+  const d = new Date(nx.startMs + 9 * 3600000);
+  const when = `${mdJa(nx.startMs)}（${DOW[d.getUTCDay()]}）${hmJa(d.getUTCHours(), d.getUTCMinutes())}開始`;
+  let body;
+  if (!nx.fixed) body = `<div class="yl2-nx-note">対戦表は、前のセットが終わると発表されます。</div>`;
+  else if (!nx.entered) body = `<div class="yl2-nx-note">このセットは参加しません（エントリーしたあとに決まる、次のセットの表から参加します）。</div>`;
+  else body = nx.rounds.map((r, i) => r.rest
+    ? `<div class="yl2-nx rest"><span class="no">第${i + 1}戦</span><div class="who"><b>休み</b><small>この試合はおやすみです</small></div></div>`
+    : `<div class="yl2-nx"><span class="no">第${i + 1}戦</span><div class="who"><b>${ctx.esc(r.name)}</b><small>リーグ順位 <em>${r.rank ? r.rank + "位" : "—"}</em>${r.w + r.l ? `（${r.w}勝${r.l}敗）` : ""}</small></div>
+      <button type="button" class="yl2-cmp" data-cmp="${i}">戦力比較</button>
+      <div class="yl2-eraser" style="${SWATCH(r.color)}"><small>総合力</small><b>${r.stats.rating}</b></div></div>`).join("");
+  return `<div class="yl2-sec">次の試合<span>${when}</span></div><div class="yl2-nexts">${body}</div>`;
+}
+/* 戦力比較：自分と相手の総合力・4つの能力を並べて、相手の消しゴムを3Dで見せる（勝つ確率は出さない） */
+function compare(i) {
+  const nx = L.next, r = nx && nx.rounds[i];
+  if (!r || r.rest) return;
+  const me = nx.mine, rows = [["総合力", "rating"], ["重さ", "m"], ["すべり", "s"], ["反発", "b"], ["大きさ", "z"]];
+  const bar = (v, win) => `<i class="${win ? "win" : ""}" style="width:${Math.max(4, Math.min(100, v))}%"></i>`;
+  const stat = rows.map(([label, key], n) => { const a = me.stats[key], b = r.stats[key]; return `<div class="yl2-cs${n === 0 ? " main" : ""}"><span class="bar l">${bar(a, a > b)}</span><b class="${a > b ? "win" : ""}">${a}</b><em>${label}</em><b class="${b > a ? "win" : ""}">${b}</b><span class="bar r">${bar(b, b > a)}</span></div>`; }).join("");
+  const parts = ["body", "edge", "sole", "weight"].map((slot, n) => `<div><span>${SLOT_NAMES[slot]}</span><b>${ctx.esc((r.parts && r.parts[n]) || "—")}</b></div>`).join("");
+  const el = sheet(`第${i + 1}戦　戦力比較`, `<div class="yl2-cmp-head"><span>あなた</span><span>${ctx.esc(r.name)}</span></div>
+    <div class="yl2-cmp-stage" id="ylCmpStage"></div>
+    ${stat}
+    <div class="yl2-cmp-parts"><b>${ctx.esc(r.name)} の消しゴム</b>${parts}</div>
+    <p class="yl2-cmp-note">試合の前に、改造で変わることがあります（次のセットが始まるときの強さで戦います）。</p>`, disposeCmp);
+  disposeCmp();
+  const host = el.querySelector("#ylCmpStage");
+  createEraserStage(host).then((s) => { if (!s) { host.textContent = "3D を表示できませんでした"; return; } if (!host.isConnected) { s.dispose(); return; } cmpStage = s; s.set(r.eq, r.color); });
 }
 function drawLeague() {
   const w = L.week, pr = L.prizes, me = L.me;
@@ -221,22 +258,25 @@ function drawLeague() {
     ${lastCard}${entry}
     <div class="yl2-actions"><button type="button" id="ylPrize2">🏅 報酬</button><button type="button" id="ylRanking">👑 ランキング</button><button type="button" id="ylOrder">${eraserIcon("ker-inline")} 消しゴム変更</button></div>
     <div class="yl2-sec">最新試合結果<span>${lastSet && me ? lastSet : ""}</span></div><div class="yl2-matches">${matches}</div>
-    <div class="yl2-sec">通算戦績<span>${me ? `${me.w}勝 ${me.l}敗` : "0勝 0敗"}</span></div><div class="yl2-table"><div class="yl2-row head"><span>日付</span><span>勝敗</span><span>順位</span></div>${rows}</div>`;
+    <div class="yl2-sec">通算戦績<span>${me ? `${me.w}勝 ${me.l}敗` : "0勝 0敗"}</span></div><div class="yl2-table"><div class="yl2-row head"><span>日付</span><span>勝敗</span><span>順位</span></div>${rows}</div>
+    ${nextMatchesHtml()}`;
   const help = () => sheet("最強決定戦のルール", `<ol class="yl2-rules"><li>自分の消しゴム1個で戦います。パーツを買って組み合わせて、最強の消しゴムを作ろう。</li>
     <li>一度エントリーすると、毎週自動で参加扱いになります。</li>
     <li>月曜〜金曜の毎日、${first} に5試合ずつ（1日15試合）、自動で対戦します。</li>
     <li>1試合は3本勝負（2本先取）。結果だけが表示されます。強い消しゴムが有利ですが、毎回勝てるとは限りません。</li>
-    <li>対戦相手は、最初はランダム。そのあとは、勝ち負けの数が近い人になります。</li>
+    <li>対戦相手は、前のセットが終わると、次のセットの5試合ぶんが「次の試合」に発表されます（勝ち負けの数が近い人。週の最初のセットはランダム）。「戦力比較」で、相手の消しゴムも見られます。</li>
     <li>月〜金の勝ち数でランキングが決まり、金曜 15:10 に結果発表。</li></ol>`);
   const prize = () => sheet("報酬", `<p>金曜 15:10 の結果発表で、ランキングの上位3名にゆうコインをお渡しします。</p><div class="yl2-prizes"><div>🥇 1位<b>${pr[0].toLocaleString("ja-JP")}</b>コイン</div><div>🥈 2位<b>${pr[1].toLocaleString("ja-JP")}</b>コイン</div><div>🥉 3位<b>${pr[2].toLocaleString("ja-JP")}</b>コイン</div></div>`);
-  const ranking = () => sheet("ランキング", L.top.length
-    ? `<p>今週の勝ち数の順位です（参加 ${L.total} 人）。</p><div class="yl2-rk">${L.top.map((t) => `<div class="${t.mine ? "mine" : ""}"><span>${t.rank <= 3 ? ["🥇", "🥈", "🥉"][t.rank - 1] : t.rank + "位"}</span><span class="n">${ctx.esc(t.name)}</span><b>${t.w}勝${t.l}敗</b></div>`).join("")}</div>`
+  const ranking = (all = false) => { const el = sheet("ランキング", L.top.length
+    ? `<p>今週の勝ち数の順位です（参加 ${L.total} 人）。</p><div class="yl2-rk">${(all ? L.top : L.top.slice(0, 20)).map((t) => `<div class="${t.mine ? "mine" : ""}"><span>${t.rank <= 3 ? ["🥇", "🥈", "🥉"][t.rank - 1] : t.rank + "位"}</span><span class="n">${ctx.esc(t.name)}</span><b>${t.w}勝${t.l}敗</b></div>`).join("")}</div>${!all && L.top.length > 20 ? `${(() => { const m = L.top.find((t) => t.mine); return m && m.rank > 20 ? `<p>あなたは <b>${m.rank}位</b>（${m.w}勝${m.l}敗）です。</p>` : ""; })()}<button type="button" class="yw-btn yk2-go" data-more style="margin-bottom:8px">もっと見る（全${L.top.length}人）</button>` : ""}`
     : `<p>ランキングは、試合が始まってから表示されます。${L.started ? "" : `（第${w.no}回：${mdJa(w.setsMs[0])}（月）から）`}</p><p>いまのエントリー：${L.count}人</p>`);
+    el.querySelector("[data-more]")?.addEventListener("click", () => { el.remove(); ranking(true); }); };
   $("#ylBack")?.addEventListener("click", () => renderKeshi(ctx));
   $("#ylOrder")?.addEventListener("click", () => renderKeshi(ctx));
   $("#ylHelp")?.addEventListener("click", help);
   $("#ylPrize")?.addEventListener("click", prize); $("#ylPrize2")?.addEventListener("click", prize);
-  $("#ylRanking")?.addEventListener("click", ranking);
+  $("#ylRanking")?.addEventListener("click", () => ranking());
+  ctx.root.querySelectorAll("[data-cmp]").forEach((b) => b.addEventListener("click", () => compare(Number(b.dataset.cmp))));
   $("#ylJoin")?.addEventListener("click", () => setEntry(true));
   $("#ylQuit")?.addEventListener("click", () => { if (confirm("エントリーをやめますか？（あとでまたエントリーできます）")) setEntry(false); });
 }
@@ -310,6 +350,15 @@ function injectStyles() {
   .yl2-sheet { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 18px; } .yl2-sheet-box { background: #fff; border-radius: 16px; padding: 16px; max-width: 420px; width: 100%; max-height: 80vh; overflow: auto; } .yl2-sheet-box h3 { margin: 0 0 10px; }
   .yl2-rules { margin: 0; padding-left: 20px; font-size: 13px; line-height: 1.8; color: #444; } .yl2-sheet-body p { font-size: 13px; line-height: 1.8; color: #444; }
   .yl2-prizes { display: grid; gap: 8px; margin: 10px 0 14px; } .yl2-prizes div { background: #fff8e8; border-radius: 10px; padding: 10px 14px; font-weight: 800; display: flex; justify-content: space-between; align-items: center; } .yl2-prizes b { font-size: 20px; color: #b45309; margin-left: auto; margin-right: 4px; }
+  .yl2-nexts { background: #1c1938; padding: 8px; border-radius: 0 0 10px 10px; display: grid; gap: 6px; margin-bottom: 14px; } .yl2-nx-note { color: #cfc8ee; font-size: 12.5px; line-height: 1.7; padding: 8px 6px; }
+  .yl2-nx { display: grid; grid-template-columns: 44px 1fr auto 64px; gap: 8px; align-items: center; background: linear-gradient(#2a2650, #14122e); border: 1px solid rgba(255,255,255,.12); border-radius: 10px; padding: 6px 8px; color: #fff; } .yl2-nx.rest { grid-template-columns: 44px 1fr; opacity: .7; }
+  .yl2-nx .no { font-weight: 900; font-size: 12px; color: #ffe08a; } .yl2-nx .who b { display: block; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .yl2-nx .who small { display: block; font-size: 11px; color: #cfc8ee; } .yl2-nx .who em { font-style: normal; color: #ffe08a; font-weight: 800; }
+  .yl2-cmp { border: 2px solid #d4a93a; background: linear-gradient(#fff6d8, #f0cf6a); color: #5a3800; font-weight: 900; font-size: 12px; border-radius: 10px; padding: 6px 8px; cursor: pointer; }
+  .yl2-eraser { border-radius: 8px; text-align: center; color: #fff; padding: 4px 2px; text-shadow: 0 1px 2px rgba(0,0,0,.7); box-shadow: inset 0 0 0 2px rgba(255,255,255,.55); } .yl2-eraser small { display: block; font-size: 9px; } .yl2-eraser b { font-size: 20px; }
+  .yl2-cmp-head { display: flex; justify-content: space-between; font-weight: 800; font-size: 13px; margin-bottom: 4px; } .yl2-cmp-stage { position: relative; height: 170px; border-radius: 12px; background: linear-gradient(135deg, #c8964b, #8a5a1f); overflow: hidden; margin-bottom: 10px; }
+  .yl2-cs { display: grid; grid-template-columns: 1fr 34px 52px 34px 1fr; gap: 4px; align-items: center; font-size: 13px; padding: 3px 0; text-align: center; } .yl2-cs.main { font-size: 15px; } .yl2-cs em { font-style: normal; color: #666; font-size: 12px; } .yl2-cs b { font-weight: 800; } .yl2-cs b.win { color: #d6401f; }
+  .yl2-cs .bar { height: 9px; background: #ece7da; border-radius: 6px; overflow: hidden; display: flex; } .yl2-cs .bar.l { justify-content: flex-end; } .yl2-cs .bar i { display: block; height: 100%; background: #9aa0c8; } .yl2-cs .bar i.win { background: linear-gradient(90deg, #e0902f, #d6401f); }
+  .yl2-cmp-parts { margin-top: 10px; background: #fff8e8; border-radius: 10px; padding: 8px 12px; font-size: 12.5px; } .yl2-cmp-parts > b { display: block; margin-bottom: 4px; } .yl2-cmp-parts div { display: flex; justify-content: space-between; padding: 2px 0; } .yl2-cmp-note { font-size: 11.5px !important; color: #888 !important; }
   .yk2-stage, .yk2-parts, .yk2-tabs { touch-action: manipulation; -webkit-user-select: none; user-select: none; }
   `;
   const el = document.createElement("style"); el.id = "yk2-style"; el.textContent = css; document.head.appendChild(el);
