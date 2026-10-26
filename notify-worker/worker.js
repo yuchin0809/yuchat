@@ -6514,6 +6514,18 @@ export async function keshiLeagueAdvance(deps, now) {
       } catch (error) { if (isRetryableCommitError(error)) { raw = await fs.getRaw(KESHI_LEAGUE_DOC(wkId)); data = raw ? decodeFields(raw.fields) : null; continue; } throw error; }
       raw = await fs.getRaw(KESHI_LEAGUE_DOC(wkId)); data = decodeFields(raw.fields);
     }
+    /* 次のセットの対戦表がまだ無い（この機能の前に終わったセットのあと・エントリーが足りなかったとき）：いま作って書く。書けたら、何回呼ばれても読み直さない */
+    if (data && Number(data.setsDone) < week.allSetsMs.length && week.allSetsMs[Number(data.setsDone)] > now && !(data.nx && Number(data.nx.k) === Number(data.setsDone))) {
+      if (!entrants) entrants = await keshiLeagueEntrants(deps);
+      const k = Number(data.setsDone), nextPl = entrants.filter((e) => e.at <= week.allSetsMs[k]).map((e) => ({ uid: e.uid, n: e.n, r: e.r }));
+      if (nextPl.length >= 2) {
+        const nx = keshiLeagueScheduleToNx(keshiLeagueSchedule(data.p || {}, nextPl, wkId, k), nextPl, k);
+        try {
+          await fs.commit([{ update: { name: fs.docName(KESHI_LEAGUE_DOC(wkId)), fields: encodeFields({ nx }) }, updateMask: { fieldPaths: ["nx"] }, currentDocument: { updateTime: raw.updateTime } }]);
+          raw = await fs.getRaw(KESHI_LEAGUE_DOC(wkId)); data = decodeFields(raw.fields);
+        } catch (error) { if (!isRetryableCommitError(error)) throw error; raw = await fs.getRaw(KESHI_LEAGUE_DOC(wkId)); data = raw ? decodeFields(raw.fields) : data; }
+      }
+    }
     if (data && data.settled !== true && now >= week.endMs && Number(data.setsDone) >= week.allSetsMs.length) {
       try { data = await keshiLeagueSettle(deps, wkId, raw, data, week); }
       catch (error) { if (!isRetryableCommitError(error)) throw error; raw = await fs.getRaw(KESHI_LEAGUE_DOC(wkId)); data = raw ? decodeFields(raw.fields) : data; }
