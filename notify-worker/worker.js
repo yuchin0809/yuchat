@@ -6391,36 +6391,68 @@ function keshiPairRound(list, met, key) {
   }
   return out;
 }
+/* 1セットの対戦表（5試合ぶん）を、セットの始めにまとめて決める（前のセットが終わった時点の勝ち数で並べる）。第2戦以降の相手も、試合の結果には左右されない。
+   ・勝ち数が近い人どうし（同じ勝ち数はランダム）。同じセットの中では、できるだけ同じ相手を避ける。人数が奇数のときは、1試合ごとに1人が休み。
+   ・同じ週・同じセットなら、何回計算しても同じ表になる（決まった乱数。試合の結果の乱数とは別）。
+   ・戻り値：rounds[試合の番号] = { pairs: [[uidA, uidB], …], bye: 休みの uid か null }。pl は [{ uid, n, r }] */
+export function keshiLeagueSchedule(p, pl, wkId, k) {
+  const rnd = kakuSeeded(`keshiLeagueSched:${wkId}:${k}`), wins = (x) => (p[x.uid] ? p[x.uid].w : 0);
+  const order = pl.map((x) => ({ x, t: rnd() })).sort((u, v) => u.t - v.t).map((u) => u.x).sort((u, v) => wins(v) - wins(u));   // ランダムに並べてから、勝ち数順（同じ勝ち数はランダムのまま）
+  const met = new Set(), byes = new Map(), key = (a, b) => (a < b ? `${a}|${b}` : `${b}|${a}`), rounds = [];
+  for (let round = 0; round < KESHI_LEAGUE_ROUNDS; round++) {
+    let list = order, bye = null;
+    if (list.length % 2 === 1) {
+      const fewest = Math.min(...list.map((x) => byes.get(x.uid) || 0)), cand = list.filter((x) => (byes.get(x.uid) || 0) === fewest);
+      const b = cand[Math.floor(rnd() * cand.length)];
+      byes.set(b.uid, (byes.get(b.uid) || 0) + 1); bye = b.uid;
+      list = list.filter((x) => x !== b);
+    }
+    const pairs = keshiPairRound(list, met, key).map(([i, j]) => { met.add(key(list[i].uid, list[j].uid)); return [list[i].uid, list[j].uid]; });
+    rounds.push({ pairs, bye });
+  }
+  return rounds;
+}
+/* 対戦表の保存の形：{ k: セットの番号, s: { uid: { n 名前, r 総合力, o: [第1戦の相手の uid, …（休みは ""）] } } }（前のセットが終わったときに、次のセットの分を書く） */
+export function keshiLeagueScheduleToNx(rounds, pl, k) {
+  const s = {};
+  pl.forEach((x) => { s[x.uid] = { n: x.n, r: x.r, o: Array(rounds.length).fill("") }; });
+  rounds.forEach((rd, i) => rd.pairs.forEach(([a, b]) => { if (s[a]) s[a].o[i] = b; if (s[b]) s[b].o[i] = a; }));
+  return { k, s };
+}
+const keshiLeagueScheduleFromNx = (nx) => {
+  const rounds = [];
+  for (let i = 0; i < KESHI_LEAGUE_ROUNDS; i++) {
+    const pairs = [], seen = new Set(); let bye = null;
+    Object.entries(nx.s).forEach(([uid, v]) => { const o = v.o[i]; if (!o) { if (nx.s[uid]) bye = bye || uid; return; } if (seen.has(uid) || !nx.s[o]) return; seen.add(uid); seen.add(o); pairs.push([uid, o]); });
+    rounds.push({ pairs, bye });
+  }
+  return rounds;
+};
 /* 1セット（5試合）を行う。p（uid → 戦績）を直接書き換える。
-   相手：その週の最初の1回戦はランダム、そのあとは勝ち数が近い人（同じセットの中では、できるだけ同じ相手を避ける）。人数が奇数のときは、1回戦ごとに1人が休み。
-   同じ週・同じセットなら、何回やっても同じ結果になる（決まった乱数）。 */
-export function keshiLeagueSimulateSet(p, entrants, wkId, k) {
+   相手は対戦表（keshiLeagueSchedule。渡されなければ、ここで作る）のとおり。試合の結果は、同じ週・同じセットなら、何回やっても同じ（決まった乱数）。 */
+export function keshiLeagueSimulateSet(p, entrants, wkId, k, rounds = null) {
   const rnd = kakuSeeded(`keshiLeague:${wkId}:${k}`), day = Math.floor(k / 3);
   const pl = entrants.map((e) => ({ uid: e.uid, n: e.n, r: e.r }));
   pl.forEach((x) => {
     if (!p[x.uid]) p[x.uid] = { n: x.n, w: 0, l: 0, r: x.r, d: Array(10).fill(0), k: Array(5).fill(0), m: [] };
     p[x.uid].n = x.n; p[x.uid].r = x.r; p[x.uid].m = [];
   });
-  const met = new Set(), byes = new Map(), key = (a, b) => (a < b ? `${a}|${b}` : `${b}|${a}`);
+  const by = new Map(pl.map((x) => [x.uid, x]));
+  const plan = rounds || keshiLeagueSchedule(p, pl, wkId, k);
   const record = (A, B, a, b) => {
     const win = a > b, me = p[A.uid];
     if (win) { me.w++; me.d[day * 2]++; } else { me.l++; me.d[day * 2 + 1]++; }
     me.m.push(`${win ? 1 : 0}|${a}-${b}|${B.n}`);
   };
-  for (let round = 0; round < KESHI_LEAGUE_ROUNDS; round++) {
-    const order = pl.map((x) => ({ x, t: rnd() })).sort((u, v) => u.t - v.t).map((u) => u.x).sort((u, v) => p[v.uid].w - p[u.uid].w);   // ランダムに並べてから、勝ち数順（同じ勝ち数はランダムのまま）
-    let list = order;
-    if (list.length % 2 === 1) {
-      const fewest = Math.min(...list.map((x) => byes.get(x.uid) || 0)), cand = list.filter((x) => (byes.get(x.uid) || 0) === fewest);
-      const bye = cand[Math.floor(rnd() * cand.length)];
-      byes.set(bye.uid, (byes.get(bye.uid) || 0) + 1); p[bye.uid].m.push("-");
-      list = list.filter((x) => x !== bye);
-    }
-    keshiPairRound(list, met, key).forEach(([i, j]) => {
-      const A = list[i], B = list[j], r = keshiMatchSim(rnd, A.r, B.r);
-      met.add(key(A.uid, B.uid)); record(A, B, r.a, r.b); record(B, A, r.b, r.a);
+  plan.forEach((rd) => {
+    pl.forEach((x) => { if (!rd.pairs.some(([a, b]) => a === x.uid || b === x.uid)) p[x.uid].m.push("-"); });   // 休み
+    rd.pairs.forEach(([ua, ub]) => {
+      const A = by.get(ua), B = by.get(ub);
+      if (!A || !B) return;
+      const r = keshiMatchSim(rnd, A.r, B.r);
+      record(A, B, r.a, r.b); record(B, A, r.b, r.a);
     });
-  }
+  });
   if (k % 3 === 2) keshiLgRows(p).forEach((row, i) => { p[row.uid].k[day] = i + 1; });   // その日の最後のセットのあとの順位を残す
   return p;
 }
@@ -6462,8 +6494,21 @@ export async function keshiLeagueAdvance(deps, now) {
       if (!data && !entrants.length) break;                                   // 誰もエントリーしていないあいだは、何も作らない
       const done = data ? Number(data.setsDone) || 0 : 0;
       const p = data && data.p ? data.p : {};
-      keshiLeagueSimulateSet(p, entrants.filter((e) => e.at <= week.allSetsMs[done]), wkId, done);   // そのセットの時刻までにエントリーした人だけが参加（途中から入った人は、次のセットから）
-      const fields = { weekStart: week.startMs, setsDone: done + 1, p };
+      /* 対戦表は、前のセットが終わったときに決めて書いてある（nx）。その表にいる人が参加する（強さは、いまの消しゴムで）。無ければ（週の最初のセットなど）、いまの参加者で作る */
+      let rounds = null, pl;
+      if (data && data.nx && Number(data.nx.k) === done && data.nx.s) {
+        const byUid = new Map(entrants.map((e) => [e.uid, e]));
+        pl = Object.entries(data.nx.s).map(([uid, v]) => { const e = byUid.get(uid); return { uid, n: e ? e.n : v.n, r: e ? e.r : v.r }; });
+        rounds = keshiLeagueScheduleFromNx(data.nx);
+      } else pl = entrants.filter((e) => e.at <= week.allSetsMs[done]);   // そのセットの時刻までにエントリーした人だけが参加（途中から入った人は、次のセットから）
+      keshiLeagueSimulateSet(p, pl, wkId, done, rounds);
+      /* 次のセットの対戦表を、いま決める（5試合ぶんの相手を、画面に先に見せるため）。エントリーしている人のうち、次のセットの時刻までに入った人 */
+      let nx = null;
+      if (done + 1 < week.allSetsMs.length) {
+        const nextPl = entrants.filter((e) => e.at <= week.allSetsMs[done + 1]).map((e) => ({ uid: e.uid, n: e.n, r: e.r }));
+        if (nextPl.length >= 2) nx = keshiLeagueScheduleToNx(keshiLeagueSchedule(p, nextPl, wkId, done + 1), nextPl, done + 1);
+      }
+      const fields = { weekStart: week.startMs, setsDone: done + 1, p, nx };
       try {
         await fs.commit([{ update: { name: fs.docName(KESHI_LEAGUE_DOC(wkId)), fields: encodeFields(fields) }, updateMask: { fieldPaths: Object.keys(fields) }, currentDocument: raw ? { updateTime: raw.updateTime } : { exists: false } }]);
       } catch (error) { if (isRetryableCommitError(error)) { raw = await fs.getRaw(KESHI_LEAGUE_DOC(wkId)); data = raw ? decodeFields(raw.fields) : null; continue; } throw error; }
@@ -6502,6 +6547,25 @@ function keshiLeagueMe(data, uid) {
   const recent = (v.m || []).map((x) => { if (x === "-") return { rest: true }; const [win, score, opp] = String(x).split("|"); return { win: win === "1", score, opp }; });
   return { rank, w: v.w, l: v.l, days, recent };
 }
+/* 自分の「次の試合」：次のセットの対戦表（5試合の相手）。相手の名前・順位・戦績・消しゴム（パーツ・色・強さ）を付ける。相手の消しゴムの書類は、まとめて1回で読む（最大5件） */
+async function keshiLeagueNext(deps, data, cur, uid, week) {
+  const done = data ? Number(data.setsDone) || 0 : 0;
+  if (!data || done >= week.allSetsMs.length) return null;
+  const nextMs = week.allSetsMs[done], nx = data.nx && Number(data.nx.k) === done && data.nx.s ? data.nx : null;
+  const out = { k: done, startMs: nextMs, fixed: !!nx, entered: !!(nx && nx.s[uid]), rounds: [] };
+  if (!nx || !nx.s[uid]) return out;
+  const opps = [...new Set(nx.s[uid].o.filter(Boolean))];
+  const raws = opps.length ? await deps.firestore.batchGet(opps.map((u) => `yuslotKeshi/${u}`)) : [];
+  const gear = new Map(opps.map((u, i) => { const c = keshiParse(raws[i] || {}); return [u, { eq: c.eq, color: c.color, stats: keshiStats(c.eq), parts: KESHI_SLOTS.map((slot) => { const pt = keshiPartOf(slot, c.eq[slot]); return pt ? pt.name + (/~u$/.test(String(c.eq[slot])) ? "（中古）" : "") : "—"; }) }]; }));
+  const rows = keshiLgRows(data.p || {}).filter((r) => r.w + r.l > 0), rankOf = new Map(rows.map((r, i) => [r.uid, i + 1]));
+  out.mine = { eq: cur.eq, color: cur.color, stats: keshiStats(cur.eq) };
+  out.rounds = nx.s[uid].o.map((o) => {
+    if (!o) return { rest: true };
+    const v = (data.p && data.p[o]) || null, g = gear.get(o);
+    return { name: nx.s[o] ? nx.s[o].n : (v ? v.n : "?"), rank: rankOf.get(o) || 0, w: v ? v.w : 0, l: v ? v.l : 0, eq: g.eq, color: g.color, stats: g.stats, parts: g.parts };
+  });
+  return out;
+}
 async function keshiLeagueView(deps, cur, uid, now) {
   const adv = await keshiLeagueAdvance(deps, now);
   const raw = await deps.firestore.getRaw("yuslotKeshi/_league");
@@ -6514,7 +6578,8 @@ async function keshiLeagueView(deps, cur, uid, now) {
     prizes: KESHI_LEAGUE_PRIZES, sets: KESHI_LEAGUE_SETS, serverNowMs: now,
     setsDone: data ? Number(data.setsDone) || 0 : 0, lastSetMs: data && Number(data.setsDone) > 0 ? week.allSetsMs[Number(data.setsDone) - 1] : 0,
     me: keshiLeagueMe(data, uid), total: rows.length,
-    top: rows.slice(0, 20).map((r, i) => ({ rank: i + 1, name: r.n, w: r.w, l: r.l, mine: r.uid === uid })),
+    top: rows.slice(0, 500).map((r, i) => ({ rank: i + 1, name: r.n, w: r.w, l: r.l, mine: r.uid === uid })),   // 全員ぶん（画面は、はじめの20人だけ出して、「もっと見る」で全員）
+    next: cur.league ? await keshiLeagueNext(deps, data, cur, uid, week) : null,
     last
   };
 }

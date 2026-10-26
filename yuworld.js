@@ -17,7 +17,7 @@ import { renderLottery, stopLottery } from "./yulottery.js?v=20261023-lottery9";
 /* 🎊 ゆう番くじ（発売前のお知らせの画面） */
 import { renderBankuji, stopBankuji, BANKUJI_SALE_MS } from "./yubankuji.js?v=20261026-bankuji5";
 import { renderYacht, stopYacht } from "./yuyacht.js?v=20261026-yacht6";
-import { renderKeshi, stopKeshi } from "./yukeshi.js?v=20261026-ltd10";
+import { renderKeshi, stopKeshi } from "./yukeshi.js?v=20261027-next1";
 import { eraserIcon, keshiLeagueTag } from "./yukeshi-core.js?v=20261026-ltd10";
 /* 🌈 確変台のパネル（台の一覧の上）。抽選・先着・通知設定。Worker の kaku* アクションを呼んで表示するだけ */
 import { kakuInit, kakuPanelHtml, kakuBind, kakuMachineInfo, startKaku, stopKaku, refreshKaku } from "./yukaku.js?v=20261026-kaku18";
