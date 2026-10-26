@@ -5441,13 +5441,14 @@ async function keshiBuyMany(deps, uid, body) {
   const picks = {};
   for (const it of items) {
     const slot = String(it?.slot || ""), id = String(it?.part || "");
-    if (!KESHI_PART_BY[slot]?.[id] || picks[slot] !== undefined) return { status: 400, error: "bad_request" };
+    if (!keshiPartOf(slot, id) || picks[slot] !== undefined) return { status: 400, error: "bad_request" };   // 中古（~u）のパーツも、持っていれば、いっしょに付けられる
     picks[slot] = id;
   }
   const me = await loadMyUser(deps.firestore, uid, body?.username);
   if (me.error) return me.error;
   const cur = await keshiLoad(deps, uid);
-  const buy = Object.entries(picks).filter(([slot, id]) => !keshiIsFree(slot, id) && !cur.owned.includes(`${slot}:${id}`));
+  if (Object.entries(picks).some(([slot, id]) => keshiIsUsedId(id) && !cur.owned.includes(`${slot}:${id}`))) return { status: 409, error: "not_owned" };   // 中古はゆうマートで買うもの。ショップでは買えない
+  const buy = Object.entries(picks).filter(([slot, id]) => !keshiIsUsedId(id) && !keshiIsFree(slot, id) && !cur.owned.includes(`${slot}:${id}`));
   const total = buy.reduce((sum, [slot, id]) => sum + KESHI_PART_BY[slot][id].price, 0);
   const coins = Number(decodeFields(me.raw.fields).coins || 0);
   if (buy.length && coins < total) return { status: 409, error: "insufficient_coins" };
