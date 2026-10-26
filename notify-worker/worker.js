@@ -522,7 +522,7 @@ export async function handleAdminAction(deps, callerUid, body) {
 
   const action = typeof body?.action === "string" ? body.action : "";
   const uid = typeof body?.uid === "string" ? body.uid : "";
-  const noUidActions = ["listUsers", "notifyAnnouncement", "renameUserRefs", "transferList", "transferApprove", "transferReject", "kakuWinners", "keshiLeagueEnroll", "economyReport"];
+  const noUidActions = ["listUsers", "notifyAnnouncement", "renameUserRefs", "transferList", "transferApprove", "transferReject", "kakuWinners", "keshiLeagueEnroll", "economyReport", "grantKakuTicket"];
   if (!noUidActions.includes(action) && !UID_PATTERN.test(uid)) return { status: 400, error: "invalid_uid" };
 
   try {
@@ -543,6 +543,7 @@ export async function handleAdminAction(deps, callerUid, body) {
       case "kakuWinners": return await adminKakuWinners(deps, body);
       case "keshiLeagueEnroll": return await adminKeshiLeagueEnroll(deps, callerUid, body);
       case "economyReport": return await adminEconomyReport(deps);
+      case "grantKakuTicket": return await adminGrantKakuTicket(deps, callerUid, uid, body);
       case "transferList": return await adminTransferList(deps);
       case "transferApprove": return await adminTransferApprove(deps, callerUid, body);
       case "transferReject": return await adminTransferReject(deps, callerUid, body);
@@ -1013,6 +1014,60 @@ function readIntegerField(field) {
   if ("integerValue" in field) return Number(field.integerValue);
   if ("doubleValue" in field) return Number(field.doubleValue);
   return NaN;
+}
+
+/* 管理者：確変台の予約チケット（1回ぶん）を配る。1人（uid）か、全員（all: true）。
+   ・チケットは、ゆう番くじ D賞と同じ種類（kaku1）の記録を、持ちもの（bankujiEntries）に足す。使い方・期限・数え方は、くじで当たったチケットと同じ（有効期限は60日）。
+   ・ゆうマートでは売れない（bt）。くじの景品の本数・中身は変えない。
+   ・grantId（1回の操作ごとに、画面が作る印）が同じ操作は、2回目から何もしない（ボタンの押しすぎで二重に配らない）。
+   ・1人1件の書き込み（更新時刻の条件つき。同時に変わったらその人だけ読み直す）。全員の分は、200人ずつ。操作の記録は1件。 */
+const ADMIN_KAKU_TICKET_MAX = 5;
+async function adminGrantKakuTicket(deps, callerUid, uid, body) {
+  const count = body?.count === undefined ? 1 : body.count;
+  if (!Number.isInteger(count) || count < 1 || count > ADMIN_KAKU_TICKET_MAX) return { status: 400, error: "invalid_count" };
+  const grantId = typeof body?.grantId === "string" ? body.grantId : "";
+  if (!/^[A-Za-z0-9_-]{8,64}$/.test(grantId)) return { status: 400, error: "invalid_grant_id" };
+  const all = body?.all === true;
+  if (!all && !UID_PATTERN.test(uid)) return { status: 400, error: "invalid_uid" };
+  const fs = deps.firestore, now = deps.now();
+  const userDocs = all ? await fs.query("users", [], { select: ["uid"] }) : await findUserDocsByUid(fs, uid);
+  const nameByUid = new Map();
+  userDocs.slice().sort((a, b) => (a.id < b.id ? -1 : 1)).forEach((d) => { const u = typeof d.data?.uid === "string" ? d.data.uid : ""; if (u && !d.id.startsWith("_") && !nameByUid.has(u)) nameByUid.set(u, d.id); });
+  if (!all) {
+    if (userDocs.length !== 1) return { status: 409, error: userDocs.length === 0 ? "user_not_found" : "multiple_user_docs" };
+    const record = await fs.get(`userDeletions/${uid}`);
+    if (record && record.status !== "completed") return { status: 409, error: "deletion_in_progress" };
+  }
+  const targets = [...nameByUid.entries()].map(([u, name]) => ({ uid: u, name }));
+  if (!targets.length) return { status: 409, error: "user_not_found" };
+  const grantOne = async (t) => {
+    const path = kakuTicketEntryPath(t.uid);
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const raw = await fs.getRaw(path), d = raw ? decodeFields(raw.fields) : {};
+      const prizes = Array.isArray(d.prizes) ? d.prizes : [];
+      if (prizes.some((r) => r?.g === grantId)) return "already";
+      const top = prizes.reduce((m, r) => Math.max(m, Number(r?.n) || 0), 1000);
+      const added = Array.from({ length: count }, (_, k) => ({ n: top + 1 + k, id: "D", kind: "kaku1", at: now, until: now + BANKUJI.rightDays * 86400000, bt: 1, g: grantId }));
+      const next = [...prizes, ...added];
+      try {
+        await fs.commit([raw
+          ? { update: { name: fs.docName(path), fields: encodeFields({ prizes: next }) }, updateMask: { fieldPaths: ["prizes"] }, currentDocument: { updateTime: raw.updateTime } }
+          : { update: { name: fs.docName(path), fields: encodeFields({ uid: t.uid, name: t.name, round: BANKUJI.round, tickets: [], prizes: next, dayKey: "", dayCount: 0 }) }, currentDocument: { exists: false } }]);
+        return "granted";
+      } catch (error) { if (isRetryableCommitError(error)) continue; throw error; }
+    }
+    return "busy";
+  };
+  const tally = { granted: 0, already: 0, busy: 0 };
+  for (let i = 0; i < targets.length; i += 200) {
+    const results = await Promise.all(targets.slice(i, i + 200).map((t) => grantOne(t)));
+    results.forEach((r) => { tally[r]++; });
+  }
+  if (tally.granted > 0) {
+    const callerDocs = await findUserDocsByUid(fs, callerUid);
+    await writeAuditLog(deps, { type: "grantKakuTicket", byUid: callerUid, byName: callerDocs.length === 1 ? callerDocs[0].id : "", all, targetUid: all ? "" : uid, targetName: all ? "" : targets[0].name, count, users: tally.granted, grantId });
+  }
+  return { ok: true, all, count, name: all ? "" : targets[0].name, ...tally, total: targets.length };
 }
 
 async function adminAdjustCoins(deps, callerUid, uid, body) {
