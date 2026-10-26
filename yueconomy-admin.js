@@ -31,6 +31,17 @@ function verdict(t) {
   return { cls: "low", text: `🟢 安定：${v}` };
 }
 
+/* 今日の13:00の処理（株価・利息）が済んでいるか。済んでいなければ、見守りが何をしたかも出す */
+function dailyLine(x, esc) {
+  if (!x) return "";
+  if (x.done) return `<p class="yec-note">今日（${esc(x.today)}）の株価・利息の更新：済み</p>`;
+  const w = x.watch;
+  const why = !w ? "見守りはまだ確かめていません（13:10 から確かめます）"
+    : w.result === "dispatched" ? "見守りが自動実行を頼みました（数分で反映されます）"
+    : w.result === "no_token" ? "見守りは動けません：Cloudflare に GITHUB_DISPATCH_TOKEN が未登録です"
+    : `見守りが自動実行を頼めませんでした（GitHub の応答 ${esc(String(w.status))}）`;
+  return `<p class="yec-note" style="color:#c0392b;font-weight:bold">⚠ 今日（${esc(x.today)}）の株価・利息の更新は、まだ済んでいません。${why}。</p>`;
+}
 function spark(points) {
   const ys = points.map((p) => Number(p.avg) || 0);
   if (ys.length < 2) return "";
@@ -58,6 +69,7 @@ function render() {
   const bk = d.bankuji;
   el.innerHTML = `${head}
     <div class="yec-verdict yec-${v.cls}">${esc(v.text)}</div>
+    ${dailyLine(d.daily, esc)}
     <p class="yec-note">コイン総量の更新：${c.date ? esc(c.date) : "－"}（${c.updatedAt ? esc(String(c.updatedAt).replace("T", " ").slice(0, 16)) + " UTC" : "－"}）</p>
     <div class="yec-grid">
       <div><small>総資産（合計）</small><b>${fmt(c.total)}</b></div><div><small>手持ちコイン</small><b>${fmt(c.coins)}</b></div>

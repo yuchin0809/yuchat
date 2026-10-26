@@ -3792,7 +3792,7 @@ export function economyTrend(points) {
 
 async function adminEconomyReport(deps) {
   const fs = deps.firestore, now = deps.now();
-  const [ranking, history] = await Promise.all([fs.get("rankings/assets"), fs.get("economyStats/history")]);
+  const [ranking, history, watch] = await Promise.all([fs.get("rankings/assets"), fs.get("economyStats/history"), fs.get("economyStats/dailyWatch")]);
   const users = Array.isArray(ranking?.users) ? ranking.users : [];
   const current = economySummary(users);
   const top = users.slice(0, 5).map((u) => ({ name: String(u.name || ""), total: Number(u.total) || 0 }));
@@ -3821,6 +3821,7 @@ async function adminEconomyReport(deps) {
     ok: true, serverNowMs: now,
     current: { ...current, date: ranking?.date || null, updatedAt: ranking?.liveUpdatedAt || ranking?.updatedAt || null },
     top, history: points, trend: economyTrend(points), lotteries, bankuji,
+    daily: { today: kakuDayId(now), done: ranking?.date === kakuDayId(now) && ranking?.complete === true, watch: watch && watch.date === kakuDayId(now) ? { result: String(watch.result || ""), status: watch.status ?? null, atMs: Number(watch.atMs) || 0 } : null },
     notes: ["ダービー・ゆうスロ・ヨットの収支は、まだ計測していません（コインの総量の増え方には入っています）。", "ログインボーナスは1日50コイン×ログインした人数です。預金の利息は毎日13:00に付き、日ごとの合計が「推移」に出ます。"]
   };
 }
@@ -6721,14 +6722,17 @@ export async function runDailyWatchdogTick(env = {}, scheduledTime = Date.now(),
   const d = deps || createDefaultDeps(env);
   const doc = await d.firestore.get("rankings/assets");
   if (doc && doc.date === today && doc.complete === true) { dailyWatchDone.add(today); return { skipped: "done" }; }
+  /* 管理者の画面で「見守りが何をしたか」が分かるように、結果を1件だけ書く（未完了の日の確認時刻だけ。1日最大8回） */
+  const note = async (result, status = null) => { try { await d.firestore.set("economyStats/dailyWatch", { date: today, result, status, atMs: scheduledTime }); } catch { /* 記録できなくても、手動実行の依頼は続ける */ } };
   const token = env.GITHUB_DISPATCH_TOKEN;
-  if (!token) { console.warn("ゆう経済の今日の分が未完了ですが、GITHUB_DISPATCH_TOKEN が未登録のため、手動実行を頼めません"); return { skipped: "no_token" }; }
+  if (!token) { console.warn("ゆう経済の今日の分が未完了ですが、GITHUB_DISPATCH_TOKEN が未登録のため、手動実行を頼めません"); await note("no_token"); return { skipped: "no_token" }; }
   const res = await fetchImpl(`https://api.github.com/repos/${DAILY_WATCH_REPO}/actions/workflows/derby-runner.yml/dispatches`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "yuuchat-notify", "Content-Type": "application/json" },
     body: JSON.stringify({ ref: "main" })
   });
-  if (res.status !== 204) { console.warn("derby-runner の手動実行を頼めませんでした", res.status); return { dispatched: false, status: res.status }; }
+  if (res.status !== 204) { console.warn("derby-runner の手動実行を頼めませんでした", res.status); await note("dispatch_failed", res.status); return { dispatched: false, status: res.status }; }
+  await note("dispatched", 204);
   return { dispatched: true };
 }
 
