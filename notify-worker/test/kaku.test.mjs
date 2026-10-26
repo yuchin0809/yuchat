@@ -264,11 +264,13 @@ test("着席の制限：確変台は、その時間の枠をとった人だけ�
   assert.equal(kakuSpinGate(dayless, at(8, 1)), "over"); assert.equal(kakuSpinGate(dayless, at(7, 59)), null); assert.equal(kakuSpinGate({ machine: other }, at(8, 1)), null);
 });
 
-test("確変の還元率：30分（約900スピン）の平均収支は、どの台も +700〜+1,500 コイン（大当たりを1.5倍にしたあと）。高い台ほど倍率は小さい。通常のセッションは変わらない", () => {
+test("確変の還元率：30分（約900スピン）の平均収支は、どの台も +700〜+2,900 コイン（大当たりを1.5倍にしたあと）。短い遊びでも、プラスの人が多い。高い台ほど倍率は小さい。通常のセッションは変わらない", () => {
   const rng = rngOf(77);
   for (const m of Object.keys(SLOT_MACHINES)) {
     const r = simulate(m, SLOT_KAKU_RATE[m], rng, 1500);
-    assert.ok(r.mean >= 700 && r.mean <= 1500, `${m}: 平均 ${r.mean.toFixed(0)}（700〜1500）`);
+    assert.ok(r.mean >= 700 && r.mean <= 2900, `${m}: 平均 ${r.mean.toFixed(0)}（700〜2900）`);
+    const shortPlay = simulate(m, SLOT_KAKU_RATE[m], rng, 800, 2500, 300);   // 約12分（300スピン）で遊んだ人
+    assert.ok(shortPlay.ge0 >= 0.78, `${m}: 300スピンでプラスの人 ${(shortPlay.ge0 * 100).toFixed(0)}%（78%以上）`);
     const normal = simulate(m, 0, rng, 1500);
     assert.ok(normal.mean < 0, `${m}: 通常の台は平均でマイナス（${normal.mean.toFixed(0)}）`);
     const rtp = (normal.mean + SLOT_MACHINES[m].price * 900) / (SLOT_MACHINES[m].price * 900);

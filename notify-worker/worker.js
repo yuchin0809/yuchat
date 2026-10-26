@@ -2436,7 +2436,9 @@ export function slotRates(machineId, kaku = 1) {
 }
 /* 確変台の倍率（台ごと）。料金が高い台ほど小さい。シミュレーション（notify-worker/yuslot-kaku-sim.mjs）で、小当たりの倍率を30分（自動スピン約900回）の平均 約+600 コインになるように決めたあと、大当たりだけ SLOT_KAKU_SPECIAL_BOOST 倍にした（平均は +800〜+1,400 ほど） */
 export const SLOT_KAKU_SPECIAL_BOOST = 1.5; // 確変中は大当たり（777／オリジナル＝FEVER）だけ、さらにこの倍率
-export const SLOT_KAKU_RATE = { yubasic: 1.8, yurush: 1.43, yuchance: 1.32, yutreasure: 1.24, yurainbow: 1.23, yujackpot: 1.25 };
+/* 2026-10-26：高い台で「確変なのにマイナス」の人が多かったので、料金の高い台の倍率を上げた（yurush 1.43→1.55・yuchance 1.32→1.48・yutreasure 1.24→1.42・yurainbow 1.23→1.42・yujackpot 1.25→1.42）。
+   100スピンでプラスの人：高い台で約40%→約65〜70%／300スピンで約63〜72%→約83〜90%。30分（900スピン）の平均収支：+800〜+2,700 コイン */
+export const SLOT_KAKU_RATE = { yubasic: 1.8, yurush: 1.55, yuchance: 1.48, yutreasure: 1.42, yurainbow: 1.42, yujackpot: 1.42 };
 const SLOT_FRUITS = ["cherry", "bell", "watermelon"];
 const SLOT_FLUSH_INTERVAL_MS = 15000;   // クライアントがこの間隔で flush する
 const SLOT_SEAT_GRACE_MS = 90000;       // 復旧猶予（約1分）＋flush の間隔ぶんの余裕
