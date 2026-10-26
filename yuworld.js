@@ -15,12 +15,12 @@
 /* 🎟 ゆう宝くじ売り場の画面（別ファイル。Worker の lottery* アクションを呼んで表示するだけ） */
 import { renderLottery, stopLottery } from "./yulottery.js?v=20261023-lottery9";
 /* 🎊 ゆう番くじ（発売前のお知らせの画面） */
-import { renderBankuji, stopBankuji, BANKUJI_SALE_MS } from "./yubankuji.js?v=20261024-bankuji2";
+import { renderBankuji, stopBankuji, BANKUJI_SALE_MS } from "./yubankuji.js?v=20261026-bankuji3";
 import { renderYacht, stopYacht } from "./yuyacht.js?v=20261023-yacht5";
 import { renderKeshi, stopKeshi } from "./yukeshi.js?v=20261024-mart9";
 import { eraserIcon, keshiLeagueTag } from "./yukeshi-core.js?v=20261024-mart9";
 /* 🌈 確変台のパネル（台の一覧の上）。抽選・先着・通知設定。Worker の kaku* アクションを呼んで表示するだけ */
-import { kakuInit, kakuPanelHtml, kakuBind, kakuMachineInfo, startKaku, stopKaku, refreshKaku } from "./yukaku.js?v=20261024-kaku16";
+import { kakuInit, kakuPanelHtml, kakuBind, kakuMachineInfo, startKaku, stopKaku, refreshKaku } from "./yukaku.js?v=20261026-kaku17";
 /* 🏅 会員ランクのカード（台の一覧の上）。ランクの判定・進みは Worker の rankStatus が返す */
 import { rankInit, rankPanelHtml, rankRefresh } from "./yurank.js?v=20261023-rank2";
 /* 🎰 演出の判断（前兆・ステップアップ・連チャン）。画面には触れない */

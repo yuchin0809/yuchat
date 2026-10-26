@@ -39,16 +39,19 @@ const ICON = { A: "🏢", B: "📈", C: "🌈", D: "🎫", E: "🛠️", F: "�
 const GEAR = { body: "本体", edge: "カバー", sole: "底", weight: "おもり" };
 const COLOR = { gold: "金", silver: "銀", rainbow: "虹", blackgold: "黒金" };
 const SHORT = { A: "会社を運営できる権利", C: "確変台の予約 3回", D: "確変台の予約 優先1回確定" };
+/* 確変台の予約権の、残りの回数（C賞3回・D賞1回・ラストワン賞3回。使った分は引く） */
+const TICKET_USES = { kaku3: 3, kaku1: 1, last: 3 };
+const ticketLeft = (r) => Math.max(0, (TICKET_USES[r.kind] || 0) - Math.max(0, Math.floor(Number(r.used) || 0)));
 function prizeLine(r) {
   const p = (st && st.prizes || []).find((x) => x.id === r.id) || {};
   const nm = r.name || p.name || (r.id === "L" ? "ラストワン賞" : `${r.id}賞`);
-  if (r.id === "L") return `${ICON.L} ${nm}（伝説セット）`;
+  if (r.id === "L") return `${ICON.L} ${nm}（伝説セット）　確変の予約 残り${ticketLeft(r)}回`;
   if (r.kind === "stock") return `${ICON[r.id]} ${nm}　ゆう株 ${r.code} ${r.qty}株`;
   if (r.kind === "coin") return `${ICON[r.id]} ${nm}　ゆうコイン ${fmt(r.amount)}`;
   if (r.kind === "gear") return `${ICON[r.id]} ${nm}　消しバトの限定${GEAR[r.code] || "パーツ"}`;
   if (r.kind === "color") return `${ICON[r.id]} ${nm}　消しバトの限定カラー「${COLOR[r.code] || r.code}」`;
   if (r.kind === "company") return `${ICON.A} ${nm}　自分の会社を運営できる権利`;
-  if (r.kind === "kaku3" || r.kind === "kaku1") return `${ICON[r.id]} ${nm}　${SHORT[r.id]}${r.until ? `（${mmdd(r.until)}まで）` : ""}`;
+  if (r.kind === "kaku3" || r.kind === "kaku1") return `${ICON[r.id]} ${nm}　${SHORT[r.id]}${r.until ? `（${mmdd(r.until)}まで）` : ""}　残り${ticketLeft(r)}回`;
   return `${ICON[r.id] || "🎁"} ${nm}`;
 }
 const RARE = new Set(["A", "L"]);
@@ -154,7 +157,7 @@ function mineHtml(mine) {
   const coin = list.filter((r) => r.kind === "coin").reduce((s, r) => s + (r.amount || 0), 0);
   const stock = list.filter((r) => r.kind === "stock").reduce((s, r) => s + (r.qty || 0), 0);
   return `<div class="yb-card"><h3>🎒 もちもの（${fmt(list.length)}枚ぶん）</h3>
-    <p class="yb-small">コイン・ゆう株は、もう受け取っています（コイン ${fmt(coin)}／ゆう株 ${fmt(stock)}株）。確変台の予約権・会社の運営権・消しバトの限定品は、ここに記録しています（使える機能は順次ひらきます）。</p>${rows}</div>`;
+    <p class="yb-small">コイン・ゆう株は、もう受け取っています（コイン ${fmt(coin)}／ゆう株 ${fmt(stock)}株）。確変台の予約権・会社の運営権・消しバトの限定品は、ここに記録しています。確変台の予約権（C賞・D賞・ラストワン賞）は、ゆうスロの台の一覧の上にある「確変台チケット売り場」の「🎟 ゆう番くじのチケットを使う」から使えます。</p>${rows}</div>`;
 }
 
 function refreshPicks() {

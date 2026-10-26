@@ -18,7 +18,8 @@ let boundaryTimer = null;  // 「次の節目の時刻ちょうど」に画面�
 let busy = false;
 let msg = "";
 let stylesDone = false;
-const openState = { notify: false };   // 開いている「詳細」を、自動で描き直しても閉じないように覚える
+const openState = { notify: false };
+const tk = { open: false, info: null };   // 🎟 確変チケット（ゆう番くじの C賞・D賞・ラストワン賞）を使う画面。ボタンを押したときだけ Worker に聞く   // 開いている「詳細」を、自動で描き直しても閉じないように覚える
 
 const pad = (n) => String(n).padStart(2, "0");
 const nowMs = () => Date.now() + offset;
@@ -61,8 +62,40 @@ export async function refreshKaku() {
     data = await deps.api("kakuStatus");
     if (typeof data.serverNowMs === "number") offset = data.serverNowMs - Date.now();
   } catch (_) { /* 取れなくても、台の一覧は使える */ }
+  if (tk.open) await loadTickets();
   scheduleBoundary();
   deps.onChange && deps.onChange();
+}
+
+/* 🎟 チケットの残りと、使える枠の一覧を読む（開いているあいだだけ。台の一覧を読み直すたびに） */
+async function loadTickets() {
+  try { tk.info = await deps.api("kakuTicketInfo"); } catch (_) { /* 取れなければ、前の表示のまま */ }
+}
+function ticketHtml() {
+  const esc = deps.esc, info = tk.info;
+  if (!tk.open) return `<button type="button" class="yk-btn" data-kk="tk-open">🎟 ゆう番くじのチケットを使う</button>`;
+  let h = `<div class="yk-tk"><div class="yk-sec">🎟 確変チケット</div>`;
+  if (!info) return h + `<div class="yk-sub">読み込み中…</div><button type="button" class="yk-btn small" data-kk="tk-open">閉じる</button></div>`;
+  if (!info.left) {
+    h += `<div class="yk-sub">いまチケットはありません。ゆう番くじの C賞・D賞・ラストワン賞で当たると、もらえます。</div>`;
+  } else {
+    const until = info.tickets.map((x) => x.until).filter(Boolean).sort((a, b) => a - b)[0];
+    h += `<div class="yk-ok">🎟 残り ${info.left} 回${until ? `（いちばん近い期限：${md(until)}）` : ""}</div>
+      <div class="yk-sub">1回で、30分の確変の枠を1つ、確定でもらえます（1日に取れる枠は最大3つまで）。</div>`;
+    const r = info.reserve;
+    h += `<div class="yk-sec">① 明日の枠を予約する</div>`;
+    if (r && r.open) {
+      h += `<div class="yk-sub">明日（${md(r.slots[0].s)}）の前日抽選の枠から、好きな枠を選べます（今日の ${hm(r.closeMs)} まで）。予約した枠は、抽選に出ません。</div><div class="yk-tkgrid">${r.slots.map((x) => x.state === "free"
+        ? `<button type="button" class="yk-tkbtn" data-kk="tk-use" data-mode="reserve" data-day="${r.day}" data-slot="${x.i}">${hm(x.s)}〜${hm(x.e)}</button>`
+        : `<span class="yk-tkbtn off">${hm(x.s)}〜${hm(x.e)}<em>${x.state === "mine" ? "⭐予約済み" : "予約済み"}</em></span>`).join("")}</div>`;
+    } else if (r) h += `<div class="yk-sub">予約できるのは、今日の ${hm(r.openMs)}〜${hm(r.closeMs)} です。</div>`;
+    else h += `<div class="yk-sub">明日の枠の予約は、もう終わりました（前日の 12:00〜21:00）。</div>`;
+    h += `<div class="yk-sec">② NPC がとった枠を取る</div>`;
+    if (info.take.length) {
+      h += `<div class="yk-sub">抽選のあと、NPC（ダミーの参加者）がとった30分枠を、始まる11分前まで取れます。</div><div class="yk-tkgrid">${info.take.map((x) => `<button type="button" class="yk-tkbtn" data-kk="tk-use" data-mode="take" data-day="${x.day}" data-slot="${x.i}">${md(x.s)} ${hm(x.s)}〜${hm(x.e)}</button>`).join("")}</div>`;
+    } else h += `<div class="yk-sub">いま取れる NPC の枠はありません（前日の抽選のあと、21:00以降に出ます）。</div>`;
+  }
+  return h + `<button type="button" class="yk-btn small" data-kk="tk-open">閉じる</button></div>`;
 }
 
 /* 台のカードの飾りと、「枠の持ち主だけ」の案内に使う */
@@ -122,6 +155,7 @@ export function kakuPanelHtml() {
     else html += `<div class="yk-sub">前日の抽選の申込は終わりました。結果は明日 7:50 のお知らせで！</div>`;
     html += `</div>`;
   }
+  html += ticketHtml();
   html += `<details class="yk-notify" ${openState.notify ? "open" : ""}><summary>🔔 通知の設定</summary>${prefs ? notifyHtml() : `<div class="yk-sub">読み込み中…</div>`}</details></div>`;
   return html;
 }
@@ -141,6 +175,7 @@ export function kakuBind(root) {
   root.querySelectorAll("[data-pref]").forEach((c) => c.addEventListener("change", () => { if (prefs) prefs[c.getAttribute("data-pref")] = c.checked; })); // 保存前の変更も、描き直しで消えないように
 }
 const ERR = {
+  no_ticket: "使えるチケットがありません。", too_late: "その枠は、もうすぐ始まる（または始まった）ので取れません。",
   not_open: "いまは受け付けていません。", taken: "その枠はすでに取られました。", quick_limit: "先着は1人1枠までです。", day_limit: "1日に取れる枠は最大3つです。",
   overlap: "同じ時間の枠はとれません。", slot_started: "その枠はもう始まっています。", busy: "混み合っています。もう一度お試しください。", not_published: "ただいま準備中です。", no_event: "まだ確変台の開催前です。"
 };
@@ -151,6 +186,15 @@ async function onClick(b) {
   try {
     if (kind === "apply") { const r = await deps.api("kakuApply", { which: b.getAttribute("data-which") }); msg = r.already ? "すでに申込済みです。" : "抽選に申し込みました！ 結果をお楽しみに🌈"; }
     else if (kind === "ticket") { busy = false; ticketOpen(); return; }
+    else if (kind === "tk-open") { tk.open = !tk.open; if (tk.open) { tk.info = null; deps.onChange && deps.onChange(); await loadTickets(); } }
+    else if (kind === "tk-use") {
+      const mode = b.getAttribute("data-mode"), day = b.getAttribute("data-day"), slot = Number(b.getAttribute("data-slot"));
+      const label = b.textContent.trim();
+      if (!window.confirm(`${label} の枠を、チケット1回ぶんで確定でもらいます。よろしいですか？`)) { busy = false; return; }
+      const r = await deps.api("kakuTicketUse", { mode, day, slot });
+      msg = `🎉 ${md(r.s)} ${hm(r.s)}〜${hm(r.e)} の枠を、確定で取りました！（チケット 残り ${r.left} 回）`;
+      await loadTickets();
+    }
     else if (kind === "savepref") {
       const next = {}; document.querySelectorAll("[data-pref]").forEach((c) => { next[c.getAttribute("data-pref")] = c.checked; });
       prefs = (await deps.api("kakuSetNotify", { prefs: next })).prefs; msg = "通知の設定を保存しました。";
@@ -178,6 +222,11 @@ function injectStyles() {
   .yk-quick { display: flex; flex-direction: column; gap: 6px; margin: 6px 0; } .yk-q { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 10px; background: rgba(255,255,255,.14); font-size: 13px; } .yk-q em { font-style: normal; font-weight: 800; color: #ffe14a; }
   .yk-notify summary { cursor: pointer; font-weight: 800; font-size: 13px; margin-top: 10px; } .yk-tomorrow { margin-top: 6px; padding-top: 6px; border-top: 1px dashed rgba(255,255,255,.35); }
   .yk-chk { display: block; padding: 5px 0; font-size: 13px; }
+  .yk-tk { margin-top: 10px; padding-top: 8px; border-top: 1px dashed rgba(255,255,255,.35); }
+  .yk-tkgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 6px; margin: 6px 0; }
+  .yk-tkbtn { border: none; border-radius: 10px; padding: 8px 6px; font-size: 12px; font-weight: 800; color: #3a2a00; cursor: pointer; background: linear-gradient(135deg,#ffe68a,#ffb347); text-align: center; }
+  .yk-tkbtn em { display: block; font-style: normal; font-size: 10px; font-weight: 700; }
+  .yk-tkbtn.off { background: rgba(255,255,255,.2); color: rgba(255,255,255,.85); cursor: default; }
   .yw-machine.yw-kaku { position: relative; border: 3px solid transparent; background: linear-gradient(#fff,#fff) padding-box, linear-gradient(120deg,#ff2d78,#ff8a00,#ffe14a,#17e36a,#17b6ff,#b14cff,#ff2d78) border-box; background-size: 100% 100%, 300% 100%; animation: yk-rainbow 4s linear infinite; box-shadow: 0 0 18px rgba(255,160,0,.55), 0 0 30px rgba(177,76,255,.35); }
   @keyframes yk-rainbow { from { background-position: 0 0, 0% 50%; } to { background-position: 0 0, 300% 50%; } }
   .yw-kaku-badge { position: absolute; top: -10px; right: 10px; padding: 2px 10px; border-radius: 999px; font-size: 11px; font-weight: 900; color: #fff; background: linear-gradient(90deg,#ff2d78,#ff8a00,#b14cff); box-shadow: 0 2px 8px rgba(0,0,0,.3); animation: yk-pulse 1.1s ease-in-out infinite; }
