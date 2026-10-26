@@ -19,6 +19,7 @@ let busy = false;
 let msg = "";
 let stylesDone = false;
 const openState = { notify: false };
+const mv = { open: false, info: null };   // ⏰ 当たった枠の時間を変える（前日の抽選の30分枠）。ボタンを押したときだけ Worker に聞く
 const tk = { open: false, info: null };   // 🎟 確変チケット（ゆう番くじの C賞・D賞・ラストワン賞）を使う画面。ボタンを押したときだけ Worker に聞く   // 開いている「詳細」を、自動で描き直しても閉じないように覚える
 
 const pad = (n) => String(n).padStart(2, "0");
@@ -67,6 +68,28 @@ export async function refreshKaku() {
   deps.onChange && deps.onChange();
 }
 
+/* ⏰ 当たった30分枠の時間を変える：いまの枠と、移れる（NPC がとっている）枠の一覧 */
+function moveHtml(today) {
+  const mine = today.slots.filter((x) => x.mine && x.mv);
+  if (!mine.length) return "";
+  const done = mine.filter((x) => x.mv === 2), can = mine.filter((x) => x.mv === 1 && nowMs() < x.s - 11 * 60000);
+  let h = `<div class="yk-mv">`;
+  if (done.length) h += `<div class="yk-sub">⏰ 時間を変更ずみ：${done.map((x) => `${hm(x.s)}〜${hm(x.e)}`).join("、")}（1回だけ変えられます）</div>`;
+  if (!can.length) return h + `</div>`;
+  if (!mv.open) return h + `<button type="button" class="yk-btn small" data-kk="mv-open">⏰ 当たった枠の時間を変える</button></div>`;
+  h += `<div class="yk-sec">⏰ 当たった枠の時間を変える</div>`;
+  const day = mv.info && mv.info.days.find((d) => d.day === today.day);
+  if (!mv.info) h += `<div class="yk-sub">読み込み中…</div>`;
+  else if (!day || !day.moves.length) h += `<div class="yk-sub">いま変えられる枠はありません。</div>`;
+  else {
+    h += `<div class="yk-sub">NPC（ダミーの参加者）がとっている30分枠と入れ替えられます（プレイヤーがとっている枠は選べません）。始まる11分前までに、1当選につき1回だけ。</div>`;
+    day.moves.forEach((m) => {
+      h += `<div class="yk-sub">いまの枠：<b>${hm(m.from.s)}〜${hm(m.from.e)}</b> → 移る先を選ぶ</div>`;
+      h += m.to.length ? `<div class="yk-tkgrid">${m.to.map((x) => `<button type="button" class="yk-tkbtn" data-kk="mv-do" data-day="${day.day}" data-from="${m.from.i}" data-to="${x.i}">${hm(x.s)}〜${hm(x.e)}</button>`).join("")}</div>` : `<div class="yk-sub">移れる枠がありません（NPC の枠が空いていません）。</div>`;
+    });
+  }
+  return h + `<button type="button" class="yk-btn small" data-kk="mv-open">閉じる</button></div>`;
+}
 /* 🎟 チケットの残りと、使える枠の一覧を読む（開いているあいだだけ。台の一覧を読み直すたびに） */
 async function loadTickets() {
   try { tk.info = await deps.api("kakuTicketInfo"); } catch (_) { /* 取れなければ、前の表示のまま */ }
@@ -133,6 +156,7 @@ export function kakuPanelHtml() {
     // 自分の予定だけを表示する（ほかの人の枠・名前は出さない）
     const mine = t.slots.filter((x) => x.mine).sort((a, b) => a.s - b.s);
     html += `<div class="yk-mine">⭐ あなたの今日の予定：${mine.length ? mine.map((x) => `${hm(x.s)}〜${hm(x.e)}（${KIND[x.kind]}）`).join("、") : "まだありません"}</div>`;
+    html += moveHtml(t);
     const lotMine = mine.filter((x) => x.kind === "lot").length;
     if (t.applied1 && t.draw1Done) html += mine.some((x) => x.kind === "pre") ? `<div class="yk-ok">🎉 前日の抽選に当選しました！</div>` : `<div class="yk-sub">前日の抽選は外れでした。当日分の抽選・先着があります！</div>`;
     // 当日分
@@ -185,7 +209,7 @@ export function kakuBind(root) {
 const ERR = {
   no_ticket: "使えるチケットがありません。", too_late: "その枠は、もうすぐ始まる（または始まった）ので取れません。",
   not_open: "いまは受け付けていません。", taken: "その枠はすでに取られました。", quick_limit: "先着は1人1枠までです。", day_limit: "1日に取れる枠は最大3つです。",
-  overlap: "同じ時間の枠はとれません。", slot_started: "その枠はもう始まっています。", busy: "混み合っています。もう一度お試しください。", not_published: "ただいま準備中です。", no_event: "まだ確変台の開催前です。"
+  overlap: "同じ時間の枠はとれません。", not_movable: "この枠は、時間を変えられません。", already_moved: "この枠は、すでに1回変えています。", slot_started: "その枠はもう始まっています。", busy: "混み合っています。もう一度お試しください。", not_published: "ただいま準備中です。", no_event: "まだ確変台の開催前です。"
 };
 async function onClick(b) {
   if (busy) return;
@@ -194,6 +218,15 @@ async function onClick(b) {
   try {
     if (kind === "apply") { const r = await deps.api("kakuApply", { which: b.getAttribute("data-which") }); msg = r.already ? "すでに申込済みです。" : "抽選に申し込みました！ 結果をお楽しみに🌈"; }
     else if (kind === "ticket") { busy = false; ticketOpen(); return; }
+    else if (kind === "mv-open") { mv.open = !mv.open; if (mv.open) { mv.info = null; deps.onChange && deps.onChange(); try { mv.info = await deps.api("kakuMoveInfo"); } catch (_) { mv.info = { days: [] }; } } }
+    else if (kind === "mv-do") {
+      const day = b.getAttribute("data-day"), from = Number(b.getAttribute("data-from")), to = Number(b.getAttribute("data-to"));
+      const label = b.textContent.trim();
+      if (!window.confirm(`当たった枠を ${label} に変えます。よろしいですか？\n（変えられるのは1回だけです）`)) { busy = false; return; }
+      const r = await deps.api("kakuMove", { day, from, to });
+      mv.open = false; mv.info = null;
+      msg = `⏰ ${hm(r.from.s)}〜${hm(r.from.e)} の枠を、${hm(r.to.s)}〜${hm(r.to.e)} に変えました！`;
+    }
     else if (kind === "tk-open") { tk.open = !tk.open; if (tk.open) { tk.info = null; deps.onChange && deps.onChange(); await loadTickets(); } }
     else if (kind === "tk-use") {
       const mode = b.getAttribute("data-mode"), day = b.getAttribute("data-day"), slot = Number(b.getAttribute("data-slot"));
@@ -221,7 +254,7 @@ function injectStyles() {
   .yk-panel > * { position: relative; }
   .yk-title { font-weight: 900; font-size: 16px; text-shadow: 0 0 10px #ffe14a; margin-bottom: 8px; }
   .yk-today-name { font-size: 17px; } .yk-today-name b { color: #ffe14a; text-shadow: 0 0 10px rgba(255,225,74,.9); }
-  .yk-sub { font-size: 12px; opacity: .92; line-height: 1.7; margin: 4px 0; } .yk-mine { margin: 6px 0; padding: 6px 10px; border-radius: 10px; background: rgba(255,225,74,.22); font-weight: 800; }
+  .yk-mv { margin: 6px 0; } .yk-sub { font-size: 12px; opacity: .92; line-height: 1.7; margin: 4px 0; } .yk-mine { margin: 6px 0; padding: 6px 10px; border-radius: 10px; background: rgba(255,225,74,.22); font-weight: 800; }
   .yk-sec { margin-top: 12px; font-weight: 800; font-size: 13px; } .yk-ok { margin: 6px 0; padding: 8px 10px; border-radius: 10px; background: rgba(23,227,106,.25); font-weight: 800; font-size: 13px; }
   .yk-msg { margin: 6px 0; padding: 8px 10px; border-radius: 10px; background: #fff6d6; color: #7a4a00; font-weight: 800; font-size: 13px; }
   .yk-btn { display: block; width: 100%; margin: 8px 0; border: none; border-radius: 12px; padding: 11px 10px; font-size: 14px; font-weight: 900; color: #3a2a00; cursor: pointer; background: linear-gradient(135deg,#ffd700,#ff9a00); box-shadow: 0 3px 12px rgba(255,160,0,.5); }
