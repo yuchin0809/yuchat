@@ -334,3 +334,22 @@ test("ランキング：20人より多くても、全員ぶんを返す", async 
   assert.equal(v.total, 30); assert.equal(v.top.length, 30);
   assert.deepEqual(v.top.map((t) => t.rank), Array.from({ length: 30 }, (_, i) => i + 1));
 });
+
+test("次の試合：対戦表が無いまま終わったセット（この機能より前のセット）のあとでも、画面を開くと次のセットの表を作って保存する。何回開いても作り直さない", async () => {
+  const ctx = setup({ users: 8, entered: 8 });
+  await ctx.tick(JST(2026, 10, 26, 10, 30));
+  const doc = ctx.wk();
+  ctx.fs.put("yuslotKeshiLeague/2026-10-26", encF({ weekStart: doc.weekStart, setsDone: doc.setsDone, p: doc.p }));   // nx の無い書類（以前の形）
+  assert.equal(ctx.wk().nx, undefined);
+  const v = await ctx.act(0, { action: "keshiLeagueState" });
+  assert.equal(v.next.fixed, true); assert.equal(v.next.rounds.length, 5); assert.equal(v.next.k, 1);
+  const saved = ctx.wk().nx;
+  assert.equal(saved.k, 1);
+  const before = ctx.fs.counts.query;
+  const again = await ctx.act(1, { action: "keshiLeagueState" });
+  assert.deepEqual(ctx.wk().nx, saved, "作り直さない");
+  assert.equal(again.next.fixed, true);
+  assert.equal(ctx.fs.counts.query, before, "表があれば、参加者の一覧は読まない");
+  await ctx.tick(JST(2026, 10, 26, 12, 40));
+  assert.deepEqual(ctx.wk().p.id0.m.map((x) => x.split("|")[2]), v.next.rounds.map((r) => r.name), "見せた相手と実際の相手が同じ");
+});
