@@ -94,6 +94,14 @@ function ticketHtml() {
     if (info.take.length) {
       h += `<div class="yk-sub">抽選のあと、NPC（ダミーの参加者）がとった30分枠を、始まる11分前まで取れます。</div><div class="yk-tkgrid">${info.take.map((x) => `<button type="button" class="yk-tkbtn" data-kk="tk-use" data-mode="take" data-day="${x.day}" data-slot="${x.i}">${md(x.s)} ${hm(x.s)}〜${hm(x.e)}</button>`).join("")}</div>`;
     } else h += `<div class="yk-sub">いま取れる NPC の枠はありません（前日の抽選のあと、21:00以降に出ます）。</div>`;
+    h += `<div class="yk-sec">③ 今日の10分枠（当日分）を使う</div>`;
+    const same = info.same || [];
+    if (same.length) {
+      const KINDJA = { lot: "抽選", quick: "先着" };
+      h += `<div class="yk-sub">当日の抽選の枠は、抽選（10:45）の前なら予約、あとなら NPC がとった枠を取れます。先着の枠は、まだ誰もとっていなければ、ゲームを待たずに取れます（始まる11分前まで）。</div><div class="yk-tkgrid">${same.map((x) => x.state === "free"
+        ? `<button type="button" class="yk-tkbtn" data-kk="tk-use" data-mode="${x.mode}" data-day="${x.day}" data-slot="${x.i}">${hm(x.s)}〜${hm(x.e)}<em>${KINDJA[x.kind]}・${x.mode === "reserve" ? "予約" : "取る"}</em></button>`
+        : `<span class="yk-tkbtn off">${hm(x.s)}〜${hm(x.e)}<em>${KINDJA[x.kind]}・${x.state === "mine" ? "⭐あなたの枠" : "取られています"}</em></span>`).join("")}</div>`;
+    } else h += `<div class="yk-sub">いま使える今日の10分枠はありません（当日分は 7:00 から出ます）。</div>`;
   }
   return h + `<button type="button" class="yk-btn small" data-kk="tk-open">閉じる</button></div>`;
 }
@@ -189,7 +197,7 @@ async function onClick(b) {
     else if (kind === "tk-open") { tk.open = !tk.open; if (tk.open) { tk.info = null; deps.onChange && deps.onChange(); await loadTickets(); } }
     else if (kind === "tk-use") {
       const mode = b.getAttribute("data-mode"), day = b.getAttribute("data-day"), slot = Number(b.getAttribute("data-slot"));
-      const label = b.textContent.trim();
+      const label = ((b.firstChild && b.firstChild.textContent) || b.textContent).trim();
       if (!window.confirm(`${label} の枠を、チケット1回ぶんで確定でもらいます。よろしいですか？`)) { busy = false; return; }
       const r = await deps.api("kakuTicketUse", { mode, day, slot });
       msg = `🎉 ${md(r.s)} ${hm(r.s)}〜${hm(r.e)} の枠を、確定で取りました！（チケット 残り ${r.left} 回）`;

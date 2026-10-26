@@ -207,3 +207,73 @@ test("ゆうマートで売る：一度でも使ったチケットは売れな�
   const sell = await t.act(0, { action: "martList", kind: "prize", n: used.n, price: 100 });
   assert.equal(sell.error, "used");
 });
+
+
+/* ---- 当日（今日）の10分枠：抽選の枠は予約・NPCの枠は取る／先着の枠は、ゲームを待たずに取る ---- */
+test("当日の抽選の枠（10分×3）：7:00〜10:45 に予約できる。予約した枠は10:45の抽選に出ない。抽選のあとは、NPCがとった枠を取れる", async () => {
+  const t = setup({ prizes: { 0: [C(1), Dd(2)], 1: [] }, now: TT.sameOpen - M });
+  const lot = () => t.day().slots.filter((x) => x.kind === "lot");
+  assert.equal((await t.act(0, { action: "kakuTicketUse", mode: "reserve", day: D, slot: 0 })).error, "not_open", "7:00 前");
+  t.state.now = TT.sameOpen + H;
+  const info = await t.act(0, { action: "kakuTicketInfo" });
+  const lots = info.same.filter((x) => x.kind === "lot"), quicks = info.same.filter((x) => x.kind === "quick");
+  assert.deepEqual([lots.length, quicks.length], [3, 2]); assert.ok(lots.every((x) => x.mode === "reserve" && x.state === "free")); assert.ok(quicks.every((x) => x.mode === "take" && x.state === "free"));
+  const target = lots[0];
+  const r = await t.act(0, { action: "kakuTicketUse", mode: "reserve", day: D, slot: target.i });
+  assert.deepEqual([r.ok, r.mode, r.left], [true, "reserve", 3]);
+  const mine = t.day().slots.find((x) => x.i === target.i);
+  assert.deepEqual([mine.uid, mine.tk, mine.bt, mine.kn], ["id0", 1, 1, undefined]);
+  assert.equal((await t.act(1, { action: "kakuTicketUse", mode: "reserve", day: D, slot: target.i })).error, "taken", "予約済みの枠は、ほかの人は予約できない");
+  // 10:45 の抽選：予約された枠は出さない
+  await t.act(1, { action: "kakuApply", which: "same" });
+  t.state.now = TT.sameClose + M;
+  await kakuRunDraw(t.deps, D, 2);
+  assert.equal(lot().find((x) => x.i === target.i).uid, "id0", "予約した枠は、そのまま");
+  assert.ok(lot().filter((x) => x.i !== target.i).every((x) => x.uid || x.npc), "ほかの枠は抽選で決まった");
+  assert.equal((await t.act(0, { action: "kakuTicketUse", mode: "reserve", day: D, slot: lot()[1].i })).error, "not_open", "抽選のあとは、もう予約ではない");
+  // 抽選のあと：NPC がとった枠を取る
+  const npcLot = lot().find((x) => x.npc);
+  if (npcLot) {
+    t.state.now = npcLot.s - 30 * M;
+    const info2 = await t.act(0, { action: "kakuTicketInfo" });
+    assert.ok(info2.same.some((x) => x.i === npcLot.i && x.mode === "take" && x.state === "free"));
+    const tk = await t.act(0, { action: "kakuTicketUse", mode: "take", day: D, slot: npcLot.i });
+    assert.deepEqual([tk.ok, tk.mode], [true, "take"]);
+    assert.deepEqual([lot().find((x) => x.i === npcLot.i).uid, lot().find((x) => x.i === npcLot.i).kn], ["id0", undefined], "10分枠には kn をつけない");
+  }
+});
+
+test("当日の先着の枠（10分×2）：まだ誰もとっていなければ、7:00 からチケットで取れる（先着ゲームを待たない）。始まる11分前まで・取られた枠は取れない", async () => {
+  const t = setup({ prizes: { 0: [C(1)], 1: [Dd(2)] }, now: TT.sameOpen - M });
+  const quick = () => t.day().slots.filter((x) => x.kind === "quick");
+  t.state.now = TT.sameOpen + 5 * M;
+  await t.act(0, { action: "kakuTicketInfo" });   // 日の書類を作る（7:00 から）
+  const q0 = quick()[0], q1 = quick()[1];
+  const r = await t.act(0, { action: "kakuTicketUse", mode: "take", day: D, slot: q0.i });
+  assert.deepEqual([r.ok, r.mode, r.left], [true, "take", 2]);
+  const got = quick().find((x) => x.i === q0.i);
+  assert.deepEqual([got.uid, got.tk, got.bt, got.kn], ["id0", 1, 1, undefined]);
+  assert.equal((await t.act(1, { action: "kakuTicketUse", mode: "take", day: D, slot: q0.i })).error, "taken");
+  const info = await t.act(1, { action: "kakuTicketInfo" });
+  assert.deepEqual(info.same.filter((x) => x.kind === "quick").map((x) => [x.i, x.state]), [[q0.i, "taken"], [q1.i, "free"]]);
+  t.state.now = q1.s - 11 * M;
+  assert.equal((await t.act(1, { action: "kakuTicketUse", mode: "take", day: D, slot: q1.i })).error, "too_late");
+  t.state.now = q1.s - 11 * M - 1;
+  assert.equal((await t.act(1, { action: "kakuTicketUse", mode: "take", day: D, slot: q1.i })).ok, true);
+  // 同じ日に取れるのは最大3枠・時間が重なる枠は取れない
+  assert.equal(quick().filter((x) => x.uid).length, 2);
+});
+
+test("当日の10分枠は、今日の分だけ。明日の10分枠・抽選の前に先着を取ること（7:00前）・種類ちがいの予約は断る", async () => {
+  const t = setup({ prizes: { 0: [C(1)] }, now: TT.preOpen + H });
+  await t.act(0, { action: "kakuTicketInfo" });
+  const tomorrowDoc = t.day();
+  const lotI = tomorrowDoc.slots.find((x) => x.kind === "lot").i, quickI = tomorrowDoc.slots.find((x) => x.kind === "quick").i, preI = tomorrowDoc.slots.find((x) => x.kind === "pre").i;
+  for (const [mode, slot] of [["reserve", lotI], ["take", lotI], ["take", quickI], ["reserve", quickI]]) assert.equal((await t.act(0, { action: "kakuTicketUse", mode, day: D, slot })).error, "bad_request", `${mode} ${slot}`);
+  assert.equal((await t.act(0, { action: "kakuTicketUse", mode: "reserve", day: D, slot: preI })).ok, true, "明日の30分枠は、今まで通り予約できる");
+  // 今日（D）の 7:00 前：先着の枠は取れない
+  t.state.now = TT.sameOpen - M;
+  assert.equal((await t.act(0, { action: "kakuTicketUse", mode: "take", day: D, slot: quickI })).error, "not_open");
+  const info = await t.act(0, { action: "kakuTicketInfo" });
+  assert.deepEqual(info.same, [], "7:00 前は、今日の10分枠は出ない");
+});

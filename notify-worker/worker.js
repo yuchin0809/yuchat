@@ -3453,6 +3453,7 @@ export const BANKUJI = {
   applyOpen: [8, 0], applyClose: [8, 30],               // 整理券の申込（日本時間）
   passFactor: 2,
   rightDays: 60,                                        // 確変台の予約権の有効日数
+  lastStockQty: 5,                                      // ラストワン賞の、全5社それぞれの株数
   prizes: [                                             // 合計 299 本＋ラストワン賞 1 本＝ 300 枚
     { id: "A", name: "A賞", count: 1, kind: "company", desc: "自分の会社を運営できる権利" },
     { id: "B", name: "B賞", count: 5, kind: "stock", qty: [25, 25], desc: "ゆう株 25株（5社のどれか）" },
@@ -3699,7 +3700,10 @@ async function bankujiBuy(deps, uid, body) {
   // 渡せる景品（コイン・ゆう株）は同じ commit で渡す
   const coinGain = awards.filter((a) => a.kind === "coin").reduce((s, a) => s + a.amount, 0);
   const stockQty = {};
-  awards.forEach((a) => { if (a.kind === "stock") stockQty[a.code] = (stockQty[a.code] || 0) + a.qty; });
+  awards.forEach((a) => {
+    if (a.kind === "stock") stockQty[a.code] = (stockQty[a.code] || 0) + a.qty;
+    if (a.kind === "last") Object.keys(ASSET_STOCK_INITIAL_PRICES).forEach((code) => { stockQty[code] = (stockQty[code] || 0) + BANKUJI.lastStockQty; });   // ラストワン賞の「全5社5株」も、その場でゆう株に入れる
+  });
   const userFields = { coins: restInt(coins - cost + coinGain) };
   const fieldPaths = ["coins"];
   const stockCodes = Object.keys(stockQty);
@@ -3979,7 +3983,7 @@ export async function kakuRunDraw(deps, dayId, type) {
     const cur = await kakuEnsureDay(deps, dayId);
     if (cur.data[doneKey]) return { skipped: "done" };
     const slots = cur.data.slots.map((x) => ({ ...x }));
-    const targets = slots.map((x, i) => i).filter((i) => (type === 1 ? slots[i].kind === "pre" && !slots[i].tk : slots[i].kind === "lot"));   // チケットで予約された枠（tk）は、抽選に出さない
+    const targets = slots.map((x, i) => i).filter((i) => (type === 1 ? slots[i].kind === "pre" && !slots[i].tk : slots[i].kind === "lot" && !slots[i].tk));   // チケットで予約された枠（tk）は、抽選に出さない
     const apps = kakuParseApplicants(type === 1 ? cur.data.app1 : cur.data.app2);
     if (apps.length && rankDoc === undefined) {
       try { rankDoc = (await rankEnsureCurrent(deps)).data.ranks || {}; } catch { rankDoc = {}; } // 読めなくても抽選は止めない（ランクなし）
@@ -4056,10 +4060,13 @@ export async function kakuQuick(deps, uid, body) {
 }
 /* =========================================================
    🎟 確変チケット（ゆう番くじ C賞「確変台の予約を3回」・D賞「優先で1回確定」・ラストワン賞「予約3回」）
-   ・使えるのは 2 通り（どちらも1回につき、30分の枠を1つ確定で自分のものにする）：
-       予約（reserve）：明日の「前日の抽選」の30分枠（13個）のうち、まだ誰も予約していない枠を、前日の 12:00〜21:00 に選ぶ。
-                       21:00 の抽選では、予約された枠は抽選に出さない（抽選にかける枠が減る分、NPC の人数も減らして、当たる割合は変えない）。
-       取る（take）：抽選のあと、NPC がとった30分枠（今日・明日の分）を、枠が始まる11分前までに、チケットで取る。
+   ・使えるのは 2 通り（どちらも1回につき、枠を1つ確定で自分のものにする）：
+       予約（reserve）：まだ誰もとっていない、抽選にかかる枠を、抽選の前に選ぶ。予約された枠は抽選に出さない（抽選にかける枠が減る分、NPC の人数も減らして、当たる割合は変えない）。
+                       ・明日の「前日の抽選」の30分枠（13個）：前日の 12:00〜21:00
+                       ・今日の「当日の抽選」の10分枠（3個）：当日の 7:00〜10:45
+       取る（take）：枠が始まる11分前までに、取る。
+                       ・抽選のあと、NPC がとった枠（前日の抽選の30分枠は今日・明日の分、当日の抽選の10分枠は今日の分）
+                       ・今日の先着の10分枠（2個）のうち、まだ誰もとっていない枠（7:00 から。先着ゲームを待たずに取れる）
    ・使い切りは、C賞3回・D賞1回・ラストワン賞3回。有効期限はくじの記録の until（ラストワン賞は、引いてから60日）。
    ・取った枠には bt（買った枠と同じ＝ゆうマートでまた売れない）と tk（チケットの枠）をつける。take は kn もつける（マートの NPC 枠の数え方がずれないように）。
    ・1日に取れる枠は最大3つ・時間が重なる枠は取れない（いままでと同じ）。
@@ -4083,7 +4090,7 @@ async function kakuTicketInfo(deps, uid) {
   const now = deps.now(), today = kakuDayId(now), tomorrow = kakuNextDay(today);
   const entry = await deps.firestore.get(kakuTicketEntryPath(uid));
   const tickets = kakuTicketsOf(entry?.prizes, now);
-  const out = { ok: true, serverNowMs: now, left: tickets.reduce((s, r) => s + kakuTicketLeft(r), 0), tickets: tickets.map((r) => ({ n: r.n, id: r.id, left: kakuTicketLeft(r), until: kakuTicketUntil(r) })), reserve: null, take: [] };
+  const out = { ok: true, serverNowMs: now, left: tickets.reduce((s, r) => s + kakuTicketLeft(r), 0), tickets: tickets.map((r) => ({ n: r.n, id: r.id, left: kakuTicketLeft(r), until: kakuTicketUntil(r) })), reserve: null, take: [], same: [] };
   if (!tickets.length) return out;   // チケットがなければ、枠の一覧は読まない
   if (tomorrow >= KAKU_EPOCH) {
     const t = kakuTimes(tomorrow);
@@ -4100,6 +4107,20 @@ async function kakuTicketInfo(deps, uid) {
     if (!cur || cur.data.draw1Done !== true) continue;
     for (const x of cur.data.slots) if (x.kind === "pre" && x.npc === true && !x.uid && !x.cx && x.s - now > kakuTicketTakeLeadMs()) out.take.push({ day, i: x.i, s: x.s, e: x.e });
   }
+  /* 今日の10分枠（当日の抽選・先着）：抽選の前は予約、抽選のあと（NPC がとった枠）と先着の枠は取る */
+  const tt = kakuTimes(today);
+  if (today >= KAKU_EPOCH && now >= tt.sameOpen) {
+    const cur = await kakuEnsureDay(deps, today);
+    for (const x of cur ? cur.data.slots : []) {
+      if (x.kind !== "lot" && x.kind !== "quick") continue;
+      const mine = x.uid === uid, held = !!(x.uid || x.name);
+      let mode = null, usable = false;
+      if (x.kind === "lot" && cur.data.draw2Done !== true) { mode = "reserve"; usable = now < tt.sameClose && !held; }
+      else if (x.kind === "lot") { mode = "take"; usable = x.npc === true && !x.uid && !x.cx && x.s - now > kakuTicketTakeLeadMs(); }
+      else { mode = "take"; usable = !held && x.s - now > kakuTicketTakeLeadMs(); }
+      if (usable || mine || held) out.same.push({ day: today, i: x.i, s: x.s, e: x.e, kind: x.kind, mode, state: usable ? "free" : mine ? "mine" : "taken" });
+    }
+  }
   return out;
 }
 
@@ -4109,10 +4130,10 @@ async function kakuTicketUse(deps, uid, body) {
   if (!mode || !/^\d{4}-\d{2}-\d{2}$/.test(day) || !Number.isInteger(si)) return { status: 400, error: "bad_request" };
   if (!(await kakuGate(deps, uid))) return { status: 403, error: "not_published" };
   const now = deps.now(), today = kakuDayId(now), tomorrow = kakuNextDay(today);
-  if (mode === "reserve" ? day !== tomorrow : day !== today && day !== tomorrow) return { status: 400, error: "bad_request" };
+  if (day !== today && day !== tomorrow) return { status: 400, error: "bad_request" };
   if (day < KAKU_EPOCH) return { status: 409, error: "no_event" };
   const t = kakuTimes(day);
-  if (mode === "reserve" && !(now >= t.preOpen && now < t.preClose)) return { status: 409, error: "not_open" };
+  if (mode === "reserve" && !(day === tomorrow ? now >= t.preOpen && now < t.preClose : now >= t.sameOpen && now < t.sameClose)) return { status: 409, error: "not_open" };
   const me = await loadMyUser(deps.firestore, uid, body?.username);
   if (me.error) return me.error;
   const fs = deps.firestore, entryPath = kakuTicketEntryPath(uid);
@@ -4122,13 +4143,19 @@ async function kakuTicketUse(deps, uid, body) {
     if (!cur) return { status: 409, error: "not_open" };
     const slots = cur.data.slots.map((x) => ({ ...x }));
     const k = slots.findIndex((x) => x.i === si), slot = slots[k];
-    if (!slot || slot.kind !== "pre") return { status: 400, error: "bad_request" };
+    const kinds = mode === "reserve" ? (day === tomorrow ? ["pre"] : ["lot"]) : (day === today ? ["pre", "lot", "quick"] : ["pre"]);   // 当日の10分枠は、今日の分だけ
+    if (!slot || !kinds.includes(slot.kind)) return { status: 400, error: "bad_request" };
     if (mode === "reserve") {
-      if (cur.data.mode === "sameDay" || cur.data.draw1Done === true) return { status: 409, error: "not_open" };
+      if (slot.kind === "pre" ? cur.data.mode === "sameDay" || cur.data.draw1Done === true : cur.data.draw2Done === true) return { status: 409, error: "not_open" };
       if (slot.uid || slot.name) return { status: 409, error: "taken" };
     } else {
-      if (cur.data.draw1Done !== true) return { status: 409, error: "not_open" };
-      if (slot.npc !== true || slot.uid || slot.cx) return { status: 409, error: "taken" };
+      if (slot.kind === "quick") {
+        if (now < t.sameOpen) return { status: 409, error: "not_open" };
+        if (slot.uid || slot.name) return { status: 409, error: "taken" };   // 先着の枠：まだ誰もとっていなければ、ゲームを待たずに取れる
+      } else {
+        if ((slot.kind === "pre" ? cur.data.draw1Done : cur.data.draw2Done) !== true) return { status: 409, error: "not_open" };
+        if (slot.npc !== true || slot.uid || slot.cx) return { status: 409, error: "taken" };
+      }
       if (slot.s - now <= kakuTicketTakeLeadMs()) return { status: 409, error: "too_late" };
     }
     const mine = slots.filter((x) => x.uid === uid);
@@ -4139,7 +4166,7 @@ async function kakuTicketUse(deps, uid, body) {
     const pick = kakuTicketsOf(prizes, now)[0];
     if (!pick) return { status: 409, error: "no_ticket" };
     const nextPrizes = prizes.map((r) => (r.n === pick.n ? { ...r, used: (Math.max(0, Math.floor(Number(r.used) || 0))) + 1, useLog: [...(Array.isArray(r.useLog) ? r.useLog : []).slice(-4), { m: mode, d: day, i: si, at: now }] } : r));
-    slots[k] = { ...slot, uid, name: me.name, npc: false, bt: 1, tk: 1, ...(mode === "take" ? { kn: 1 } : {}) };
+    slots[k] = { ...slot, uid, name: me.name, npc: false, bt: 1, tk: 1, ...(mode === "take" && slot.kind === "pre" ? { kn: 1 } : {}) };   // kn：ゆうマートの NPC 枠の数え方がずれないように（30分枠だけ）
     try {
       await fs.commit([
         { update: { name: fs.docName(entryPath), fields: encodeFields({ prizes: nextPrizes }) }, updateMask: { fieldPaths: ["prizes"] }, currentDocument: { updateTime: raw.updateTime } },
