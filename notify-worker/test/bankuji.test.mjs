@@ -253,3 +253,36 @@ test("購入の読み書き：読み取り（残高・券・売れた番号）�
   await buy("uT", "たろう", { random: 3 });
   assert.equal(fs.counts.commit, 1);
 });
+
+test("残り本数のリアルタイム更新（bankujiLeft）：景品ごとの残りと売れた券だけを返す。読み取りは5秒に1回まで。書き込みはしない", async () => {
+  const { fs, state, call, buy } = setup({ random: rngOf(10) });
+  const first = await call("uT", "たろう", "bankujiLeft");
+  assert.equal(first.ok, true); assert.equal(first.remaining, BANKUJI.pool);
+  BANKUJI.prizes.forEach((p) => assert.equal(first.left[p.id], p.count)); assert.equal(first.left.L, 1);
+  const base = { get: fs.counts.get, getRaw: fs.counts.getRaw, query: fs.counts.query, commit: fs.counts.commit };
+  for (let i = 0; i < 20; i++) { state.now += 200; await call("uH", "はなこ", "bankujiLeft"); }   // 4秒のあいだに何人が頼んでも
+  assert.deepEqual({ get: fs.counts.get, getRaw: fs.counts.getRaw, query: fs.counts.query, commit: fs.counts.commit }, base, "読み取りも書き込みも増えない");
+  state.now += 2000;
+  await call("uH", "はなこ", "bankujiLeft");
+  assert.equal(fs.counts.get, base.get + 1, "5秒たったら1回だけ読む");
+  assert.equal(fs.counts.commit, base.commit, "書き込みはしない");
+});
+
+test("残り本数：買うとすぐ（同じ Worker の中では）反映される。景品の残りの合計＝残り枚数−ラストワン1", async () => {
+  const { buy, call } = setup({ random: rngOf(10) });
+  await call("uT", "たろう", "bankujiLeft");
+  const r = await buy("uT", "たろう", { random: 5 });
+  assert.equal(r.ok, true);
+  const after = await call("uH", "はなこ", "bankujiLeft");
+  assert.equal(after.remaining, BANKUJI.pool - 5);
+  const sum = BANKUJI.prizes.reduce((a, p) => a + after.left[p.id], 0);
+  assert.equal(sum, BANKUJI.prizes.reduce((a, p) => a + p.count, 0) - 5, "引いた5本ぶんが減っている");
+  assert.equal(after.sold.split("1").length - 1, 5);
+  const st = await call("uH", "はなこ", "bankujiStatus");
+  assert.deepEqual(st.left, after.left, "ふつうの状態取得にも同じ残りが入る");
+});
+
+test("残り本数：発売前は何も返さない", async () => {
+  const before = setup({ now: START - 60000 });
+  assert.equal((await before.call("uT", "たろう", "bankujiLeft")).phase, "before");
+});
