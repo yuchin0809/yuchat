@@ -255,7 +255,7 @@ test("2人用：ゲームを始める（どちらの画面から呼んでも同�
   assert.equal(a.ok, true);
   const y = a.yacht;
   assert.deepEqual([y.order, y.names, y.round, y.cur, y.roll, y.done], [["id1", "id2"], ["u1", "u2"], 1, 0, 1, false]);
-  assert.equal(y.dice.length, 5); assert.equal(y.c0.length, 12); assert.ok(y.c0.every((v) => v === -1)); assert.equal(y.deadline - y.at, 60000);
+  assert.equal(y.dice.length, 5); assert.equal(y.c0.length, 12); assert.ok(y.c0.every((v) => v === -1));
   assert.equal(y.opts.length, 12);
   const b = await ctx.r(2, "yachtRoomStart");
   assert.equal(b.yacht.gid, y.gid, "二重に始めない");
@@ -308,35 +308,24 @@ test("2人用：1ゲームの書き込みは、振る・記録する操作の回
   assert.ok(ctx.fs.counts.getRaw - g0 <= 24 + 2, "1操作＝ルーム1件の読み取り（準備中の確認は短時間メモリ）");
 });
 
-test("2人用：持ち時間（60秒）が過ぎると、いまの目でいちばん高い役に自動で記録して次の人へ。2回続けて放置した人は負け", async () => {
-  const ctx = roomSetup();
-  const y = (await ctx.r(1, "yachtRoomStart")).yacht;
-  const key = (yy) => ({ gid: yy.gid, round: yy.round, turn: yy.cur });
-  assert.equal((await ctx.r(2, "yachtRoomTimeout", key(y))).error, "too_early");
-  ctx.state.now += 63000;
-  assert.equal((await ctx.r(1, "yachtRoomRoll", { gid: y.gid, hold: [false, false, false, false, false] })).error, "timeout", "時間切れのあとは操作できない");
-  const t1 = (await ctx.r(2, "yachtRoomTimeout", key(y))).yacht;       // 相手の画面から呼んでもよい
-  const best = Math.max(...y.opts.filter((v) => v >= 0));
-  assert.equal(Math.max(...t1.c0), best); assert.equal(t1.cur, 1); assert.deepEqual(t1.miss, [1, 0]);
-  assert.equal((await ctx.r(1, "yachtRoomTimeout", key(y))).yacht.cur, 1, "同じ時間切れを二重に処理しない（もう次の番）");
-  const t2 = await ctx.r(2, "yachtRoomScore", { gid: y.gid, cat: 0 });  // 2人目は普通に記録 → 1人目の番へ
-  assert.equal(t2.yacht.cur, 0);
-  ctx.state.now += 63000;
-  const t3 = (await ctx.r(2, "yachtRoomTimeout", key(t2.yacht))).yacht;
-  assert.deepEqual(t3.miss, [2, 0]); assert.equal(t3.done, true); assert.equal(t3.winner, 1); assert.equal(t3.reason, "timeout", "続けて2回放置：負け");
-});
-
-test("2人用：自分で操作したら放置の回数は戻る（続けてでなければ負けにならない）", async () => {
+test("2人用：時間制限はない。何時間たっても、自分の番なら振れる・記録できる。自動で記録されず、放置しても負けにならない", async () => {
   const ctx = roomSetup();
   let y = (await ctx.r(1, "yachtRoomStart")).yacht;
   const key = (yy) => ({ gid: yy.gid, round: yy.round, turn: yy.cur });
-  ctx.state.now += 63000; y = (await ctx.r(2, "yachtRoomTimeout", key(y))).yacht;      // 1人目：放置1回
-  y = await turnBest(ctx, y);                                                            // 2人目
-  y = await turnBest(ctx, y);                                                            // 1人目：自分で記録 → 0に戻る
-  assert.deepEqual(y.miss, [0, 0]);
-  y = await turnBest(ctx, y);
-  ctx.state.now += 63000; y = (await ctx.r(1, "yachtRoomTimeout", key(y))).yacht;      // 1人目：また放置1回
-  assert.equal(y.done, false); assert.deepEqual(y.miss, [1, 0]);
+  assert.equal(y.deadline, undefined, "持ち時間の印はない"); assert.equal(y.miss, undefined);
+  ctx.state.now += 6 * 3600000;   // 6時間たつ
+  const t = (await ctx.r(2, "yachtRoomTimeout", key(y))).yacht;     // 古い画面のタイマーからの呼び出し：何もしない
+  assert.deepEqual([t.cur, t.round, t.c0.every((v) => v === -1), t.done], [0, 1, true, false], "自動で記録しない・番も進まない");
+  assert.equal((await ctx.r(1, "yachtRoomTimeout", key(y))).yacht.gid, y.gid);
+  const rolled = await ctx.r(1, "yachtRoomRoll", { gid: y.gid, hold: [false, false, false, false, false] });
+  assert.equal(rolled.error, undefined); assert.equal(rolled.yacht.roll, 2, "6時間あとでも振れる");
+  const scored = await ctx.r(1, "yachtRoomScore", { gid: y.gid, cat: 0 });
+  assert.equal(scored.error, undefined); assert.equal(scored.yacht.cur, 1, "記録できて、次の人へ");
+  // 次の人が丸1日放置しても、負けにならない
+  ctx.state.now += 24 * 3600000;
+  const idle = (await ctx.r(1, "yachtRoomTimeout", key(scored.yacht))).yacht;
+  assert.deepEqual([idle.done, idle.cur, idle.c1.every((v) => v === -1)], [false, 1, true]);
+  assert.equal((await ctx.r(2, "yachtRoomScore", { gid: y.gid, cat: 1 })).error, undefined, "1日あとでも記録できる");
 });
 
 test("2人用：ルームの参加者だけ。ルームの種類が違う・存在しない・形式が不正なものは断る", async () => {
