@@ -2674,6 +2674,8 @@ export async function handleYuslotAction(deps, uid, body) {
       case "kakuApply": return await kakuApply(deps, uid, body);
       case "kakuTicketInfo": return await kakuTicketInfo(deps, uid);
       case "kakuTicketUse": return await kakuTicketUse(deps, uid, body);
+      case "kakuMoveInfo": return await kakuMoveInfo(deps, uid);
+      case "kakuMove": return await kakuMove(deps, uid, body);
       // 先着は、ゲーム（battle*）を通らないと買えない（kakuQuick を直接呼ぶ入口はない）
       case "battleStatus": return await battleStatus(deps, uid, body);
       case "battleStart": return await battleStart(deps, uid, body);
@@ -4252,6 +4254,62 @@ async function kakuTicketUse(deps, uid, body) {
 }
 
 /* =========================================================
+   ⏰ 当選した枠の時間を変える（前日の抽選で当たった30分枠）
+   ・当たった枠を、同じ日の、NPC がとっている30分枠と入れ替えられる。NPC の枠はどかしてよい。プレイヤーがとっている枠・まだ決まっていない枠・取り消された枠（cx）は選べない。
+   ・どかされた NPC は、もとの枠に入る（枠の数・NPC の人数は変わらない）。
+   ・変えられるのは、前日の抽選の当選（チケットで取った枠 tk・ゆうマートで買った枠 bt は対象外）。1当選につき1回（変えた枠には mv を付ける）。
+   ・期限：いまの枠・移る先の枠、どちらも始まる11分前まで（チケットの「取る」と同じ）。同じ日に、時間が重なる枠は選べない。
+   ・書き込みは1回の commit（更新時刻の条件つき。同時に変わったら読み直してやり直す）。当選の抽選・チケット・マートの動きとは、枠の書類の更新時刻でぶつかり合わない。
+========================================================= */
+async function kakuMoveInfo(deps, uid) {
+  if (!(await kakuGate(deps, uid))) return { status: 403, error: "not_published" };
+  const now = deps.now(), today = kakuDayId(now), out = { ok: true, serverNowMs: now, days: [] };
+  for (const day of [today, kakuNextDay(today)]) {
+    if (day < KAKU_EPOCH) continue;
+    const cur = await kakuGetDay(deps, day);
+    if (!cur || cur.data.draw1Done !== true) continue;
+    const slots = cur.data.slots, lead = kakuTicketTakeLeadMs();
+    const mine = slots.filter((x) => x.uid === uid && x.kind === "pre" && !x.bt && !x.tk && !x.mv && x.s - now > lead);
+    if (!mine.length) continue;
+    const myIdx = new Set(slots.filter((x) => x.uid === uid).map((x) => x.i));
+    out.days.push({ day, moves: mine.map((m) => ({
+      from: { i: m.i, s: m.s, e: m.e },
+      to: slots.filter((x) => x.kind === "pre" && x.npc === true && !x.uid && !x.cx && x.s - now > lead && !slots.some((y) => y.uid === uid && y.i !== m.i && y.s < x.e && x.s < y.e)).map((x) => ({ i: x.i, s: x.s, e: x.e }))
+    })) });
+  }
+  return out;
+}
+async function kakuMove(deps, uid, body) {
+  const day = typeof body?.day === "string" ? body.day : "", from = Number(body?.from), to = Number(body?.to);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !Number.isInteger(from) || !Number.isInteger(to) || from === to) return { status: 400, error: "bad_request" };
+  if (!(await kakuGate(deps, uid))) return { status: 403, error: "not_published" };
+  const now = deps.now(), today = kakuDayId(now);
+  if (day !== today && day !== kakuNextDay(today)) return { status: 400, error: "bad_request" };
+  if (day < KAKU_EPOCH) return { status: 409, error: "no_event" };
+  const me = await loadMyUser(deps.firestore, uid, body?.username);
+  if (me.error) return me.error;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    kakuDocCache.delete(day);
+    const cur = await kakuGetDay(deps, day, 0);
+    if (!cur || cur.data.draw1Done !== true) return { status: 409, error: "not_open" };
+    const slots = cur.data.slots.map((x) => ({ ...x })), a = slots.findIndex((x) => x.i === from), b = slots.findIndex((x) => x.i === to);
+    if (a < 0 || b < 0) return { status: 400, error: "bad_request" };
+    const A = slots[a], B = slots[b];
+    if (A.uid !== uid || A.kind !== "pre" || A.bt || A.tk) return { status: 409, error: "not_movable" };
+    if (A.mv) return { status: 409, error: "already_moved" };
+    if (B.kind !== "pre" || B.uid || B.npc !== true || B.cx) return { status: 409, error: "taken" };   // プレイヤーの枠・まだ決まっていない枠・取り消された枠は選べない
+    if (A.s - now <= kakuTicketTakeLeadMs() || B.s - now <= kakuTicketTakeLeadMs()) return { status: 409, error: "too_late" };
+    if (slots.some((x) => x.uid === uid && x.i !== A.i && x.s < B.e && B.s < x.e)) return { status: 409, error: "overlap" };
+    slots[b] = { ...B, uid, name: me.name, npc: false, mv: 1 };
+    slots[a] = { i: A.i, s: A.s, e: A.e, kind: A.kind, uid: "", name: B.name, npc: true };   // どかされた NPC がもとの枠に入る
+    try { await kakuWriteSlots(deps, day, { data: { slots }, updateTime: cur.updateTime }, {}); }
+    catch (error) { if (isRetryableCommitError(error)) continue; throw error; }
+    return { ok: true, day, from: { i: A.i, s: A.s, e: A.e }, to: { i: B.i, s: B.s, e: B.e } };
+  }
+  return { status: 409, error: "busy" };
+}
+
+/* =========================================================
    🎫 先着ゲーム（確変台の当日分の先着）
    ・11:45 になったら「先着はこちら」を押してスタート。接続画面→チケット選択→〇〇を選択→カード番号→同意→「チケットを取る」。
    ・問題（カード番号・接続画面の出方・お題・同意ボタンの並び）は、サーバーが人ごと・回ごとに作る（鍵つきのハッシュから計算するので保存しない）。
@@ -4785,7 +4843,7 @@ export function kakuCurrentHolder(slots, uid, t, now) {
 }
 const kakuPersonalSlots = (slots, uid) => (slots || [])
   .filter((x) => (!!uid && x.uid === uid) || x.kind === "quick")
-  .map((x) => ({ i: x.i, s: x.s, e: x.e, kind: x.kind, mine: !!uid && x.uid === uid, taken: !!(x.uid || x.name) }));
+  .map((x) => ({ i: x.i, s: x.s, e: x.e, kind: x.kind, mine: !!uid && x.uid === uid, taken: !!(x.uid || x.name), ...(!!uid && x.uid === uid && x.kind === "pre" && !x.bt && !x.tk ? { mv: x.mv ? 2 : 1 } : {}) }));   // mv：前日の抽選で当たった枠（1＝まだ時間を変えられる、2＝変更ずみ）
 async function kakuStatus(deps, uid, body) {
   const now = deps.now(), today = kakuDayId(now), tomorrow = kakuNextDay(today);
   const out = { ok: true, serverNowMs: now, active: today >= KAKU_EPOCH || tomorrow >= KAKU_EPOCH };
