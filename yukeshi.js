@@ -4,8 +4,8 @@
      このファイルは、画面（3Dの消しゴム・強さ・パーツの一覧）を描いて、「買う」「付ける」を頼むだけ。
    ・ゆうワールド（yuworld.js）から renderKeshi({ root, api, esc, openRooms, leagueFirst, onBack }) で開く。
 ========================================================= */
-import { keshiStatsView, keshiPunchView, keshiLeaguePhase, eraserIcon } from "./yukeshi-core.js?v=20261024-mart9";
-import { createEraserStage, SLEEVE_COLORS } from "./yukeshi3d.js?v=20261024-mart9";
+import { keshiStatsView, keshiPunchView, keshiLeaguePhase, eraserIcon } from "./yukeshi-core.js?v=20261026-ltd10";
+import { createEraserStage, SLEEVE_COLORS, sleeveCss } from "./yukeshi3d.js?v=20261026-ltd10";
 
 const SLOT_NAMES = { body: "本体", edge: "ふち", sole: "そこ", weight: "おもり" };
 const STAT_NAMES = [["m", "重さ"], ["s", "すべり"], ["b", "反発"], ["z", "大きさ"]];
@@ -98,7 +98,7 @@ async function openPractice() {
   if (busy) return;
   const pl = plan(), eq = previewEq(), color = st.color, my = token;
   stopKeshi();
-  try { practice = practice || await import("./yukeshi-practice.js?v=20261024-mart9"); }
+  try { practice = practice || await import("./yukeshi-practice.js?v=20261026-ltd10"); }
   catch (_) { alert("試し打ちを開けませんでした。通信環境をご確認のうえ、もう一度お試しください。"); drawShell(); return; }
   if (token !== my + 1) return;
   practice.renderPractice({ root: ctx.root, esc: ctx.esc, table, eq, color, title: pl.slots.length ? `選んでいるパーツ：${pl.slots.map((slot) => pl.part(slot).name).join("・")}（まだ買っていないものも試せます）` : "いま付けているパーツ", onBack: () => drawShell() });
@@ -123,7 +123,7 @@ function draw() {
   const pl = st ? plan() : null;
   $("#ykTabs").innerHTML = [...Object.entries(SLOT_NAMES), ["color", "カバーの色"]].map(([k, label]) => `<button type="button" class="yk2-tab${sel.tab === k ? " on" : ""}" data-tab="${k}">${label}${pl.slots.includes(k) ? " ●" : ""}</button>`).join("");
   if (sel.tab === "color") {
-    $("#ykParts").innerHTML = `<div class="yk2-colors">${SLEEVE_COLORS.map((c, i) => `<button type="button" class="yk2-color${st.color === i ? " on" : ""}" data-color="${i}" style="background:${c}" aria-label="${ctx.esc(table.colors[i])}"><span>${ctx.esc(table.colors[i])}</span></button>`).join("")}</div>`;
+    $("#ykParts").innerHTML = `<div class="yk2-colors">${SLEEVE_COLORS.map((c, i) => [c, i]).filter(([, i]) => (st.colorsHave || [0, 1, 2, 3, 4, 5, 6, 7]).includes(i)).map(([c, i]) => { const name = i < table.colors.length ? table.colors[i] : (table.limitedColors || [])[i - table.colors.length] || ""; return `<button type="button" class="yk2-color${st.color === i ? " on" : ""}" data-color="${i}" style="background:${sleeveCss(c)}" aria-label="${ctx.esc(name)}"><span>${ctx.esc(name)}</span></button>`; }).join("")}</div>`;
     $("#ykAct").innerHTML = `<p class="yk2-desc">カバーの色は、いくつでも無料で変えられます。強さには関係しません。</p>`;
   } else {
     const slot = sel.tab, have = st.have[slot];

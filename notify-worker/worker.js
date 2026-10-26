@@ -2611,6 +2611,7 @@ export async function handleYuslotAction(deps, uid, body) {
       case "bankujiBuy": return await bankujiBuy(deps, uid, body);
       case "bankujiApply": return await bankujiApply(deps, uid, body);
       case "bankujiSetPaused": return await bankujiSetPaused(deps, uid, body);
+      case "bankujiUse": return await bankujiUse(deps, uid, body);
       case "kakuStatus": return await kakuStatus(deps, uid, body);
       case "kakuApply": return await kakuApply(deps, uid, body);
       case "kakuTicketInfo": return await kakuTicketInfo(deps, uid);
@@ -3494,6 +3495,41 @@ export function bankujiMakeAward(prizeId, n, now, random) {
   else if (p.kind === "color") rec.code = pick(BANKUJI_COLOR_CODES);
   else if (p.kind === "kaku3" || p.kind === "kaku1") rec.until = now + BANKUJI.rightDays * 86400000;
   return rec;
+}
+
+/* E賞（消しバトの限定改造品）・F賞（限定カラー）を「使う」：消しバトの持ちものに入れる（付けるのは、消しバトのショップで）。
+   ・E賞：その景品の枠（本体・ふち・そこ・おもり）の限定パーツ（id は ltd）を持ちものに足す。強さはショップの最強パーツとほぼ同じ（KESHI_PARTS の limited）。
+   ・F賞：その色（ゴールド・シルバー・レインボー・ブラックゴールド）を、カバーの色として選べるようにする。
+   ・同じものをすでに持っているときは、使えない（景品は残る＝ゆうマートで売れる）。使った景品には used を付ける（もう売れない）。
+   ・景品の記録と消しバトの持ちものは、1回の commit（更新時刻の条件つき）で書く。景品の中身（種類・数）は変えない。 */
+async function bankujiUse(deps, uid, body) {
+  const g = await keshiGate(deps, uid);
+  if (g) return g;
+  const n = Number(body?.n);
+  if (!Number.isInteger(n)) return { status: 400, error: "bad_request" };
+  const me = await loadMyUser(deps.firestore, uid, body?.username);
+  if (me.error) return me.error;
+  const fs = deps.firestore, path = `bankujiEntries/${BANKUJI.round}_${uid}`;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const raw = await fs.getRaw(path);
+    const prizes = raw && Array.isArray(decodeFields(raw.fields).prizes) ? decodeFields(raw.fields).prizes : [];
+    const rec = prizes.find((x) => x.n === n);
+    if (!rec) return { status: 409, error: "not_owned" };
+    if (rec.used > 0) return { status: 409, error: "used" };
+    let key, label;
+    if (rec.kind === "gear" && KESHI_SLOTS.includes(rec.code)) { key = `${rec.code}:ltd`; label = KESHI_PART_BY[rec.code].ltd.name; }
+    else if (rec.kind === "color" && KESHI_LIMITED_COLORS.some((c) => c.code === rec.code)) { key = `color:${rec.code}`; label = `カバーの色「${KESHI_LIMITED_COLORS.find((c) => c.code === rec.code).name}」`; }
+    else return { status: 400, error: "bad_request" };
+    const k = await keshiLoad(deps, uid);
+    if (k.owned.includes(key)) return { status: 409, error: "already_have" };
+    const nextPrizes = prizes.map((x) => (x.n === n ? { ...x, used: 1, usedAt: deps.now() } : x));
+    const writes = [{ update: { name: fs.docName(path), fields: encodeFields({ prizes: nextPrizes }) }, updateMask: { fieldPaths: ["prizes"] }, currentDocument: { updateTime: raw.updateTime } },
+      ...keshiWrite(deps, uid, k, { owned: [...k.owned, key], eq: k.eq, color: k.color, n: me.name })];
+    try { await fs.commit(writes); }
+    catch (error) { if (isRetryableCommitError(error)) continue; throw error; }
+    return { ok: true, n, kind: rec.kind, code: rec.code, label };
+  }
+  return { status: 409, error: "busy" };
 }
 
 let bankujiPauseCache = { value: null, at: 0 };
@@ -5311,30 +5347,39 @@ export const KESHI_PARTS = {
     { id: "sponge", name: "スポンジ消しゴム", price: 120, m: -6, s: 4, b: 8, z: 2, desc: "軽くてよく弾む" },
     { id: "sand", name: "砂消し", price: 150, m: 4, s: -6, b: 2, z: 0, desc: "ざらざらで重く、すべりにくい" },
     { id: "pro", name: "高級ゴム", price: 600, m: 6, s: 6, b: 6, z: 0, desc: "全部がバランスよく強い" },
-    { id: "titan", name: "チタン芯入り", price: 1800, m: 14, s: 8, b: 10, z: -2, desc: "芯が入った、重くて強い本体" }
+    { id: "titan", name: "チタン芯入り", price: 1800, m: 14, s: 8, b: 10, z: -2, desc: "芯が入った、重くて強い本体" },
+    { id: "ltd", name: "限定 ゆうメタル本体", price: 5000, m: 16, s: 10, b: 12, z: 0, desc: "ゆう番くじ E賞の限定品。重くて強い、特別な本体", limited: true }
   ],
   edge: [
     { id: "paper", name: "紙のカバー", price: 0, m: 0, s: 0, b: 0, z: 0, desc: "ふつうの紙のカバー" },
     { id: "plastic", name: "プラスチックカバー", price: 100, m: 2, s: 6, b: 0, z: 0, desc: "つるつるですべりやすい" },
     { id: "band", name: "ゴムバンド", price: 200, m: 0, s: 0, b: 10, z: 0, desc: "ぶつかったときに強く弾く" },
     { id: "metal", name: "金属フレーム", price: 900, m: 10, s: 2, b: 12, z: 2, desc: "重くて、当たりに強い" },
-    { id: "crystal", name: "クリスタルフレーム", price: 2500, m: 12, s: 10, b: 14, z: 2, desc: "すべって弾む、いちばん強いふち" }
+    { id: "crystal", name: "クリスタルフレーム", price: 2500, m: 12, s: 10, b: 14, z: 2, desc: "すべって弾む、いちばん強いふち" },
+    { id: "ltd", name: "限定 ゆうゴールドフレーム", price: 5000, m: 12, s: 12, b: 16, z: 2, desc: "ゆう番くじ E賞の限定品。金色に輝く、特別なふち", limited: true }
   ],
   sole: [
     { id: "bare", name: "そのまま", price: 0, m: 0, s: 0, b: 0, z: 0, desc: "なにも付けていない" },
     { id: "tape", name: "つるつるテープ", price: 100, m: 0, s: 8, b: 0, z: 0, desc: "机の上をすべる" },
     { id: "wax", name: "ワックス", price: 250, m: -2, s: 14, b: 0, z: 0, desc: "よくすべる" },
     { id: "teflon", name: "テフロンシート", price: 1000, m: -4, s: 24, b: 0, z: 0, desc: "ものすごくすべる" },
-    { id: "air", name: "エアクッション底", price: 2200, m: -6, s: 28, b: 4, z: 0, desc: "ほとんど摩擦がない" }
+    { id: "air", name: "エアクッション底", price: 2200, m: -6, s: 28, b: 4, z: 0, desc: "ほとんど摩擦がない" },
+    { id: "ltd", name: "限定 ゆうジェットソール", price: 5000, m: -6, s: 30, b: 6, z: 0, desc: "ゆう番くじ E賞の限定品。ジェット噴射のようにすべる底", limited: true }
   ],
   weight: [
     { id: "none", name: "なし", price: 0, m: 0, s: 0, b: 0, z: 0, desc: "おもりなし" },
     { id: "coin", name: "10円玉", price: 80, m: 8, s: 0, b: -2, z: 0, desc: "ちょっと重くなる" },
     { id: "bolt", name: "ボルト", price: 300, m: 14, s: 0, b: 0, z: -1, desc: "しっかり重くなる" },
     { id: "lead", name: "鉛のおもり", price: 1200, m: 24, s: -2, b: 0, z: -2, desc: "かなり重くなる" },
-    { id: "gold", name: "金のおもり", price: 3000, m: 32, s: 0, b: 4, z: -3, desc: "いちばん重い" }
+    { id: "gold", name: "金のおもり", price: 3000, m: 32, s: 0, b: 4, z: -3, desc: "いちばん重い" },
+    { id: "ltd", name: "限定 ゆうオリハルコン", price: 5000, m: 34, s: 0, b: 6, z: -3, desc: "ゆう番くじ E賞の限定品。伝説の金属でできた、いちばん重いおもり", limited: true }
   ]
 };
+/* limited：ゆう番くじ E賞の限定品。ショップでは買えない・ゆうマートでも売れない。持っている人の一覧にだけ出る（price は、無料のパーツと区別するための目安） */
+/* カバーの限定カラー（ゆう番くじ F賞）：番号は 8〜11。持っている人だけ選べる */
+export const KESHI_LIMITED_COLORS = [{ code: "gold", name: "ゴールド" }, { code: "silver", name: "シルバー" }, { code: "rainbow", name: "レインボー" }, { code: "blackgold", name: "ブラックゴールド" }];
+const KESHI_COLOR_COUNT = KESHI_COLORS.length + KESHI_LIMITED_COLORS.length;
+const keshiColorOwned = (owned, idx) => idx < KESHI_COLORS.length || owned.includes(`color:${KESHI_LIMITED_COLORS[idx - KESHI_COLORS.length].code}`);
 const KESHI_PART_BY = Object.fromEntries(KESHI_SLOTS.map((k) => [k, Object.fromEntries(KESHI_PARTS[k].map((p) => [p.id, p]))]));
 export const KESHI_DEFAULT_EQ = Object.freeze({ body: "plain", edge: "paper", sole: "bare", weight: "none" });
 /* 中古（ゆうマートで買ったパーツ）：id の後ろに ~u を付けて表す（例：metal~u）。ショップの新品より、増える点数がほんの少しだけ低い（減る点数はそのまま）。
@@ -5375,7 +5420,7 @@ function keshiParse(d) {
   const owned = Array.isArray(d.owned) ? d.owned.filter((x) => typeof x === "string") : [];
   const eq = { ...KESHI_DEFAULT_EQ };
   KESHI_SLOTS.forEach((slot) => { const id = d.eq?.[slot]; if (typeof id === "string" && keshiPartOf(slot, id) && (keshiIsFree(slot, id) || owned.includes(`${slot}:${id}`))) eq[slot] = id; });
-  const color = Number.isInteger(d.color) && d.color >= 0 && d.color < KESHI_COLORS.length ? d.color : 0;
+  const color = Number.isInteger(d.color) && d.color >= 0 && d.color < KESHI_COLOR_COUNT && keshiColorOwned(owned, d.color) ? d.color : 0;
   return { owned, eq, color, league: d.league === true };
 }
 async function keshiLoad(deps, uid) {
@@ -5388,12 +5433,14 @@ function keshiView(cur, coins, now) {
     have[slot] = KESHI_PARTS[slot].filter((p) => p.price === 0 || cur.owned.includes(`${slot}:${p.id}`)).map((p) => p.id);
     KESHI_PARTS[slot].forEach((p) => { if (p.price > 0 && cur.owned.includes(`${slot}:${p.id}~u`)) have[slot].push(`${p.id}~u`); });   // 中古のパーツ
   });
-  return { ok: true, coins, have, eq: cur.eq, color: cur.color, stats: keshiStats(cur.eq), serverNowMs: now };
+  const colorsHave = Array.from({ length: KESHI_COLOR_COUNT }, (_, i) => i).filter((i) => keshiColorOwned(cur.owned, i));
+  return { ok: true, coins, have, eq: cur.eq, color: cur.color, colorsHave, stats: keshiStats(cur.eq), serverNowMs: now };
 }
 /* 持っている中古のパーツは、その人の一覧に（新品の後ろに）足す */
 const keshiTable = (cur) => {
-  const parts = cur ? Object.fromEntries(KESHI_SLOTS.map((slot) => [slot, [...KESHI_PARTS[slot], ...KESHI_PARTS[slot].filter((p) => p.price > 0 && cur.owned.includes(`${slot}:${p.id}~u`)).map((p) => ({ ...keshiPartOf(slot, `${p.id}~u`), price: 0 }))]])) : KESHI_PARTS;
-  return { slots: KESHI_SLOTS, parts, colors: KESHI_COLORS, base: KESHI_BASE, usedRate: KESHI_USED_RATE };
+  const shown = (slot) => KESHI_PARTS[slot].filter((p) => !p.limited || (cur && cur.owned.includes(`${slot}:${p.id}`)));   // 限定品は、持っている人にだけ見える
+  const parts = cur ? Object.fromEntries(KESHI_SLOTS.map((slot) => [slot, [...shown(slot), ...KESHI_PARTS[slot].filter((p) => p.price > 0 && !p.limited && cur.owned.includes(`${slot}:${p.id}~u`)).map((p) => ({ ...keshiPartOf(slot, `${p.id}~u`), price: 0 }))]])) : Object.fromEntries(KESHI_SLOTS.map((slot) => [slot, shown(slot)]));
+  return { slots: KESHI_SLOTS, parts, colors: KESHI_COLORS, limitedColors: KESHI_LIMITED_COLORS.map((c) => c.name), base: KESHI_BASE, usedRate: KESHI_USED_RATE };
 };
 async function keshiState(deps, uid, body) {
   const g = await keshiGate(deps, uid);
@@ -5419,6 +5466,7 @@ async function keshiBuy(deps, uid, body) {
   const me = await loadMyUser(deps.firestore, uid, body?.username);
   if (me.error) return me.error;
   const cur = await keshiLoad(deps, uid);
+  if (part.limited) return { status: 409, error: "not_for_sale" };   // 限定品は、ゆう番くじの景品
   if (part.price === 0 || cur.owned.includes(`${slot}:${id}`)) return { status: 409, error: "already_owned" };
   const coins = Number(decodeFields(me.raw.fields).coins || 0);
   if (coins < part.price) return { status: 409, error: "insufficient_coins" };
@@ -5447,7 +5495,7 @@ async function keshiBuyMany(deps, uid, body) {
   const me = await loadMyUser(deps.firestore, uid, body?.username);
   if (me.error) return me.error;
   const cur = await keshiLoad(deps, uid);
-  if (Object.entries(picks).some(([slot, id]) => keshiIsUsedId(id) && !cur.owned.includes(`${slot}:${id}`))) return { status: 409, error: "not_owned" };   // 中古はゆうマートで買うもの。ショップでは買えない
+  if (Object.entries(picks).some(([slot, id]) => (keshiIsUsedId(id) || KESHI_PART_BY[slot][id]?.limited) && !cur.owned.includes(`${slot}:${id}`))) return { status: 409, error: "not_owned" };   // 中古はゆうマートで、限定品はゆう番くじで手に入れるもの。ショップでは買えない
   const buy = Object.entries(picks).filter(([slot, id]) => !keshiIsUsedId(id) && !keshiIsFree(slot, id) && !cur.owned.includes(`${slot}:${id}`));
   const total = buy.reduce((sum, [slot, id]) => sum + KESHI_PART_BY[slot][id].price, 0);
   const coins = Number(decodeFields(me.raw.fields).coins || 0);
@@ -5474,7 +5522,11 @@ async function keshiEquip(deps, uid, body) {
     eq[slot] = id;
   }
   let color = cur.color;
-  if (body?.color !== undefined) { color = Number(body.color); if (!Number.isInteger(color) || color < 0 || color >= KESHI_COLORS.length) return { status: 400, error: "bad_request" }; }
+  if (body?.color !== undefined) {
+    color = Number(body.color);
+    if (!Number.isInteger(color) || color < 0 || color >= KESHI_COLOR_COUNT) return { status: 400, error: "bad_request" };
+    if (!keshiColorOwned(cur.owned, color)) return { status: 409, error: "not_owned" };   // 限定カラーは、持っている人だけ
+  }
   const me = await loadMyUser(deps.firestore, uid, body?.username);
   if (me.error) return me.error;
   const writes = keshiWrite(deps, uid, cur, { owned: cur.owned, eq, color, n: me.name });
@@ -5512,7 +5564,7 @@ export const MART = {
   prizeNpc: { buyMax: 0.7, lo: 0.5, span: 0.15 }            // NPC が景品に出す額は、相場の0.5〜0.65倍（買い取りは相場の0.7倍以下）。景品を NPC に売ってコインが増えすぎないように低くする
 };
 const martFee = (price) => Math.floor(price / 100) * MART.feePct + Math.floor(((price % 100) * MART.feePct) / 100);   // price × 10% の切り捨て（とても大きな値段でも、ずれない計算）
-const martParts = () => KESHI_SLOTS.flatMap((slot) => KESHI_PARTS[slot].filter((p) => p.price > 0).map((p) => ({ slot, id: p.id, price: p.price })));
+const martParts = () => KESHI_SLOTS.flatMap((slot) => KESHI_PARTS[slot].filter((p) => p.price > 0 && !p.limited).map((p) => ({ slot, id: p.id, price: p.price })));
 const martRef = (slot, id) => { const p = KESHI_PART_BY[slot]?.[keshiBaseId(id)]; return p && p.price > 0 ? Math.round(p.price * MART.usedMarket) : 0; };
 /* 出品の相場（種類ごと）。k：part（パーツ）／kaku（確変枠）／prize（番くじ景品） */
 function martRefOf(L) {
@@ -5619,7 +5671,7 @@ const martLive = (L, now) => now < L.e && !martNpcBought(L, now);
 const martHasEnded = (m, now) => m.L.some((x) => x.au && now >= x.e) || Object.keys(m.NA).some((id) => { const r = martNpcAuctionById(id, now); return !r || r.ended; });
 const martNames = () => {
   const out = {};
-  KESHI_SLOTS.forEach((slot) => { out[slot] = KESHI_PARTS[slot].filter((p) => p.price > 0).map((p) => ({ id: p.id, name: p.name, price: p.price, ref: martRef(slot, p.id), m: p.m, s: p.s, b: p.b, z: p.z })); });
+  KESHI_SLOTS.forEach((slot) => { out[slot] = KESHI_PARTS[slot].filter((p) => p.price > 0 && !p.limited).map((p) => ({ id: p.id, name: p.name, price: p.price, ref: martRef(slot, p.id), m: p.m, s: p.s, b: p.b, z: p.z })); });
   return out;
 };
 const martView = (L, now, bids) => {
@@ -5675,7 +5727,7 @@ async function martMine(deps, uid, body) {
     }
     const k = await keshiLoad(deps, uid);
     const coins = Number(decodeFields(me.raw.fields).coins || 0);
-    const sellable = k.owned.filter((o) => /^(body|edge|sole|weight):/.test(o)).map((o) => { const [slot, id] = o.split(":"); return { slot, part: id }; }).filter((x) => { const p = KESHI_PART_BY[x.slot]?.[keshiBaseId(x.part)]; return p && p.price > 0; }).map((x) => ({ ...x, equipped: k.eq[x.slot] === x.part, ref: martRef(x.slot, x.part) }));
+    const sellable = k.owned.filter((o) => /^(body|edge|sole|weight):/.test(o)).map((o) => { const [slot, id] = o.split(":"); return { slot, part: id }; }).filter((x) => { const p = KESHI_PART_BY[x.slot]?.[keshiBaseId(x.part)]; return p && p.price > 0 && !p.limited; }).map((x) => ({ ...x, equipped: k.eq[x.slot] === x.part, ref: martRef(x.slot, x.part) }));
     const listings = cur.m.L.filter((L) => L.u === uid).map((L) => ({
       ...martView(L, now), expired: now >= L.e,
       offers: (L.of || []).filter((o) => now - o.t < MART.offerMs).map((o) => ({ u: o.u, n: o.n, q: o.q, t: o.t })),
@@ -5701,7 +5753,7 @@ async function martList(deps, uid, body) {
   if (!["part", "kaku", "prize"].includes(kind)) return { status: 400, error: "bad_request" };
   if (auction && kind === "kaku") return { status: 409, error: "no_auction" };   // 確変枠はオークションにしない（精算が遅れると、枠が始まってしまうため）
   if (auction && !MART.auc.hours.includes(hours)) return { status: 400, error: "bad_request" };
-  if (kind === "part") { const base = KESHI_PART_BY[String(body?.slot || "")]?.[keshiBaseId(String(body?.part || ""))]; if (!base || base.price === 0 || !keshiPartOf(String(body.slot), String(body.part))) return { status: 400, error: "bad_request" }; }
+  if (kind === "part") { const base = KESHI_PART_BY[String(body?.slot || "")]?.[keshiBaseId(String(body?.part || ""))]; if (!base || base.price === 0 || base.limited || !keshiPartOf(String(body.slot), String(body.part))) return { status: 400, error: "bad_request" }; }
   if (!Number.isInteger(price) || price < 1 || !Number.isSafeInteger(price)) return { status: 400, error: "bad_price" };   // 値段の上限はない（コインが足りれば、いくらでも）
   const me = await loadMyUser(deps.firestore, uid, body?.username);
   if (me.error) return me.error;

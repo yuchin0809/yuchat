@@ -65,7 +65,7 @@ let uuidSeq = 0;
 Object.defineProperty(globalThis, "crypto", { value: { ...globalThis.crypto, randomUUID: () => `${String(++uuidSeq).padStart(8, "0")}-0000-4000-8000-${String(uuidSeq * 7919).padStart(12, "0")}`, getRandomValues: (a) => globalThis.crypto.getRandomValues(a), subtle: globalThis.crypto.subtle }, configurable: true });
 const JST = (y, mo, d, h = 0, mi = 0) => Date.UTC(y, mo - 1, d, h - 9, mi, 0);
 const ADMIN = "adminUid";
-const ALL_OWNED = KESHI_SLOTS.flatMap((s) => KESHI_PARTS[s].filter((p) => p.price > 0).map((p) => `${s}:${p.id}`));
+const ALL_OWNED = KESHI_SLOTS.flatMap((s) => KESHI_PARTS[s].filter((p) => p.price > 0 && !p.limited).map((p) => `${s}:${p.id}`));
 
 function setup({ coins = 20000, now = JST(2026, 10, 25, 12), owned = [] } = {}) {
   resetYuslotCacheForTest();
@@ -298,7 +298,7 @@ test("消しバトが非公開のあいだは、ふつうの人は使えない",
 
 test("商品の絵：有料パーツの全部に、そのパーツの絵がある（中古でも同じ絵）", async () => {
   const { partArt, MART_ART_KEYS } = await import("../../yumart-art.js");
-  const keys = KESHI_SLOTS.flatMap((s) => KESHI_PARTS[s].filter((p) => p.price > 0).map((p) => `${s}:${p.id}`));
+  const keys = KESHI_SLOTS.flatMap((s) => KESHI_PARTS[s].filter((p) => p.price > 0 && !p.limited).map((p) => `${s}:${p.id}`));
   assert.deepEqual([...MART_ART_KEYS].sort(), [...keys].sort());
   for (const k of keys) { const [s, i] = k.split(":"); assert.equal(partArt(s, `${i}~u`), partArt(s, i)); assert.ok(!partArt(s, i).includes("📦")); }
 });
