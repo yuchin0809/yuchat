@@ -16,13 +16,13 @@ import {
   createRaceStage,
   getHorseColors,
   RACE_SHOW_MAX_SECONDS
-} from "./derby-show.js?v=20261026-ticket6";
+} from "./derby-show.js?v=20261026-ltd7";
 
 /* ゆうダービーの自分の馬券に合わせた演出（見せるだけ。結果・払い戻しは決めない） */
-import { betTrack, describeMiss, myMoves, totalPayout } from "./derby-extra.js?v=20261026-ticket6";
+import { betTrack, describeMiss, myMoves, totalPayout } from "./derby-extra.js?v=20261026-ltd7";
 
 /* 🥷 スリと防犯グッズ（Worker と同じ表。見せるだけ・買うのは Worker） */
-import { THEFT_MIN_TOTAL, THEFT_GUARDS, THEFT_GUARD_SALE_START_MS, guardPriceOf, weekStartOf, nextWeekStartOf } from "./yuu-theft.js?v=20261026-ticket6";
+import { THEFT_MIN_TOTAL, THEFT_GUARDS, THEFT_GUARD_SALE_START_MS, guardPriceOf, weekStartOf, nextWeekStartOf } from "./yuu-theft.js?v=20261026-ltd7";
 
 /* ゆうダービーの固定オッズ（derby-runner と同じ計算） */
 import {
@@ -40,10 +40,10 @@ import {
 /* 🎡 ゆうワールド（ゆうスロなどのお店）。残高・抽選・公開・営業時間の判定はすべて Worker 任せ（Firebase には触らない） */
 import {
   initYuWorld, openYuWorldView, stopYuWorldView
-} from "./yuworld.js?v=20261026-yuworld51";
-import { initYuMart, openYuMartView, stopYuMartView } from "./yumart.js?v=20261024-mart9";
+} from "./yuworld.js?v=20261026-yuworld52";
+import { initYuMart, openYuMartView, stopYuMartView } from "./yumart.js?v=20261026-ltd10";
 import { renderYachtRoom } from "./yuyacht.js?v=20261023-yacht5";
-import { renderKeshiRoom } from "./yukeshi-room.js?v=20261024-mart9";
+import { renderKeshiRoom } from "./yukeshi-room.js?v=20261026-ltd10";
 
 /* 💸 コインの送金（申請は本人・OK/却下は管理者）。中身の確定は Worker */
 import { transferInit, transferOpenUser, transferOpenAdmin, transferReset } from "./yutransfer.js?v=20261020-transfer1";
@@ -51,7 +51,7 @@ import { transferInit, transferOpenUser, transferOpenAdmin, transferReset } from
 import { inviteInit } from "./yuinvite.js?v=20261021-invite1";
 /* 🌈 確変台の当選者（管理者だけ） */
 import { kakuWinnersInit, kakuWinnersOpen, kakuWinnersReset } from "./yukakuwinners.js?v=20261021-winners1";
-import { keshiEnrollInit, keshiEnrollOpen, keshiEnrollReset } from "./yukeshi-admin.js?v=20261024-mart9";
+import { keshiEnrollInit, keshiEnrollOpen, keshiEnrollReset } from "./yukeshi-admin.js?v=20261026-ltd10";
 import { economyAdminInit, economyAdminOpen, economyAdminReset } from "./yueconomy-admin.js?v=20261024-econ2";
 
 import {

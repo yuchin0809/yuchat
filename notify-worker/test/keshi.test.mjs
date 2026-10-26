@@ -226,7 +226,8 @@ test("付け替え：持っているパーツと、無料の初期パーツだ�
   assert.equal((await ctx.act(1, { action: "keshiEquip", eq: { body: "titan" } })).error, "not_owned", "持っていないパーツは付けられない");
   assert.equal((await ctx.act(1, { action: "keshiEquip", eq: { edge: "metal" } })).error, "not_owned");
   assert.equal((await ctx.act(1, { action: "keshiEquip", eq: { body: "nope" } })).error, "not_owned");
-  assert.equal((await ctx.act(1, { action: "keshiEquip", color: 8 })).error, "bad_request");
+  assert.equal((await ctx.act(1, { action: "keshiEquip", color: 12 })).error, "bad_request");
+  assert.equal((await ctx.act(1, { action: "keshiEquip", color: 8 })).error, "not_owned", "8〜11 は限定カラー。持っている人だけ");
   assert.equal((await ctx.act(1, { action: "keshiEquip", color: -1 })).error, "bad_request");
   assert.equal(ctx.fs.plain("yuslotKeshi/id1").color, 5, "失敗した変更は保存されない");
   const other = await ctx.act(2, { action: "keshiState" });
@@ -249,7 +250,7 @@ test("画面用の強さの計算（yukeshi-core.js）は、サーバーの計�
     const eq = { body, edge, sole, weight };
     assert.deepEqual(keshiStatsView(table, eq), keshiStats(eq), JSON.stringify(eq)); n++;
   }
-  assert.equal(n, 625);
+  assert.equal(n, 6 ** 4, "限定パーツも含めた、全部の組み合わせ");
 });
 
 /* ===== リーグ戦（エントリーだけ） ===== */

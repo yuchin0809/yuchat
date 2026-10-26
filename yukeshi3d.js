@@ -3,7 +3,10 @@
    ・three.js が読めない端末では、何も描かない（呼び出し側が絵文字を出す）。 */
 import { load3D, three } from "./yuyacht3d.js?v=20261023-3d1";
 
-export const SLEEVE_COLORS = ["#2f6fe0", "#e0412f", "#2fa85a", "#f0b400", "#ee6fa8", "#8a52d6", "#2b2b30", "#f07a20"];
+/* 0〜7：ふつうの色／8〜11：ゆう番くじ F賞の限定カラー（ゴールド・シルバー・レインボー・ブラックゴールド。持っている人だけ選べる） */
+export const SLEEVE_COLORS = ["#2f6fe0", "#e0412f", "#2fa85a", "#f0b400", "#ee6fa8", "#8a52d6", "#2b2b30", "#f07a20", "#d4a62a", "#b8c0c8", "rainbow", "#1b1a14"];
+/* 色の見本（ボタンの背景）に使う CSS */
+export const sleeveCss = (c) => (c === "rainbow" ? "linear-gradient(90deg,#ff2d78,#ff8a00,#ffe14a,#17e36a,#17b6ff,#b14cff)" : c);
 
 /* 消しゴムの組み立て（1人用の画面と、2人対戦の画面で共通）。T：three.js、RBG：角丸の箱。
    ・build(eq, color)：本体・ふち・そこ・おもり・カバーの色から、消しゴムの3Dの形（Group）を作る。長い辺が x 方向、底が y=-0.4
@@ -19,8 +22,9 @@ export function eraserKit(T, RBG) {
   };
   const sleeveTex = (color) => {
     const c = document.createElement("canvas"); c.width = 256; c.height = 128; const g = c.getContext("2d");
-    g.fillStyle = color; g.fillRect(0, 0, 256, 128); g.fillStyle = "#fff"; g.fillRect(0, 0, 256, 14); g.fillRect(0, 114, 256, 14);
-    g.fillStyle = "#fff"; g.font = "900 46px sans-serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText("消しゴム", 128, 66);
+    if (color === "rainbow") { const gr = g.createLinearGradient(0, 0, 256, 0); ["#ff2d78", "#ff8a00", "#ffe14a", "#17e36a", "#17b6ff", "#b14cff"].forEach((c, i, a) => gr.addColorStop(i / (a.length - 1), c)); g.fillStyle = gr; } else g.fillStyle = color;
+    g.fillRect(0, 0, 256, 128); const ink = color === "#1b1a14" ? "#e8c25a" : "#fff"; g.fillStyle = ink; g.fillRect(0, 0, 256, 14); g.fillRect(0, 114, 256, 14);
+    g.fillStyle = ink; g.font = "900 46px sans-serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText("消しゴム", 128, 66);
     const t = new T.CanvasTexture(c); t.colorSpace = T.SRGBColorSpace; return t;
   };
   const std = (o) => new T.MeshStandardMaterial(o);
@@ -35,7 +39,8 @@ export function eraserKit(T, RBG) {
       sponge: () => std({ map: speckle("#ffd84a", "#d9a900", 70, 5), roughness: 1 }),
       sand: () => std({ map: speckle("#b8b2a4", "#6e6a60", 160, 2.5), roughness: 1 }),
       pro: () => phys({ color: 0xfde7ee, roughness: .28, clearcoat: .7, clearcoatRoughness: .25 }),
-      titan: () => std({ color: 0xd2d6dc, roughness: .28, metalness: .85 })
+      titan: () => std({ color: 0xd2d6dc, roughness: .28, metalness: .85 }),
+      ltd: () => phys({ color: 0x7fa3d6, roughness: .18, metalness: .95, clearcoat: 1, emissive: 0x16305a, emissiveIntensity: .35 })   // E賞の限定
     }[eq.body] || (() => std({ color: 0xf4f1ea }));
     add(rbox(2.5, .72, 1.22, .1), body());
     add(rbox(1.32, .8, 1.3, .06), std({ map: sleeveTex(SLEEVE_COLORS[color] || SLEEVE_COLORS[0]), roughness: .75 }));
@@ -43,16 +48,19 @@ export function eraserKit(T, RBG) {
     if (edge === "plastic") add(rbox(2.62, .26, 1.34, .08), phys({ color: 0x9fd8ff, transparent: true, opacity: .45, roughness: .1 }), 0, -.2, 0);
     else if (edge === "band") { [-.98, .98].forEach((x) => add(rbox(.12, .8, 1.3, .05), std({ color: 0xd8262a, roughness: .55 }), x, 0, 0)); }
     else if (edge === "metal") add(rbox(2.62, .28, 1.34, .06), std({ color: 0xb9c0c8, metalness: 1, roughness: .22 }), 0, -.2, 0);
+    else if (edge === "ltd") add(rbox(2.64, .3, 1.36, .08), phys({ color: 0xffc933, metalness: 1, roughness: .12, emissive: 0x7a5200, emissiveIntensity: .45 }), 0, -.2, 0);
     else if (edge === "crystal") add(rbox(2.64, .3, 1.36, .1), phys({ color: 0x66d0ff, transparent: true, opacity: .72, roughness: .05, clearcoat: 1, emissive: 0x1a6a9a, emissiveIntensity: .35 }), 0, -.2, 0);
     const sole = eq.sole;
     if (sole === "tape") add(rbox(2.3, .07, 1.0, .02), std({ color: 0xf4d20a, roughness: .5 }), 0, -.4, 0);
     else if (sole === "wax") add(rbox(2.3, .08, 1.0, .03), phys({ color: 0xfff1c9, roughness: .2, clearcoat: .8 }), 0, -.4, 0);
     else if (sole === "teflon") add(rbox(2.34, .08, 1.04, .03), phys({ color: 0x131316, roughness: .12, clearcoat: 1 }), 0, -.4, 0);
+    else if (sole === "ltd") add(rbox(2.36, .1, 1.06, .05), phys({ color: 0xff7a45, roughness: .2, clearcoat: 1, emissive: 0xff3c00, emissiveIntensity: .5 }), 0, -.42, 0);
     else if (sole === "air") add(rbox(2.36, .13, 1.06, .06), phys({ color: 0xc4ecff, transparent: true, opacity: .6, roughness: .08 }), 0, -.42, 0);
     const weight = eq.weight;
     if (weight === "coin") add(new T.CylinderGeometry(.3, .3, .06, 32), std({ color: 0xd9a233, metalness: 1, roughness: .3 }), .95, .39, .0);
     else if (weight === "bolt") add(new T.CylinderGeometry(.22, .22, .16, 6), std({ color: 0xaab0b8, metalness: 1, roughness: .3 }), .95, .44, 0);
     else if (weight === "lead") add(rbox(.62, .22, .5, .04), std({ color: 0x4a4d54, metalness: .6, roughness: .5 }), .95, .46, 0);
+    else if (weight === "ltd") add(rbox(.66, .28, .52, .05), std({ color: 0x5fe6cf, metalness: 1, roughness: .15, emissive: 0x0a6a5a, emissiveIntensity: .5 }), .95, .49, 0);
     else if (weight === "gold") add(rbox(.66, .28, .52, .05), std({ color: 0xffc933, metalness: 1, roughness: .18 }), .95, .49, 0);
     return g;
   }

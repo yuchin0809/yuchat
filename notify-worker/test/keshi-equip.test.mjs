@@ -76,12 +76,12 @@ test("どの枠（本体・ふち・そこ・おもり）のどのパーツも�
   const t = setup();
   let spent = 0;
   for (const slot of KESHI_SLOTS) {
-    for (const p of KESHI_PARTS[slot].filter((x) => x.price > 0)) {
+    for (const p of KESHI_PARTS[slot].filter((x) => x.price > 0 && !x.limited)) {
       const r = await t.act({ action: "keshiBuy", slot, part: p.id });
       assert.equal(r.error, undefined, `${slot}:${p.id}`); assert.equal(r.eq[slot], p.id); spent += p.price;
       assert.ok(r.have[slot].includes(p.id));
     }
-    for (const p of KESHI_PARTS[slot]) { const r = await t.act({ action: "keshiEquip", eq: { [slot]: p.id } }); assert.equal(r.error, undefined, `付ける ${slot}:${p.id}`); assert.equal(r.eq[slot], p.id); }
+    for (const p of KESHI_PARTS[slot].filter((x) => !x.limited)) { const r = await t.act({ action: "keshiEquip", eq: { [slot]: p.id } }); assert.equal(r.error, undefined, `付ける ${slot}:${p.id}`); assert.equal(r.eq[slot], p.id); }
   }
   assert.equal(t.coins(), 100000 - spent);
   assert.deepEqual((await t.act({ action: "keshiEquip", eq: { body: "titan", edge: "crystal", sole: "air", weight: "gold" } })).eq, { body: "titan", edge: "crystal", sole: "air", weight: "gold" });
@@ -123,4 +123,81 @@ test("中古は、持っていなければ付けられない（ショップで�
   assert.equal((await t.act({ action: "keshiEquip", eq: { weight: "gold~u" } })).error, "not_owned");
   assert.equal((await t.act({ action: "keshiBuyMany", items: [{ slot: "weight", part: "none~u" }] })).error, "bad_request", "無料のパーツに中古はない");
   assert.equal((await t.act({ action: "keshiBuyMany", items: [{ slot: "weight", part: "bolt" }, { slot: "weight", part: "coin" }] })).error, "bad_request", "同じ枠は1個だけ");
+});
+
+/* ---- ゆう番くじ E賞（限定改造品）・F賞（限定カラー）を、消しバトで使う ---- */
+import { BANKUJI, KESHI_LIMITED_COLORS } from "../worker.js";
+const prize = (n, id, kind, code, extra = {}) => ({ n, id, kind, code, at: 1, ...extra });
+function setupPrizes(prizes, { coins = 5000, keshi = null } = {}) {
+  const t = setup({ coins, keshi });
+  t.fs.put(`bankujiEntries/${BANKUJI.round}_id0`, encF({ uid: "id0", name: "u0", round: BANKUJI.round, tickets: [], prizes, dayKey: "", dayCount: 0 }));
+  t.prizes = () => t.fs.plain(`bankujiEntries/${BANKUJI.round}_id0`).prizes;
+  return t;
+}
+
+test("E賞（限定改造品）：使うと、その枠の限定パーツが持ちものに入る。ショップには出ない・買えない・付けるのは持っている人だけ", async () => {
+  const t = setupPrizes([prize(1, "E", "gear", "weight"), prize(2, "E", "gear", "body")]);
+  const before = await t.act({ action: "keshiState" });
+  assert.ok(Object.values(before.table.parts).every((l) => l.every((p) => !p.limited)), "持っていない人の一覧に、限定品は出ない");
+  assert.equal(before.table.parts.weight.length, 5);
+  assert.equal((await t.act({ action: "keshiBuy", slot: "weight", part: "ltd" })).error, "not_for_sale");
+  assert.equal((await t.act({ action: "keshiEquip", eq: { weight: "ltd" } })).error, "not_owned");
+  assert.equal((await t.act({ action: "keshiBuyMany", items: [{ slot: "weight", part: "ltd" }] })).error, "not_owned");
+  const r = await t.act({ action: "bankujiUse", n: 1 });
+  assert.deepEqual([r.ok, r.kind, r.code, r.label], [true, "gear", "weight", "限定 ゆうオリハルコン"]);
+  assert.ok(t.keshi().owned.includes("weight:ltd"));
+  assert.deepEqual([t.prizes()[0].used, t.prizes()[0].kind, t.prizes()[0].code, t.prizes()[0].id], [1, "gear", "weight", "E"], "景品の中身は変えない");
+  const st = await t.act({ action: "keshiState" });
+  assert.equal(st.table.parts.weight.length, 6); assert.ok(st.have.weight.includes("ltd")); assert.equal(st.table.parts.body.length, 5, "ほかの枠には出ない");
+  const eq = await t.act({ action: "keshiEquip", eq: { weight: "ltd" } });
+  assert.equal(eq.eq.weight, "ltd");
+  const base = keshiStats({ ...KESHI_DEFAULT_EQ, weight: "gold" }).rating, lim = keshiStats({ ...KESHI_DEFAULT_EQ, weight: "ltd" }).rating;
+  assert.ok(lim >= base && lim - base <= 3, `最強のおもり（金）とほぼ同じ強さ ${base} → ${lim}`);
+  // 同じ限定品をもう持っているときは、使えない（景品は残る）。使った景品は、もう一度使えない
+  const again = setupPrizes([prize(1, "E", "gear", "weight"), prize(2, "E", "gear", "weight")]);
+  assert.equal((await again.act({ action: "bankujiUse", n: 1 })).ok, true);
+  assert.equal((await again.act({ action: "bankujiUse", n: 2 })).error, "already_have"); assert.equal(again.prizes()[1].used, undefined);
+  assert.equal((await again.act({ action: "bankujiUse", n: 1 })).error, "used");
+  assert.equal((await again.act({ action: "bankujiUse", n: 99 })).error, "not_owned");
+});
+
+test("F賞（限定カラー）：使うと、その色が選べるようになる。持っていない色は選べない", async () => {
+  const t = setupPrizes([prize(1, "F", "color", "rainbow"), prize(2, "F", "color", "gold")]);
+  assert.deepEqual((await t.act({ action: "keshiState" })).colorsHave, [0, 1, 2, 3, 4, 5, 6, 7]);
+  assert.equal((await t.act({ action: "keshiEquip", color: 10 })).error, "not_owned");
+  const r = await t.act({ action: "bankujiUse", n: 1 });
+  assert.deepEqual([r.ok, r.label], [true, "カバーの色「レインボー」"]);
+  assert.equal(KESHI_LIMITED_COLORS[2].code, "rainbow");
+  const st = await t.act({ action: "keshiState" });
+  assert.deepEqual(st.colorsHave, [0, 1, 2, 3, 4, 5, 6, 7, 10]); assert.deepEqual(st.table.limitedColors, ["ゴールド", "シルバー", "レインボー", "ブラックゴールド"]);
+  assert.equal((await t.act({ action: "keshiEquip", color: 10 })).color, 10);
+  assert.equal((await t.act({ action: "keshiEquip", color: 8 })).error, "not_owned", "ゴールドは、まだ使っていない");
+  assert.equal((await t.act({ action: "keshiEquip", color: 12 })).error, "bad_request");
+  // 色を付けたまま、ほかの景品（ゴールド）を使っても、そのまま
+  await t.act({ action: "bankujiUse", n: 2 });
+  assert.equal(t.keshi().color, 10);
+});
+
+test("使えない景品・公開前・使った景品の扱い：E・F賞以外は使えない／消しバトが非公開なら使えない／使った景品は、ゆうマートで売れない", async () => {
+  const t = setupPrizes([prize(1, "H", "coin", undefined, { amount: 100 }), prize(2, "C", "kaku3", undefined), prize(3, "E", "gear", "sole"), prize(4, "E", "gear", "nope")]);
+  for (const n of [1, 2, 4]) assert.equal((await t.act({ action: "bankujiUse", n })).error, "bad_request", `n=${n}`);
+  t.fs.put("worldConfig/yuslot", encF({ yuslotPublished: true, keshiPublished: false }));
+  resetYuslotCacheForTest();
+  assert.equal((await t.act({ action: "bankujiUse", n: 3 })).error, "not_published");
+  t.fs.put("worldConfig/yuslot", encF({ yuslotPublished: true, keshiPublished: true }));
+  resetYuslotCacheForTest();
+  assert.equal((await t.act({ action: "bankujiUse", n: 3 })).ok, true);
+  const sellable = await t.act({ action: "martSellable" });
+  assert.ok(!sellable.prizes.some((x) => x.n === 3), "使った景品は出品できない");
+  assert.equal((await t.act({ action: "martList", kind: "prize", n: 3, price: 100 })).error, "used");
+});
+
+test("限定品は、ゆうマートでは売り買いされない：出品できるパーツ・マートの一覧に出ない", async () => {
+  const t = setupPrizes([prize(1, "E", "gear", "body")], { keshi: { owned: ["body:ltd", "body:pro"], eq: { ...KESHI_DEFAULT_EQ, body: "ltd" }, color: 0, n: "u0" } });
+  const mine = await t.act({ action: "martMine" });
+  assert.equal(mine.ok, true);
+  assert.deepEqual(mine.sellable.map((x) => `${x.slot}:${x.part}`), ["body:pro"], "出品できるのは、ショップで買ったパーツだけ（限定品は出ない）");
+  assert.equal((await t.act({ action: "martList", slot: "body", part: "ltd", price: 100 })).error, "bad_request");
+  const status = await t.act({ action: "martStatus" });
+  assert.ok(Object.values(status.table).length > 0 && Object.values(status.table).every((list) => list.every((p) => p.id !== "ltd")), "マートの表に出ない");
 });

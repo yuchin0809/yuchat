@@ -119,6 +119,7 @@ function draw() {
   $("#ybRandom")?.addEventListener("click", fillRandom);
   $("#ybClear")?.addEventListener("click", () => { picks.clear(); refreshPicks(); });
   $("#ybBuy")?.addEventListener("click", buy);
+  ctx.root.querySelectorAll("[data-use]").forEach((b) => b.addEventListener("click", () => useGear(Number(b.dataset.use))));
   refreshPicks();
   tick();
 }
@@ -153,11 +154,12 @@ function gridHtml(canBuy) {
 function mineHtml(mine) {
   const list = mine.prizes || [];
   if (!list.length) return `<div class="yb-card"><h3>🎒 もちもの</h3><p class="yb-small">まだ景品はありません。くじを引くと、ここに入ります。</p></div>`;
-  const rows = list.slice().reverse().map((r) => `<div class="yb-own${RARE.has(r.id) ? " rare" : ""}">${ctx.esc(prizeLine(r))}</div>`).join("");
+  const usable = (r) => (r.kind === "gear" || r.kind === "color") && !(r.used > 0) && !st.adminPreview;   // E賞・F賞は、消しバトの持ちものに入れて使う
+  const rows = list.slice().reverse().map((r) => `<div class="yb-own${RARE.has(r.id) ? " rare" : ""}">${ctx.esc(prizeLine(r))}${r.used > 0 ? "（使用済み）" : ""}${usable(r) ? ` <button type="button" class="yb-use" data-use="${Number(r.n)}">消しバトで使う</button>` : ""}</div>`).join("");
   const coin = list.filter((r) => r.kind === "coin").reduce((s, r) => s + (r.amount || 0), 0);
   const stock = list.filter((r) => r.kind === "stock").reduce((s, r) => s + (r.qty || 0), 0);
   return `<div class="yb-card"><h3>🎒 もちもの（${fmt(list.length)}枚ぶん）</h3>
-    <p class="yb-small">コイン・ゆう株は、もう受け取っています（コイン ${fmt(coin)}／ゆう株 ${fmt(stock)}株）。確変台の予約権・会社の運営権・消しバトの限定品は、ここに記録しています。確変台の予約権（C賞・D賞・ラストワン賞）は、ゆうスロの台の一覧の上にある「確変台チケット売り場」の「🎟 ゆう番くじのチケットを使う」から使えます。</p>${rows}</div>`;
+    <p class="yb-small">コイン・ゆう株は、もう受け取っています（コイン ${fmt(coin)}／ゆう株 ${fmt(stock)}株）。確変台の予約権・会社の運営権・消しバトの限定品（E賞・F賞）は、「消しバトで使う」を押すと、消しバトの持ちものに入ります。確変台の予約権（C賞・D賞・ラストワン賞）は、ゆうスロの台の一覧の上にある「確変台チケット売り場」の「🎟 ゆう番くじのチケットを使う」から使えます。</p>${rows}</div>`;
 }
 
 function refreshPicks() {
@@ -222,6 +224,22 @@ async function buy() {
   }
 }
 
+/* E賞（限定改造品）・F賞（限定カラー）を、消しバトの持ちものに入れる。付けるのは、消しバトのショップ */
+async function useGear(n) {
+  if (busy) return;
+  const rec = ((st && st.mine && st.mine.prizes) || []).find((r) => r.n === n);
+  const what = rec ? prizeLine(rec).replace(/^\S+\s+/, "") : "この景品";
+  if (!window.confirm(`${what} を、消しバトの持ちものに入れますか？（入れたあとは、消しバトのショップで付けられます）`)) return;
+  busy = true;
+  try {
+    const r = await ctx.api("bankujiUse", { n });
+    window.alert(`🎉 ${r.label} を、消しバトの持ちものに入れました！\n消しバトのショップで付けられます。`);
+  } catch (e) {
+    const code = e && (e.code || (e.detail && e.detail.error));
+    window.alert(code === "already_have" ? "同じものをもう持っています。この景品は、ゆうマートで売れます。" : code === "used" ? "この景品は、もう使いました。" : code === "not_published" ? "消しバトは、まだ公開されていません。" : "うまくいきませんでした。もう一度お試しください。");
+  }
+  busy = false; load();
+}
 async function applyPass() {
   if (busy) return; busy = true;
   try { await ctx.api("bankujiApply"); } catch (e) { const code = e && (e.code || (e.detail && e.detail.error)); setNote(code === "apply_closed" ? "申込は締め切りました。" : "申し込めませんでした。"); }
@@ -392,6 +410,7 @@ function injectStyles() {
   .yb-t { padding: 0; aspect-ratio: 1; border-radius: 6px; border: 1px solid #e0c6c6; background: #e53a3a; color: #fff; font-size: 10.5px; font-weight: 800; cursor: pointer; font-variant-numeric: tabular-nums; }
   .yb-t.on { background: #ffd24a; color: #6a3a00; border-color: #ff8a00; box-shadow: 0 0 0 2px #ff8a00 inset; transform: scale(1.06); }
   .yb-t.sold { background: #d9d6df; color: #a29fae; border-color: #d9d6df; cursor: default; } .yb-t:disabled:not(.sold) { opacity: .55; }
+  .yb-use { margin-left: 6px; border: none; border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 800; color: #3a2a00; background: linear-gradient(135deg,#ffd700,#ff9a00); cursor: pointer; }
   .yb-own { padding: 7px 10px; margin-top: 6px; border-radius: 10px; background: #f6f3ff; font-size: 13px; } .yb-own.rare { background: linear-gradient(90deg, #ffe9a8, #fff3d0); font-weight: 800; border: 1px solid #ffd24a; }
   .yb-actions { position: sticky; bottom: 8px; z-index: 5; background: rgba(255,255,255,.97); border-radius: 16px; padding: 10px 12px; box-shadow: 0 -4px 22px rgba(0,0,0,.18); margin-top: 10px; }
   .yb-sel { font-size: 14px; margin-bottom: 6px; } .yb-sel b { font-size: 20px; color: #7b2ff7; } .yb-btns { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
