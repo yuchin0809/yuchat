@@ -2674,7 +2674,7 @@ export async function handleYuslotAction(deps, uid, body) {
       case "kakuApply": return await kakuApply(deps, uid, body);
       case "kakuTicketInfo": return await kakuTicketInfo(deps, uid);
       case "kakuTicketUse": return await kakuTicketUse(deps, uid, body);
-      case "kakuMoveInfo": return await kakuMoveInfo(deps, uid);
+      case "kakuMoveInfo": return await kakuMoveInfo(deps, uid, body);
       case "kakuMove": return await kakuMove(deps, uid, body);
       // 先着は、ゲーム（battle*）を通らないと買えない（kakuQuick を直接呼ぶ入口はない）
       case "battleStatus": return await battleStatus(deps, uid, body);
@@ -2888,8 +2888,12 @@ async function yuslotSeat(deps, uid, body) {
   if (kakuRight && kakuRight.end) seatFields.kakuEnd = { integerValue: String(kakuRight.end) };   // 確変の枠の終わり（これを過ぎた席は、次の人が座れる）
   const write = { update: { name: deps.firestore.docName(seatPath), fields: seatFields } };
   if (raw) write.currentDocument = { updateTime: raw.updateTime }; else write.currentDocument = { exists: false };
+  const writes = [write];
+  if (kakuRight && kakuRight.marks && kakuRight.marks.length) {   // 確変の枠に着席した印（時間を変えられるのは、遊んでいない枠だけ）。同じ commit の中で、users の1項目だけを足す（読み取りは増えない）
+    writes.push({ update: { name: deps.firestore.docName(`users/${me.name}`), fields: { slotKakuSeat: { mapValue: { fields: Object.fromEntries(kakuRight.marks.map((k) => [k, { booleanValue: true }])) } } } }, updateMask: { fieldPaths: kakuRight.marks.map((k) => `slotKakuSeat.${k}`) }, currentDocument: { exists: true } });
+  }
   try {
-    await deps.firestore.commit([write]);
+    await deps.firestore.commit(writes);
   } catch (error) {
     if (isRetryableCommitError(error) || error.status === 409) return { status: 409, error: "seat_taken" };
     throw error;
@@ -4258,20 +4262,24 @@ async function kakuTicketUse(deps, uid, body) {
    ・当たった枠を、同じ日の、NPC がとっている30分枠と入れ替えられる。NPC の枠はどかしてよい。プレイヤーがとっている枠・まだ決まっていない枠・取り消された枠（cx）は選べない。
    ・どかされた NPC は、もとの枠に入る（枠の数・NPC の人数は変わらない）。
    ・変えられるのは、前日の抽選の当選（チケットで取った枠 tk・ゆうマートで買った枠 bt は対象外）。1当選につき1回（変えた枠には mv を付ける）。
-   ・期限：いまの枠・移る先の枠、どちらも始まる11分前まで（チケットの「取る」と同じ）。同じ日に、時間が重なる枠は選べない。
+   ・いまの枠：その枠で一度も遊んでいなければ、始まったあと・終わったあとでも変えられる。確変の枠に着席したら「遊んだ」印（users の slotKakuSeat.d日付s枠番号。着席の commit に同居＝追加の読み書きなし）が付き、その枠は変えられない。つながった枠は、まとめて印が付く。
+   ・移る先：始まる11分前まで（チケットの「取る」と同じ）。同じ日に、時間が重なる枠は選べない。
    ・書き込みは1回の commit（更新時刻の条件つき。同時に変わったら読み直してやり直す）。当選の抽選・チケット・マートの動きとは、枠の書類の更新時刻でぶつかり合わない。
 ========================================================= */
-async function kakuMoveInfo(deps, uid) {
+async function kakuMoveInfo(deps, uid, body) {
   if (!(await kakuGate(deps, uid))) return { status: 403, error: "not_published" };
   const now = deps.now(), today = kakuDayId(now), out = { ok: true, serverNowMs: now, days: [] };
+  let played;   // その枠に着席した印（users の slotKakuSeat）。変えられそうな枠があるときだけ、1回読む
   for (const day of [today, kakuNextDay(today)]) {
     if (day < KAKU_EPOCH) continue;
     const cur = await kakuGetDay(deps, day);
     if (!cur || cur.data.draw1Done !== true) continue;
     const slots = cur.data.slots, lead = kakuTicketTakeLeadMs();
-    const mine = slots.filter((x) => x.uid === uid && x.kind === "pre" && !x.bt && !x.tk && !x.mv && x.s - now > lead);
+    let mine = slots.filter((x) => x.uid === uid && x.kind === "pre" && !x.bt && !x.tk && !x.mv);
     if (!mine.length) continue;
-    const myIdx = new Set(slots.filter((x) => x.uid === uid).map((x) => x.i));
+    if (played === undefined) { const me = await loadMyUser(deps.firestore, uid, body?.username); played = me.error ? {} : (decodeFields(me.raw.fields).slotKakuSeat || {}); }
+    mine = mine.filter((x) => !played[kakuPlayKey(day, x.i)]);   // 遊んだ枠は変えられない（遊んでいなければ、時間がすぎていても変えられる）
+    if (!mine.length) continue;
     out.days.push({ day, moves: mine.map((m) => ({
       from: { i: m.i, s: m.s, e: m.e },
       to: slots.filter((x) => x.kind === "pre" && x.npc === true && !x.uid && !x.cx && x.s - now > lead && !slots.some((y) => y.uid === uid && y.i !== m.i && y.s < x.e && x.s < y.e)).map((x) => ({ i: x.i, s: x.s, e: x.e }))
@@ -4297,8 +4305,9 @@ async function kakuMove(deps, uid, body) {
     const A = slots[a], B = slots[b];
     if (A.uid !== uid || A.kind !== "pre" || A.bt || A.tk) return { status: 409, error: "not_movable" };
     if (A.mv) return { status: 409, error: "already_moved" };
+    if (decodeFields(me.raw.fields).slotKakuSeat?.[kakuPlayKey(day, A.i)]) return { status: 409, error: "already_played" };   // その枠で遊んだ（着席した）ら、変えられない
     if (B.kind !== "pre" || B.uid || B.npc !== true || B.cx) return { status: 409, error: "taken" };   // プレイヤーの枠・まだ決まっていない枠・取り消された枠は選べない
-    if (A.s - now <= kakuTicketTakeLeadMs() || B.s - now <= kakuTicketTakeLeadMs()) return { status: 409, error: "too_late" };
+    if (B.s - now <= kakuTicketTakeLeadMs()) return { status: 409, error: "too_late" };   // 移る先は、始まる11分前まで。いまの枠は、遊んでいなければ、始まったあとでも変えられる
     if (slots.some((x) => x.uid === uid && x.i !== A.i && x.s < B.e && B.s < x.e)) return { status: 409, error: "overlap" };
     slots[b] = { ...B, uid, name: me.name, npc: false, mv: 1 };
     slots[a] = { i: A.i, s: A.s, e: A.e, kind: A.kind, uid: "", name: B.name, npc: true };   // どかされた NPC がもとの枠に入る
@@ -4869,6 +4878,8 @@ async function kakuStatus(deps, uid, body) {
 }
 
 /* ----- 着席・スピンの制限（確変台は、その時間の枠をとった人だけ） ----- */
+/* 「その枠で遊んだ」印の名前（users の slotKakuSeat の中の項目名。日付と枠の番号） */
+export const kakuPlayKey = (dayId, i) => `d${dayId.replace(/-/g, "")}s${i}`;
 export async function kakuSeatRight(deps, uid, machine, now) {
   const dayId = kakuDayId(now);
   if (kakuMachineFor(dayId) !== machine) return null;
@@ -4879,8 +4890,9 @@ export async function kakuSeatRight(deps, uid, machine, now) {
   const slot = slots.find((x) => x.s <= now && now < x.e);
   if (!slot || slot.uid !== uid) return { locked: true };
   let end = slot.e;
-  for (;;) { const nx = slots.find((x) => x.s === end && x.uid === uid); if (!nx) break; end = nx.e; }
-  return { end };
+  const marks = [kakuPlayKey(dayId, slot.i)];   // この着席で「遊んだ」ことにする枠（つながった枠も含める）
+  for (;;) { const nx = slots.find((x) => x.s === end && x.uid === uid); if (!nx) break; end = nx.e; marks.push(kakuPlayKey(dayId, nx.i)); }
+  return { end, marks };
 }
 export function kakuSpinGate(session, now) {
   const dayId = kakuDayId(now);

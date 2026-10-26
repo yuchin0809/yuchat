@@ -2,7 +2,7 @@
    実行：node --test "notify-worker/test/*.test.mjs" */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { KAKU_EPOCH, kakuTimes, kakuInitialSlots, handleYuslotAction, resetKakuCacheForTest, resetYuslotCacheForTest } from "../worker.js";
+import { KAKU_EPOCH, kakuTimes, kakuInitialSlots, kakuMachineFor, kakuPlayKey, handleYuslotAction, resetKakuCacheForTest, resetYuslotCacheForTest } from "../worker.js";
 
 console.warn = () => {};
 
@@ -48,7 +48,10 @@ function fakeFs(initial = {}) {
         const path = w.update.name.slice(ROOT.length + 1);
         const cur = docs.get(path)?.fields || {};
         const next = w.updateMask ? { ...cur } : { ...w.update.fields };
-        if (w.updateMask) for (const fp of w.updateMask.fieldPaths) { if (w.update.fields[fp] !== undefined) next[fp] = w.update.fields[fp]; else delete next[fp]; }
+        if (w.updateMask) for (const fp of w.updateMask.fieldPaths) {
+          if (fp.includes(".")) { const [top, key] = fp.split("."); const child = w.update.fields[top]?.mapValue?.fields?.[key]; const m = { ...(next[top]?.mapValue?.fields || {}) }; if (child) m[key] = child; else delete m[key]; next[top] = { mapValue: { fields: m } }; continue; }
+          if (w.update.fields[fp] !== undefined) next[fp] = w.update.fields[fp]; else delete next[fp];
+        }
         (w.updateTransforms || []).forEach((t) => {
           if (t.appendMissingElements) { const cur2 = next[t.fieldPath]?.arrayValue?.values || []; const have = new Set(cur2.map((v) => JSON.stringify(v))); next[t.fieldPath] = { arrayValue: { values: [...cur2, ...t.appendMissingElements.values.filter((v) => !have.has(JSON.stringify(v)))] } }; }
           if (t.increment) next[t.fieldPath] = { integerValue: String((Number(next[t.fieldPath]?.integerValue) || 0) + Number(t.increment.integerValue)) }; 
@@ -124,17 +127,49 @@ test("プレイヤーはどかせない：ほかのプレイヤーの枠・ま�
   assert.equal(t.slot(t.pre[4]).uid, "id1"); assert.equal(t.slot(t.pre[3]).uid, "id0");
 });
 
-test("期限：いまの枠も移る先も、始まる11分前まで。時間が重なる自分の枠には移れない", async () => {
+test("期限：移る先は始まる11分前まで。いまの枠は、遊んでいなければ、始まったあと・終わったあとでも変えられる。時間が重なる自分の別の枠には移れない", async () => {
   const t = setup();
   const target = t.slot(t.pre[5]), mine = t.slot(t.pre[3]);
   t.state.now = target.s - 11 * M;
   assert.equal((await t.act(0, { action: "kakuMove", day: D, from: t.pre[3], to: t.pre[5] })).error, "too_late", "移る先が11分前");
-  t.state.now = mine.s - 11 * M;
-  assert.equal((await t.act(0, { action: "kakuMove", day: D, from: t.pre[3], to: t.pre[5] })).error, "too_late", "いまの枠が11分前");
-  assert.deepEqual((await t.act(0, { action: "kakuMoveInfo" })).days, []);
+  t.state.now = mine.s - 5 * M;   // いまの枠が始まる5分前でも変えられる
+  assert.equal((await t.act(0, { action: "kakuMoveInfo" })).days[0].moves[0].to.length, 2);
+  t.state.now = mine.s + 5 * M;   // いまの枠が始まっている（まだ遊んでいない）
+  assert.equal((await t.act(0, { action: "kakuMove", day: D, from: t.pre[3], to: t.pre[5] })).ok, true, "始まったあとでも、遊んでいなければ変えられる");
   const init = kakuInitialSlots(D).filter((x) => x.kind === "pre"), my = init[8];   // 自分のほかの枠（マートで買った12:00の枠）
   const t2 = setup({ patch: { [init[5].i]: { s: my.s + 10 * M, e: my.e + 10 * M } } });   // 自分のほかの枠と重なる枠（テスト用に時間をずらす）。いま動かす枠そのものとは、重なってもよい（入れ替わるので）
   assert.equal((await t2.act(0, { action: "kakuMove", day: D, from: t2.pre[3], to: t2.pre[5] })).error, "overlap");
+});
+
+test("遊んだ枠は変えられない：確変の枠に着席すると印が付き、その枠は変えられなくなる。遊んでいない枠は、終わったあとでも変えられる", async () => {
+  const t = setup({ now: TT.dayStart + 9 * H + 40 * M });   // 9:40（9:30〜10:00 の自分の枠のなか）
+  const machine = kakuMachineFor(D);
+  const seat = await t.act(0, { action: "seat", machine });
+  assert.equal(seat.ok, true, JSON.stringify(seat));
+  assert.equal(t.fs.plain("users/u0").slotKakuSeat[kakuPlayKey(D, t.pre[3])], true, "着席の印（users の1項目だけ。同じ commit で書く）");
+  assert.equal(t.fs.plain("users/u0").coins, 5000, "ほかの項目は変わらない");
+  assert.equal((await t.act(0, { action: "kakuMove", day: D, from: t.pre[3], to: t.pre[5] })).error, "already_played");
+  assert.deepEqual((await t.act(0, { action: "kakuMoveInfo" })).days, [], "遊んだ枠は、一覧にも出ない");
+  t.state.now = TT.dayStart + 10 * H + 10 * M;   // 枠が終わったあと
+  assert.equal((await t.act(0, { action: "kakuMove", day: D, from: t.pre[3], to: t.pre[5] })).error, "already_played", "終わったあとも同じ");
+  // 別の日の別の人：着席しないまま枠が終わったら、終わったあとでも変えられる（移る先は、まだ先の NPC の枠）
+  const u = setup({ now: TT.dayStart + 10 * H + 10 * M });
+  const info = await u.act(0, { action: "kakuMoveInfo" });
+  assert.equal(info.days[0].moves[0].from.i, u.pre[3]); assert.ok(info.days[0].moves[0].to.length >= 1);
+  const r = await u.act(0, { action: "kakuMove", day: D, from: u.pre[3], to: u.pre[6] });
+  assert.equal(r.ok, true);
+  assert.equal(u.slot(u.pre[3]).npc, true, "遊ばなかった枠は NPC の枠になる");
+});
+
+test("つながった枠（連続した2つ）に着席したら、2つともまとめて「遊んだ」印が付く", async () => {
+  const t = setup({ now: TT.dayStart + 9 * H + 40 * M });
+  const nxt = t.pre[4];   // 10:00〜10:30 も id0 の枠にする
+  const doc = t.day(); const slots = doc.slots.map((x) => (x.i === nxt ? { ...x, uid: "id0", name: "u0", npc: false } : x));
+  t.fs.put(`yuslotKaku/${D}`, encF({ ...doc, slots })); resetKakuCacheForTest();
+  const seat = await t.act(0, { action: "seat", machine: kakuMachineFor(D) });
+  assert.equal(seat.ok, true);
+  const marks = t.fs.plain("users/u0").slotKakuSeat;
+  assert.deepEqual(Object.keys(marks).sort(), [kakuPlayKey(D, t.pre[3]), kakuPlayKey(D, nxt)].sort());
 });
 
 test("書き込みは1回の commit。そのあとほかの人が抽選・チケット・マートで同じ書類を更新していても、二重に取らない（読み直してやり直す）", async () => {

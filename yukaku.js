@@ -72,7 +72,7 @@ export async function refreshKaku() {
 function moveHtml(today) {
   const mine = today.slots.filter((x) => x.mine && x.mv);
   if (!mine.length) return "";
-  const done = mine.filter((x) => x.mv === 2), can = mine.filter((x) => x.mv === 1 && nowMs() < x.s - 11 * 60000);
+  const done = mine.filter((x) => x.mv === 2), can = mine.filter((x) => x.mv === 1);   // 変えられるかは、サーバーが決める（遊んでいない枠なら、時間がすぎていても変えられる）
   let h = `<div class="yk-mv">`;
   if (done.length) h += `<div class="yk-sub">⏰ 時間を変更ずみ：${done.map((x) => `${hm(x.s)}〜${hm(x.e)}`).join("、")}（1回だけ変えられます）</div>`;
   if (!can.length) return h + `</div>`;
@@ -80,9 +80,9 @@ function moveHtml(today) {
   h += `<div class="yk-sec">⏰ 当たった枠の時間を変える</div>`;
   const day = mv.info && mv.info.days.find((d) => d.day === today.day);
   if (!mv.info) h += `<div class="yk-sub">読み込み中…</div>`;
-  else if (!day || !day.moves.length) h += `<div class="yk-sub">いま変えられる枠はありません。</div>`;
+  else if (!day || !day.moves.length) h += `<div class="yk-sub">いま変えられる枠はありません（遊んだ枠は変えられません）。</div>`;
   else {
-    h += `<div class="yk-sub">NPC（ダミーの参加者）がとっている30分枠と入れ替えられます（プレイヤーがとっている枠は選べません）。始まる11分前までに、1当選につき1回だけ。</div>`;
+    h += `<div class="yk-sub">NPC（ダミーの参加者）がとっている30分枠と入れ替えられます（プレイヤーがとっている枠は選べません）。まだ遊んでいない枠なら、始まったあとでも変えられます（移る先は、始まる11分前まで）。1当選につき1回だけ。</div>`;
     day.moves.forEach((m) => {
       h += `<div class="yk-sub">いまの枠：<b>${hm(m.from.s)}〜${hm(m.from.e)}</b> → 移る先を選ぶ</div>`;
       h += m.to.length ? `<div class="yk-tkgrid">${m.to.map((x) => `<button type="button" class="yk-tkbtn" data-kk="mv-do" data-day="${day.day}" data-from="${m.from.i}" data-to="${x.i}">${hm(x.s)}〜${hm(x.e)}</button>`).join("")}</div>` : `<div class="yk-sub">移れる枠がありません（NPC の枠が空いていません）。</div>`;
@@ -209,7 +209,7 @@ export function kakuBind(root) {
 const ERR = {
   no_ticket: "使えるチケットがありません。", too_late: "その枠は、もうすぐ始まる（または始まった）ので取れません。",
   not_open: "いまは受け付けていません。", taken: "その枠はすでに取られました。", quick_limit: "先着は1人1枠までです。", day_limit: "1日に取れる枠は最大3つです。",
-  overlap: "同じ時間の枠はとれません。", not_movable: "この枠は、時間を変えられません。", already_moved: "この枠は、すでに1回変えています。", slot_started: "その枠はもう始まっています。", busy: "混み合っています。もう一度お試しください。", not_published: "ただいま準備中です。", no_event: "まだ確変台の開催前です。"
+  overlap: "同じ時間の枠はとれません。", not_movable: "この枠は、時間を変えられません。", already_played: "この枠はもう遊んだので、時間を変えられません。", already_moved: "この枠は、すでに1回変えています。", slot_started: "その枠はもう始まっています。", busy: "混み合っています。もう一度お試しください。", not_published: "ただいま準備中です。", no_event: "まだ確変台の開催前です。"
 };
 async function onClick(b) {
   if (busy) return;
