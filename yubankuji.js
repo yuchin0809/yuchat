@@ -104,7 +104,7 @@ function draw() {
     </div>
     <div class="yb-bar"><span style="width:${Math.round(((st.pool - st.remaining) / st.pool) * 100)}%"></span></div>
     ${gateHtml(test)}
-    <div class="yb-card"><h3>🎁 景品</h3>${(st.prizes || []).map((p) => `<div class="yb-pz${p.id === "L" ? " last" : ""}"><b>${ICON[p.id] || ""} ${esc(p.name)}</b><span>${esc(p.desc)}</span><em>${p.id === "L" ? "最後の1枚" : `${fmt(p.count)}本`}</em></div>`).join("")}
+    <div class="yb-card"><h3>🎁 景品</h3>${(st.prizes || []).map((p) => `<div class="yb-pz${p.id === "L" ? " last" : ""}"><b>${ICON[p.id] || ""} ${esc(p.name)}</b><span>${esc(p.desc)}</span><em data-left="${p.id}">${leftText(p)}</em></div>`).join("")}
       <p class="yb-small">どの番号を選んでも、景品は箱の中の残りから公平に引かれます。景品は買った瞬間に決まります。</p></div>
     ${canBuy || st.phase === "soldout" ? `<div class="yb-card"><h3>🎟 券を選ぼう（${canBuy ? "タップで選択" : "完売"}）</h3>
       <div class="yb-grid" id="ybGrid">${gridHtml(canBuy)}</div></div>` : ""}
@@ -122,6 +122,39 @@ function draw() {
   ctx.root.querySelectorAll("[data-use]").forEach((b) => b.addEventListener("click", () => useGear(Number(b.dataset.use))));
   refreshPicks();
   tick();
+}
+
+/* 景品の残り本数の表示（リアルタイム更新：数秒おきに、軽い更新 bankujiLeft で書き換える） */
+function leftText(p) {
+  const test = st.adminPreview === true, left = st.left ? Number(st.left[p.id]) : null;
+  if (test || left == null || Number.isNaN(left)) return p.id === "L" ? "最後の1枚" : `${fmt(p.count)}本`;
+  if (p.id === "L") return left > 0 ? "最後の1枚（まだ）" : "出ました";
+  return left > 0 ? `残り ${fmt(left)}/${fmt(p.count)}本` : "完売";
+}
+function paintLight() {
+  if (!ctx || !st) return;
+  const rm = $("#ybRemain"); if (rm) rm.innerHTML = `${fmt(st.remaining)}<i>/ ${fmt(st.pool)}枚</i>`;
+  const bar = ctx.root.querySelector(".yb-bar span"); if (bar) bar.style.width = `${Math.round(((st.pool - st.remaining) / st.pool) * 100)}%`;
+  (st.prizes || []).forEach((p) => { const el = ctx.root.querySelector(`[data-left="${p.id}"]`); if (el) { el.textContent = leftText(p); el.classList.toggle("out", st.left && Number(st.left[p.id]) <= 0); } });
+}
+let lightAt = 0, lightBusy = false;
+async function pollLight() {
+  if (lightBusy) return; lightBusy = true; lightAt = Date.now();
+  try {
+    const r = await ctx.api("bankujiLeft");
+    if (!ctx || !st || !r || !r.sold) return;
+    const soldChanged = r.sold !== st.sold;
+    st.left = r.left; st.remaining = r.remaining; st.sold = r.sold;
+    paintLight();
+    if (soldChanged) {
+      const had = picks.size;
+      picks = new Set([...picks].filter((n) => st.sold[n] !== "1"));
+      const grid = $("#ybGrid"); if (grid) { grid.innerHTML = gridHtml(st.phase === "selling"); refreshPicks(); }
+      if (picks.size < had) setNote("選んだ券の一部が、先に売れてしまいました。");
+    }
+    if (r.done || (st.mode === "open" && st.phase === "selling" && st.remaining <= (r.stopRemaining || 0))) load();   // 完売・その日の販売の終わりは、全体を読み直す
+  } catch (_) { /* 次の回にもう一度 */ }
+  finally { lightBusy = false; }
 }
 
 function gateHtml(test) {
@@ -362,8 +395,11 @@ function tick() {
     g.textContent = left > 0 ? `あと ${untilText(left)}` : "時刻になりました…";
     if (left <= 0 && Date.now() - pollAt > 3000) load();
   }
-  // 売れ行きを定期的に更新（ほかの人が買った券を反映）。めくる演出・購入中は止める
-  if (st && !busy && !playing && st.phase !== "before" && Date.now() - pollAt > 20000 && !document.hidden) load();
+  // 売れ行き・景品の残りは、軽い更新を5秒おきに（ほかの人が買った券を、ほぼリアルタイムで反映）。ユーザーの書類まで読む全体の更新は60秒おき。めくる演出・購入中・画面が見えないときは止める
+  if (st && !busy && !playing && !document.hidden && !st.adminPreview) {
+    if (st.phase !== "before" && Date.now() - pollAt > 60000) load();
+    else if ((st.phase === "selling" || st.phase === "needPass" || st.phase === "closedToday") && Date.now() - lightAt > 5000) pollLight();
+  }
 }
 
 function injectStyles() {
@@ -405,7 +441,7 @@ function injectStyles() {
   .yb-gate b { font-size: 15px; } .yb-gate p { margin: 6px 0 0; font-size: 13px; line-height: 1.8; color: #444; } .yb-win { border: 2px solid #ffd24a; background: #fffbe8; }
   .yb-gate .yb-count { background: #f0eaff; color: #5a2fc2; font-weight: 800; padding: 6px 12px; min-width: 0; margin: 8px 0 0; display: block; text-align: center; }
   .yb-pz { display: grid; grid-template-columns: 96px 1fr auto; gap: 8px; align-items: center; padding: 7px 0; border-bottom: 1px dashed #eee; font-size: 12.5px; } .yb-pz b { font-size: 13px; } .yb-pz span { color: #555; } .yb-pz em { font-style: normal; font-weight: 800; color: #7b2ff7; }
-  .yb-pz.last { background: #fff0f6; border-radius: 8px; padding-left: 6px; }
+  .yb-pz em.out { color: #999; text-decoration: line-through; } .yb-pz.last { background: #fff0f6; border-radius: 8px; padding-left: 6px; }
   .yb-grid { display: grid; grid-template-columns: repeat(10, 1fr); gap: 4px; }
   .yb-t { padding: 0; aspect-ratio: 1; border-radius: 6px; border: 1px solid #e0c6c6; background: #e53a3a; color: #fff; font-size: 10.5px; font-weight: 800; cursor: pointer; font-variant-numeric: tabular-nums; }
   .yb-t.on { background: #ffd24a; color: #6a3a00; border-color: #ff8a00; box-shadow: 0 0 0 2px #ff8a00 inset; transform: scale(1.06); }

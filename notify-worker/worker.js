@@ -2665,6 +2665,7 @@ export async function handleYuslotAction(deps, uid, body) {
       case "lotteryBuy": return await lotteryBuy(deps, uid, body);
       case "lotterySetPublished": return await lotterySetPublished(deps, uid, body);
       case "bankujiStatus": return await bankujiStatus(deps, uid, body);
+      case "bankujiLeft": return await bankujiLeft(deps);
       case "bankujiBuy": return await bankujiBuy(deps, uid, body);
       case "bankujiApply": return await bankujiApply(deps, uid, body);
       case "bankujiSetPaused": return await bankujiSetPaused(deps, uid, body);
@@ -3650,6 +3651,18 @@ const bankujiRoundPath = () => `bankujiRounds/${BANKUJI.round}`;
 const bankujiBitsOf = (round) => (typeof round?.soldBits === "string" && round.soldBits.length === BANKUJI.pool ? round.soldBits : "0".repeat(BANKUJI.pool));
 const bankujiCountSold = (bits) => bits.split("1").length - 1;
 
+/* 景品の残り本数（A〜H賞は、くじの書類の left。ラストワン賞は、完売するまで1本） */
+const bankujiLeftOf = (round) => ({ ...bankujiInitialLeft(), ...(round && round.left && typeof round.left === "object" ? round.left : {}), L: round?.status === "done" ? 0 : 1 });
+/* 軽い更新：売れた券の表と景品の残り本数だけ（画面が数秒おきに頼む。ユーザーの書類は読まない）。
+   くじの書類は Worker のメモリに5秒だけ置く（買われたときは、その Worker の中では、すぐ捨てる）ので、何人が見ていても、読み取りは「5秒に1回まで」。書き込みはしない。 */
+async function bankujiLeft(deps) {
+  const now = deps.now(), B = BANKUJI;
+  if (now < B.saleStartMs) return { ok: true, phase: "before" };
+  const round = await lotteryCachedGet(deps, bankujiRoundPath(), 5000);
+  const sold = bankujiBitsOf(round);
+  return { ok: true, serverNowMs: now, sold, remaining: B.pool - bankujiCountSold(sold), left: bankujiLeftOf(round), stopRemaining: B.stopRemaining, done: round?.status === "done" };
+}
+
 async function bankujiStatus(deps, uid, body) {
   const now = deps.now(), admin = slotIsTopAdmin(deps, uid), B = BANKUJI;
   const head = { ok: true, serverNowMs: now, isTopAdmin: admin, saleStartMs: B.saleStartMs };
@@ -3675,7 +3688,7 @@ async function bankujiStatus(deps, uid, body) {
   else { pass = await bankujiPassState(deps, uid, day, now, remaining); phase = pass.state === "won" ? "selling" : "needPass"; }
   return {
     ...head, phase, mode, paused, price: B.price, pool: B.pool, perDay: B.perDay, prizes: bankujiPublicPrizes(),
-    sold, remaining, todayCount, pass,
+    sold, remaining, todayCount, pass, left: bankujiLeftOf(round), stopRemaining: B.stopRemaining,
     lastOne: round?.status === "done" && round.lastName ? { name: round.lastName } : null,
     mine: { tickets: Array.isArray(entry?.tickets) ? entry.tickets.length : 0, prizes: Array.isArray(entry?.prizes) ? entry.prizes : [] },
     balance: me.error ? null : Number(decodeFields(me.raw.fields).coins || 0)
