@@ -41,7 +41,7 @@ import {
 import {
   initYuWorld, openYuWorldView, stopYuWorldView
 } from "./yuworld.js?v=20261026-yuworld54";
-import { initYuMart, openYuMartView, stopYuMartView } from "./yumart.js?v=20261026-ltd10";
+import { initYuMart, openYuMartView, stopYuMartView } from "./yumart.js?v=20261027-cm1";
 import { renderYachtRoom } from "./yuyacht.js?v=20261026-yacht6";
 import { renderKeshiRoom } from "./yukeshi-room.js?v=20261026-ltd10";
 

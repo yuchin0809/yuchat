@@ -11,6 +11,7 @@ import { partArt, kakuArt, prizeArt } from "./yumart-art.js?v=20261026-ltd10";
 
 let deps = null, root = null, stylesDone = false, token = 0;
 let sellMode = "fixed", sellHours = 24, negoOpen = null, negoMsg = {};
+let cmOpen = null, cmData = {}, cmDraft = "", cmReply = null, cmBusy = false, cmMsg = "", cmTimer = null;   // 💬 コメント（開いている商品の id・読んだコメント・書きかけ・返信先）
 let S = null, M = null, SELL = null, sellBusy = false, tab = "buy", slotFilter = "all", sort = "new", busy = false, note = null, adminData = null;
 const fmt = (n) => Number(n || 0).toLocaleString("ja-JP");
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -25,6 +26,7 @@ const ERR = {
   buyer_busy: "相手がいまゆうスロの席に着いているため、売れませんでした", buyer_has_it: "相手はすでに同じ中古パーツを持っているため、売れませんでした（依頼は消えました）", already_sold: "すでに売れています。画面を開きなおしてください",
   not_published: "ゆうマートはまだ公開されていません", too_late: "枠の始まりの10分前をすぎたので、出品できません", already_listed: "この枠はすでに出品しています", no_resale: "確変台の予約権は、買ったものをまた売ることはできません",
   right_expired: "この予約権は、期限が近いか、すぎているので出品できません", company_exists: "すでに会社を作っているので、A賞は出品できません", slot_limit: "1日にもてる確変の枠は3つまでです", no_more: "この商品では、もう交渉できません（1つの商品につき3回まで）", reserved: "別のお客さんが交渉中です。しばらくしてからどうぞ",
+  too_fast: "少し待ってから書いてください（10秒に1回までです）", too_long: "80文字までです", empty: "コメントを書いてください", not_allowed: "URL・メールアドレス・電話番号は送れません", ng_word: "使えない言葉が入っています", too_many: "この商品へのコメントは、1人10件までです",
   auction_only: "これはオークションです。「入札」から参加してください", bid_too_low: "入札額が低すぎます", already_top: "あなたがいま最高額で入札中です", has_bids: "入札があるので、取り下げられません", bids_full: "このオークションは、これ以上入札できません", no_auction: "確変台の枠はオークションにできません"
 };
 
@@ -35,8 +37,8 @@ async function api(action, payload = {}) {
   if (!res.ok || json.ok === false) { const e = new Error(json.error || `http_${res.status}`); e.code = json.error || `http_${res.status}`; e.detail = json; throw e; }
   return json;
 }
-export function initYuMart(options) { deps = options; root = document.getElementById("yumartRoot"); }
-export function stopYuMartView() { token++; busy = false; }
+export function initYuMart(options) { deps = options; root = document.getElementById("yumartRoot"); if (root && !root.dataset.cmBound) { root.dataset.cmBound = "1"; root.addEventListener("click", onCmClick); root.addEventListener("input", (e) => { if (e.target && e.target.id === "ymCmText") cmDraft = e.target.value; }); } }
+export function stopYuMartView() { token++; busy = false; cmStop(); cmOpen = null; }
 export async function openYuMartView() {
   if (!root || !deps) return;
   injectStyles();
@@ -126,9 +128,10 @@ function drawBuy() {
         <div class="ym-price">${x.au ? `<span class="ym-au">🔨 オークション</span> 現在 ` : ""}🪙 ${fmt(x.price)} ${x.au ? "" : priceTag(x.price, x.ref)}</div>
         ${x.au ? `<small>入札 ${x.au.nb}件${x.au.top ? `　最高：${esc(x.au.top)}${x.au.top === deps.getUsername() ? "（あなた）" : ""}` : "　まだ入札なし"}</small>` : ""}
         ${x.deal && x.au ? `<small class="ym-deal">🤝 交渉成立！ 🪙${fmt(x.deal.q)} で即決できます${x.dealMine && x.deal.until > nowMs() ? "（あなたが優先）" : x.deal.until > nowMs() ? "（交渉したお客さんが優先中）" : ""}</small>` : x.deal ? `<small class="ym-deal">🤝 交渉成立！ 🪙${fmt(x.deal.from)} → 🪙${fmt(x.price)}${x.dealMine && x.deal.until > nowMs() ? `（あなたが ${timeLeft(x.deal.until - nowMs()).replace("あと", "あと")} 優先で買えます）` : x.deal.until > nowMs() ? "（交渉したお客さんが優先中）" : ""}</small>` : ""}
-        <small class="ym-seller">出品：${esc(x.n)} ・${timeLeft(x.e - nowMs())}</small></div>
+        <small class="ym-seller">出品：${esc(x.n)} ・${timeLeft(x.e - nowMs())}</small>
+        <button type="button" class="ym-btn ym-sub ym-cmbtn" data-cm="${esc(x.id)}">💬 コメント${cmOpen === x.id ? "を閉じる" : ""}</button></div>
         <div class="ym-act">${x.mine ? `<span class="ym-small">自分の出品</span>` : actionsOf(x, my, bidInfo)}</div>
-        ${negoOpen === x.id ? negoPanel(x) : ""}</div>`;
+        ${negoOpen === x.id ? negoPanel(x) : ""}${cmOpen === x.id ? commentPanel(x.id) : ""}</div>`;
     }).join("") || `<div class="ym-card ym-msg">いま出品はありません</div>`}</div>
     <p class="ym-small">買ったあとのキャンセルはできません。買った確変台の枠は、また売ることはできません。</p>`;
   $("#ymSlot").addEventListener("change", (e) => { slotFilter = e.target.value; drawBuy(); });
@@ -182,10 +185,11 @@ function drawMine() {
     return `<div class="ym-card ym-mine"><div class="ym-item">${thumb(it)}<div class="ym-info"><b>${nameHtml(it)}</b>
       <small>${esc(it.sub)}</small><div class="ym-price">${x.au ? `<span class="ym-au">🔨 オークション</span> 現在 ` : ""}🪙 ${fmt(x.price)}</div>
       ${x.au ? `<small>開始価格 🪙 ${fmt(x.au.s)}　入札 ${x.au.nb}件${x.au.top ? `　最高：${esc(x.au.top)}` : ""}</small>` : ""}
-      <small>${x.expired ? "期限切れ（取り下げてください）" : timeLeft(x.e - nowMs())}</small></div>
+      <small>${x.expired ? "期限切れ（取り下げてください）" : timeLeft(x.e - nowMs())}</small>
+      <button type="button" class="ym-btn ym-sub ym-cmbtn" data-cm="${esc(x.id)}">💬 コメント${cmOpen === x.id ? "を閉じる" : ""}</button></div>
       <div class="ym-act"><button type="button" class="ym-btn ym-sub" data-cancel="${esc(x.id)}" ${busy || (x.au && x.au.nb > 0 && !x.expired) ? "disabled" : ""}>${x.au && x.au.nb > 0 && !x.expired ? "入札あり" : "取り下げる"}</button></div></div>
       ${offers.map((o) => `<div class="ym-offer"><span>💬 <b>${esc(o.n)}</b> さんが <b>🪙 ${fmt(o.q)}</b> で買いたいそうです（値下げ依頼）</span>
-        <span><button type="button" class="ym-btn" data-ans="${esc(x.id)}" data-who="${esc(o.u)}" data-acc="1" ${busy ? "disabled" : ""}>受ける</button> <button type="button" class="ym-btn ym-sub" data-ans="${esc(x.id)}" data-who="${esc(o.u)}" data-acc="0" ${busy ? "disabled" : ""}>断る</button></span></div>`).join("")}</div>`;
+        <span><button type="button" class="ym-btn" data-ans="${esc(x.id)}" data-who="${esc(o.u)}" data-acc="1" ${busy ? "disabled" : ""}>受ける</button> <button type="button" class="ym-btn ym-sub" data-ans="${esc(x.id)}" data-who="${esc(o.u)}" data-acc="0" ${busy ? "disabled" : ""}>断る</button></span></div>`).join("")}${cmOpen === x.id ? commentPanel(x.id) : ""}</div>`;
   }).join("") : `<div class="ym-card ym-msg">出品中のものはありません</div>`}
     <div class="ym-card"><h3>最近の取引</h3>${M.done.length ? M.done.map((d) => {
       const name = keyName(d.i), me = deps.getUsername();
@@ -230,6 +234,67 @@ function bid(id) {
   if (!Number.isInteger(price)) { setNote("金額は整数で入れてください", true); return; }
   run(async () => { await api("martBid", { id, price }); return `🪙 ${fmt(price)} で入札しました。追い越されたら、もう一度入札できます`; });
 }
+/* ---------- 💬 コメント ---------- */
+const ago = (t) => { const m = Math.max(0, Math.floor((nowMs() - t) / 60000)); return m < 1 ? "いま" : m < 60 ? `${m}分前` : m < 1440 ? `${Math.floor(m / 60)}時間前` : `${Math.floor(m / 1440)}日前`; };
+function commentListHtml(id) {
+  const d = cmData[id];
+  if (!d) return `<div class="ym-small">読み込み中…</div>`;
+  if (d.gone) return `<div class="ym-small">この商品はもうありません。</div>`;
+  if (!d.comments.length) return `<div class="ym-small">まだコメントはありません。最初のコメントを書いてみよう！</div>`;
+  return d.comments.map((c) => `<div class="ym-cm${c.npc ? " npc" : ""}${c.mine ? " mine" : ""}"><div><b>${c.npc ? "🤖 " : ""}${esc(c.n)}</b>${c.r ? ` <span class="ym-cmto">→ ${esc(c.rn || "")}</span>` : ""} <small>${ago(c.t)}</small></div><div>${esc(c.x)}</div>
+    <div class="ym-cmact"><button type="button" class="ym-link" data-cmreply="${esc(c.cid)}" data-cmname="${esc(c.n)}">返信</button>${c.del ? `<button type="button" class="ym-link" data-cmdel="${esc(c.cid)}">消す</button>` : ""}</div></div>`).join("");
+}
+function commentPanel(id) {
+  return `<div class="ym-comments" data-cmbox="${esc(id)}"><div class="ym-cmlist" id="ymCmList">${commentListHtml(id)}</div>
+    ${cmReply ? `<div class="ym-small">${esc(cmReply.n)} さんに返信中 <button type="button" class="ym-link" data-cmreplyx="1">やめる</button></div>` : ""}
+    <div class="ym-nrow"><input type="text" id="ymCmText" class="ym-input" maxlength="80" placeholder="コメントを書く（80文字まで）" value="${esc(cmDraft)}"><button type="button" class="ym-btn" data-cmsend="${esc(id)}" ${cmBusy ? "disabled" : ""}>送る</button></div>
+    ${cmMsg ? `<div class="ym-nmsg">${esc(cmMsg)}</div>` : ""}</div>`;
+}
+function cmStop() { if (cmTimer) { clearInterval(cmTimer); cmTimer = null; } }
+async function cmLoad(id, my = token) {
+  try { const r = await api("martComments", { id }); if (my !== token || cmOpen !== id) return; cmData[id] = { comments: r.comments }; }
+  catch (e) { if (my !== token || cmOpen !== id) return; cmData[id] = e && e.code === "gone" ? { gone: true, comments: [] } : cmData[id] || { comments: [] }; }
+  const list = $("#ymCmList"); if (list) list.innerHTML = commentListHtml(id);
+}
+function cmToggle(id) {
+  cmStop(); cmMsg = ""; cmReply = null;
+  if (cmOpen === id) { cmOpen = null; draw(); return; }
+  cmOpen = id; cmDraft = ""; draw();
+  const my = token; cmLoad(id, my);
+  cmTimer = setInterval(() => { if (document.hidden || my !== token || cmOpen !== id || cmBusy) return; cmLoad(id, my); }, 6000);   // 開いているあいだだけ、6秒おきに更新（NPC のコメントも時間がたつと増える）
+}
+async function cmSend(id) {
+  if (cmBusy) return;
+  const text = ($("#ymCmText") ? $("#ymCmText").value : cmDraft).trim();
+  if (!text) { cmMsg = ERR.empty; draw(); return; }
+  cmBusy = true; cmMsg = ""; const my = token;
+  try {
+    const r = await api("martCommentPost", { id, text, ...(cmReply ? { replyTo: cmReply.cid } : {}) });
+    if (my !== token) return;
+    cmData[id] = { comments: r.comments }; cmDraft = ""; cmReply = null;
+  } catch (e) { cmMsg = ERR[e && e.code] || "うまくいきませんでした。もう一度お試しください"; if (e && e.code === "gone") cmData[id] = { gone: true, comments: [] }; }
+  cmBusy = false;
+  if (my === token) draw();
+}
+async function cmDelete(id, cid) {
+  if (cmBusy || !confirm("このコメントを消しますか？")) return;
+  cmBusy = true; const my = token;
+  try { const r = await api("martCommentDelete", { id, cid }); if (my === token) cmData[id] = { comments: r.comments }; }
+  catch (e) { cmMsg = ERR[e && e.code] || "うまくいきませんでした"; }
+  cmBusy = false;
+  if (my === token) draw();
+}
+function onCmClick(e) {
+  const t = e.target.closest ? e.target.closest("[data-cm],[data-cmsend],[data-cmreply],[data-cmreplyx],[data-cmdel]") : null;
+  if (!t) return;
+  const box = t.closest("[data-cmbox]"), id = t.dataset.cm || t.dataset.cmsend || (box && box.dataset.cmbox) || cmOpen;
+  if (t.dataset.cm) cmToggle(t.dataset.cm);
+  else if (t.dataset.cmsend) cmSend(t.dataset.cmsend);
+  else if (t.dataset.cmreply) { cmReply = { cid: t.dataset.cmreply, n: t.dataset.cmname }; cmDraft = `@${t.dataset.cmname} ${cmDraft.replace(/^@\S+\s/, "")}`; draw(); const i = $("#ymCmText"); if (i) { i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }
+  else if (t.dataset.cmreplyx) { cmReply = null; cmDraft = cmDraft.replace(/^@\S+\s/, ""); draw(); }
+  else if (t.dataset.cmdel) cmDelete(id, t.dataset.cmdel);
+}
+
 /* 値下げの交渉・依頼の入力欄（カードの下に開く）。NPC には交渉（その場で返事）、人には依頼（出品者が受けたら売れる） */
 function negoPanel(x) {
   const msg = negoMsg[x.id];
@@ -297,7 +362,10 @@ function injectStyles() {
   st.textContent = `
   .ym-head { display: flex; align-items: center; justify-content: space-between; margin: 4px 0 2px; } .ym-head h2 { margin: 0; font-size: 21px; }
   .ym-coins { font-weight: 900; background: #fff6d6; border-radius: 999px; padding: 5px 12px; font-size: 14px; }
-  .ym-lead, .ym-small { font-size: 12.5px; color: #666; line-height: 1.7; margin: 6px 0; }
+  .ym-lead, .ym-cmbtn { margin-top: 6px; } .ym-comments { grid-column: 1 / -1; margin-top: 8px; padding: 8px; border-radius: 10px; background: #f6f3ff; } .ym-cmlist { max-height: 260px; overflow: auto; display: grid; gap: 6px; margin-bottom: 8px; }
+  .ym-cm { background: #fff; border-radius: 8px; padding: 6px 8px; font-size: 13px; line-height: 1.5; } .ym-cm.npc { background: #fff8e8; } .ym-cm.mine { background: #eaf6ff; } .ym-cm small { color: #888; margin-left: 4px; } .ym-cmto { color: #7b2ff7; font-size: 12px; }
+  .ym-cmact { text-align: right; } .ym-link { border: none; background: none; color: #7b2ff7; font-size: 12px; cursor: pointer; padding: 2px 6px; }
+  .ym-small { font-size: 12.5px; color: #666; line-height: 1.7; margin: 6px 0; }
   .ym-tabs { display: flex; gap: 6px; margin: 10px 0; } .ym-tab { flex: 1; border: 1px solid #ddd; background: #fff; border-radius: 12px; padding: 9px 4px; font-weight: 800; font-size: 13px; cursor: pointer; }
   .ym-tab.on { background: linear-gradient(135deg, #ff7a18, #ffb347); color: #fff; border-color: transparent; }
   .ym-dot { background: #e5262e; color: #fff; border-radius: 999px; font-size: 11px; padding: 1px 6px; }

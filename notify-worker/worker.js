@@ -2702,6 +2702,9 @@ export async function handleYuslotAction(deps, uid, body) {
       case "martCancel": return await martCancel(deps, uid, body);
       case "martBuy": return await martBuy(deps, uid, body);
       case "martBid": return await martBid(deps, uid, body);
+      case "martComments": return await martComments(deps, uid, body);
+      case "martCommentPost": return await martCommentPost(deps, uid, body);
+      case "martCommentDelete": return await martCommentDelete(deps, uid, body);
       case "martNegotiate": return await martNegotiate(deps, uid, body);
       case "martOffer": return await martOffer(deps, uid, body);
       case "martAnswer": return await martAnswer(deps, uid, body);
@@ -6313,6 +6316,185 @@ async function martNpcTarget(deps, mcur, id, now) {
   if (/^n\d/.test(id)) return martNpcById(id, now, mcur.m.npcSold);
   return null;
 }
+/* =========================================================
+   💬 ゆうマートの商品へのコメント（人の出品にも NPC の出品にも）
+   ・プレイヤーのコメントだけを保存する：martComments/{商品の id} の c（最大30件。古いものから消える）。1件＝80文字まで。
+     書くとき：自分の users・この書類の読み取り＋この書類の書き込み1回（更新時刻の条件つき）。見るとき：この書類の読み取り1回（Worker のメモリに5秒）。
+     人の出品が売れた・終わったあとの書類は、読まれなくなる（exp に「出品の終わりの1日後」を入れてある。Firestore の TTL ポリシーを exp に設定すれば自動で消える）。
+   ・NPC のコメント・返信は、保存しない（商品の id・値段・時刻から、決まった計算で作る＝書き込み0回。同じ商品なら、いつ見ても同じコメントが出る）。
+       ・値段が相場の2倍以上：別々の NPC 10人が「高すぎやろ」系のコメント（最初の1人は出品の1〜5分後、残りは30分ほどのあいだに少しずつ）。
+         1.2〜2倍：1〜3人／0.8〜1.2倍：1人／0.8倍未満：1〜2人。どの出品にも、1〜5分以内に必ず1人は NPC がコメントする。NPC の出品へは、多くても2人。
+       ・プレイヤーのコメントへの返信：NPC の出品では、出品者の NPC が必ず返信（20秒〜3分後）。人の出品では、ときどき（約35%）別の NPC が返信（人への返信には返信しない）。
+   ・通知：人の出品にコメントが付いたら、出品者にプッシュ通知（1出品につき10分に1回まで）。返信された人にも（同じく10分に1回まで）。最後に通知した時刻は、同じ書類の nt に入れる（追加の書き込みなし）。
+   ・消せる人：書いた本人・出品者・最上位管理者。URL・メールアドレス・電話番号・一部の言葉は送れない。同じ人は10秒に1回まで、1つの商品に10件まで。
+========================================================= */
+export const MART_COMMENT = { max: 30, len: 80, gapMs: 10000, perUser: 10, notifyMs: 600000, highRatio: 2, npcHigh: 10, replyPlayerChance: 0.35 };
+const MART_COMMENT_POOLS = {
+  cheap: ["安っ！これは買いたい", "めっちゃお得やん", "この値段ならすぐ売れそう！", "ええ値段やなぁ", "掘り出し物やん！", "安すぎん？ありがたい"],
+  fair: ["ちょうどええ値段やな", "相場どおりって感じ", "気になる〜", "悪くないと思う！", "ええ感じやね"],
+  slight: ["ちょっと高めかな〜", "もうちょい安いと嬉しい", "値下げ依頼してみたら？", "うーん、悩む値段やなぁ"],
+  high: ["これはちょっと高いんちゃう？", "相場より結構高いで〜", "高すぎない？大丈夫？", "値下げせんと売れへんかも…"],
+  tooHigh: ["高すぎやろ！", "桁まちがってない？", "誰が買うねんこれw", "いや高すぎwww", "さすがに高すぎるって！", "相場の倍以上やん…", "これは強気すぎるやろ", "夢見すぎやで〜", "高すぎて笑った", "えっ、この値段で出すん？", "値段まちがえたんちゃう？", "高すぎやって〜！"]
+};
+function martCommentTier(ratio) { return ratio >= MART_COMMENT.highRatio ? "tooHigh" : ratio >= 1.6 ? "high" : ratio >= 1.2 ? "slight" : ratio >= 0.8 ? "fair" : "cheap"; }
+/* その商品への NPC のコメント（保存しない）。id・値段・出品の時刻から決まる。now までに時刻が来たものだけ */
+export function martNpcCommentsFor(L, id, now) {
+  const ref = martRefOf(L), base = L.au ? L.au.s : L.price, ratio = !L.dutch && ref > 0 && base > 0 ? base / ref : 1;   // 値段が時間で変わる確変枠（dutch）は、相場どおり扱い
+  const tier = martCommentTier(ratio), pool = MART_COMMENT_POOLS[tier], t0 = Number(L.t) || now;
+  let count = tier === "tooHigh" ? MART_COMMENT.npcHigh : tier === "fair" ? 1 : tier === "cheap" ? 1 + (martHash(id, 41) % 2) : 1 + (martHash(id, 41) % 3);
+  if (L.npc) count = Math.min(count, 2);
+  const used = new Set(), out = [], start = martHash(id, 42) % pool.length;
+  for (let i = 0; i < count; i++) {
+    let name = "";
+    for (let k = 0; k < 30 && (!name || used.has(name)); k++) name = KAKU_NPC_NAMES[martHash(id, 43, i, k) % KAKU_NPC_NAMES.length];
+    used.add(name);
+    const t = i === 0 ? t0 + 60000 + Math.floor(martUnit(id, 44) * 4 * 60000) : t0 + 2 * 60000 + Math.floor(martUnit(id, 45, i) * (tier === "tooHigh" ? 28 : 17) * 60000);
+    if (t > now) continue;
+    out.push({ cid: `v${i}`, npc: true, n: name, t, x: pool[(start + i) % pool.length] });
+  }
+  return out;
+}
+/* プレイヤーのコメントの意味（ことばから）。NPC の返信の選び方に使う */
+function martCommentIntent(text) {
+  const x = String(text);
+  if (/こんにちは|こんばんは|はじめまして|初めまして|おはよう/.test(x)) return "greet";
+  if (/ありがと|感謝/.test(x)) return "thanks";
+  if (/安く|値下げ|まけて|下げて|割引|もう少し|もうちょい/.test(x)) return "cheaper";
+  if (/買いたい|欲しい|ほしい|買う|買います|ください/.test(x)) return "want";
+  if (/高い|高すぎ|たかい|ぼった/.test(x)) return "dear";
+  if (/[?？]|ですか|ますか|ある\?|あるの|どう|いつ|なに|何/.test(x)) return "ask";
+  return "other";
+}
+const MART_REPLY_NPC_SELLER = {
+  greet: ["こんにちは〜！ゆっくり見てってな", "いらっしゃいませ〜！"], thanks: ["どういたしまして！", "こちらこそありがとう！"],
+  cheaper: ["値下げしたいなら「値下げ交渉」から金額を送ってな！", "うーん、「値下げ交渉」で聞かせてや〜"], want: ["ありがとう！早めに買ってや〜", "ええやん、「買う」押してみて！"],
+  dear: ["やっぱり高いか〜、交渉してみてや！", "そう言われると弱いなぁ…交渉は受け付けてるで"], ask: ["くわしくは商品の説明を見てな〜", "気になることは遠慮なく聞いてや！"], other: ["なるほどな〜", "コメントありがとう！"]
+};
+const MART_REPLY_NPC_OTHER = {
+  greet: ["こんにちは〜！", "どうも〜！"], thanks: ["いえいえ〜", "どういたしまして！"],
+  cheaper: ["それ、ええなぁ。出品者さんが受けてくれたらええな", "値下げ依頼してみたらええと思う！"], want: ["わかる、ちょっと気になるよな〜", "ええと思う！買ってみ！"],
+  dear: ["ほんまに高いよな〜", "たしかに、ちょっと強気かも"], ask: ["出品者さんが答えてくれると思うで〜", "うちも気になる〜"], other: ["なるほどな〜", "それなー！", "ええやん！"]
+};
+/* プレイヤーのコメント c への NPC の返信（保存しない）。返信しない・まだ時刻が来ていないときは null */
+export function martNpcReplyFor(L, id, c, now) {
+  if (c.npc) return null;
+  const intent = martCommentIntent(c.x);
+  let name, pool;
+  if (L.npc) { name = L.n; pool = MART_REPLY_NPC_SELLER[intent]; }
+  else {
+    if (c.r) return null;   // 人への返信には、NPC は返信しない
+    if (martUnit(id, c.i, 51) >= MART_COMMENT.replyPlayerChance) return null;
+    name = KAKU_NPC_NAMES[martHash(id, c.i, 52) % KAKU_NPC_NAMES.length]; pool = MART_REPLY_NPC_OTHER[intent];
+  }
+  const t = c.t + (L.npc ? 20000 + Math.floor(martUnit(id, c.i, 53) * 160000) : 30000 + Math.floor(martUnit(id, c.i, 54) * 330000));
+  if (t > now) return null;
+  return { cid: `r${c.i}`, npc: true, n: name, t: Math.max(t, c.t + 1), r: c.i, rn: c.n, x: pool[martHash(id, c.i, 55) % pool.length] };
+}
+const MART_COMMENT_NG = ["死ね", "しね", "殺す", "ころす", "消えろ", "きえろ", "うざい", "うぜえ", "ばか", "バカ", "あほ", "アホ", "ブス", "デブ"];
+export function martCommentCheck(raw) {
+  const text = String(raw ?? "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+  if (!text) return { error: "empty" };
+  if ([...text].length > MART_COMMENT.len) return { error: "too_long" };
+  if (/(https?:|www\.)|[a-z0-9-]+\.(com|jp|net|org|io|me|co|gg|tv|xyz)\b/i.test(text) || /[\w.+-]+@[\w-]+\.[\w.-]+/.test(text) || /\d[\d\- 　]{8,}\d/.test(text)) return { error: "not_allowed" };
+  if (MART_COMMENT_NG.some((w) => text.includes(w))) return { error: "ng_word" };
+  return { text };
+}
+const martCommentPath = (id) => `martComments/${id}`;
+/* 商品の id から、いまの商品（見つからなければ null）。owner：人の出品の持ち主（uid）。NPC の商品は owner なし */
+async function martCommentTarget(deps, id, now) {
+  if (!/^[A-Za-z0-9:_-]{1,60}$/.test(id)) return null;
+  const mcur = await martLoad(deps, 6000);
+  if (/^(n\d|na\d|kn:)/.test(id)) {
+    let L = null;
+    if (id.startsWith("kn:")) { const m = /^kn:(\d{4}-\d{2}-\d{2}):(\d+)$/.exec(id); if (m && martKakuNpcOpen(m[1], now)) L = (await martKakuNpcListings(deps, now)).find((x) => x.id === id) || null; }
+    else if (id.startsWith("na")) { const r = martNpcAuctionById(id, now); L = r && r.live ? r.A : null; }
+    else L = martNpcById(id, now, mcur.m.npcSold);
+    return L ? { L, owner: "" } : null;
+  }
+  const L = mcur.m.L.find((x) => x.i === id);
+  return L && martLive(L, now) ? { L, owner: L.u } : null;
+}
+function martCommentView(L, id, stored, uid, owner, admin, now) {
+  const list = (Array.isArray(stored) ? stored : []).map((c) => ({ ...c }));
+  const all = [...list.map((c) => ({ cid: c.i, n: c.n, t: c.t, x: c.x, ...(c.r ? { r: c.r, rn: c.rn } : {}), mine: c.u === uid, del: c.u === uid || owner === uid || admin })), ...martNpcCommentsFor(L, id, now)];
+  list.forEach((c) => { const r = martNpcReplyFor(L, id, c, now); if (r) all.push(r); });
+  return all.sort((a, b) => a.t - b.t || (a.cid < b.cid ? -1 : 1)).map((c) => ({ cid: c.cid, n: c.n, t: c.t, x: c.x, npc: c.npc === true, ...(c.r ? { r: c.r, rn: c.rn } : {}), mine: c.mine === true, del: c.del === true }));
+}
+async function martComments(deps, uid, body) {
+  const g = await martGate(deps, uid);
+  if (g) return g;
+  const id = String(body?.id || ""), now = deps.now(), t = await martCommentTarget(deps, id, now);
+  if (!t) return { status: 409, error: "gone" };
+  const doc = await lotteryCachedGet(deps, martCommentPath(id), 5000);
+  return { ok: true, serverNowMs: now, comments: martCommentView(t.L, id, doc && doc.c, uid, t.owner, slotIsTopAdmin(deps, uid), now), max: MART_COMMENT.len };
+}
+async function martCommentNotify(deps, uid, title, text) {
+  try {
+    const tokens = await deps.firestore.query("fcmTokens", [["uid", "EQUAL", uid]], { select: ["uid"] });
+    await Promise.all(tokens.map(async (tk) => {
+      const outcome = await deps.sendFcm(tk.id, { kind: "mart", title, body: truncate(text, 80), link: "./", tag: "mart-comment" }).catch(() => ({ ok: false }));
+      if (outcome && outcome.invalidToken) await deps.firestore.delete(`fcmTokens/${tk.id}`).catch(() => {});
+    }));
+  } catch (error) { console.warn("mart comment notify failed", String(error?.message || error).slice(0, 200)); }
+}
+async function martCommentPost(deps, uid, body) {
+  const g = await martGate(deps, uid);
+  if (g) return g;
+  const id = String(body?.id || ""), now = deps.now();
+  const chk = martCommentCheck(body?.text);
+  if (chk.error) return { status: 400, error: chk.error };
+  const t = await martCommentTarget(deps, id, now);
+  if (!t) return { status: 409, error: "gone" };
+  if ((await martLoad(deps, 6000)).m.paused && !slotIsTopAdmin(deps, uid)) return { status: 409, error: "paused" };
+  const me = await loadMyUser(deps.firestore, uid, body?.username);
+  if (me.error) return me.error;
+  const fs = deps.firestore, path = martCommentPath(id), replyTo = typeof body?.replyTo === "string" ? body.replyTo : "";
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const raw = await fs.getRaw(path), d = raw ? decodeFields(raw.fields) : {};
+    const list = Array.isArray(d.c) ? d.c : [];
+    const mine = list.filter((c) => c.u === uid);
+    if (mine.length && now - mine[mine.length - 1].t < MART_COMMENT.gapMs) return { status: 429, error: "too_fast" };
+    if (mine.length >= MART_COMMENT.perUser) return { status: 409, error: "too_many" };
+    const target = replyTo ? list.find((c) => c.i === replyTo) : null;
+    const cid = crypto.randomUUID().replace(/-/g, "").slice(0, 8);
+    const entry = { i: cid, u: uid, n: me.name, t: now, x: chk.text, ...(target ? { r: target.i, rn: target.n } : {}) };   // 返信先がプレイヤーのコメントなら記録する（NPC のコメントへの返信は、文の中の @名前 だけ）
+    const next = [...list, entry].slice(-MART_COMMENT.max);
+    const nt = d.nt && typeof d.nt === "object" ? { ...d.nt } : {};
+    const notify = [];
+    const want = (to, title) => { if (to && to !== uid && now - (Number(nt[to]) || 0) >= MART_COMMENT.notifyMs) { nt[to] = now; notify.push([to, title]); } };
+    want(t.owner, "💬 出品した商品にコメントが来ました");
+    if (target && target.u && target.u !== t.owner) want(target.u, "💬 返信が来ました");
+    const fields = { c: next, nt, exp: new Date(Number(t.L.e) + 86400000), id };
+    try {
+      await fs.commit([{ update: { name: fs.docName(path), fields: encodeFields(fields) }, updateMask: { fieldPaths: Object.keys(fields) }, currentDocument: raw ? { updateTime: raw.updateTime } : { exists: false } }]);
+    } catch (error) { if (isRetryableCommitError(error)) continue; throw error; }
+    lotteryDocCache.delete(path);
+    for (const [to, title] of notify) await martCommentNotify(deps, to, title, `${me.name}：${chk.text}`);
+    return { ok: true, cid, comments: martCommentView(t.L, id, next, uid, t.owner, slotIsTopAdmin(deps, uid), now) };
+  }
+  return { status: 409, error: "busy" };
+}
+async function martCommentDelete(deps, uid, body) {
+  const g = await martGate(deps, uid);
+  if (g) return g;
+  const id = String(body?.id || ""), cid = String(body?.cid || ""), now = deps.now();
+  const t = await martCommentTarget(deps, id, now);
+  if (!t) return { status: 409, error: "gone" };
+  const fs = deps.firestore, path = martCommentPath(id), admin = slotIsTopAdmin(deps, uid);
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const raw = await fs.getRaw(path), d = raw ? decodeFields(raw.fields) : null;
+    const list = d && Array.isArray(d.c) ? d.c : [], c = list.find((x) => x.i === cid);
+    if (!c) return { status: 409, error: "gone" };
+    if (c.u !== uid && t.owner !== uid && !admin) return { status: 403, error: "not_allowed" };
+    const next = list.filter((x) => x.i !== cid);
+    try { await fs.commit([{ update: { name: fs.docName(path), fields: encodeFields({ c: next }) }, updateMask: { fieldPaths: ["c"] }, currentDocument: { updateTime: raw.updateTime } }]); }
+    catch (error) { if (isRetryableCommitError(error)) continue; throw error; }
+    lotteryDocCache.delete(path);
+    return { ok: true, comments: martCommentView(t.L, id, next, uid, t.owner, admin, now) };
+  }
+  return { status: 409, error: "busy" };
+}
+
 async function martNegotiate(deps, uid, body) {
   const g = await martGate(deps, uid);
   if (g) return g;
