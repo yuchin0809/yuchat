@@ -6,6 +6,7 @@ let cfg = null;
 let data = null;
 let day = "";      // "" ＝ 今日（サーバーの日付）
 let loading = false;
+const G = { count: 1, id: "", busy: false, msg: "", error: false };   // 確変チケットを全員に配る
 
 const KIND = { pre: "前日抽選", lot: "当日抽選", quick: "先着" };
 const pad = (n) => String(n).padStart(2, "0");
@@ -48,10 +49,33 @@ function render() {
   }
   el.innerHTML = `<div class="ykw-head"><h3>🌈 確変台の当選者</h3><button type="button" class="ykw-tab" data-ykw-reload="1">更新</button></div>
     <div class="ykw-tabs">${tab("昨日", dayShift(base, -1))}${tab("今日", base)}${tab("明日", dayShift(base, 1))}</div>${body}
-    <p class="ykw-note">管理者だけが見られます（プレイヤーには、自分の枠以外は見えません）。</p>`;
+    <p class="ykw-note">管理者だけが見られます（プレイヤーには、自分の枠以外は見えません）。</p>
+    <h3 class="ykw-sub">🎟 確変チケットを全員に配る</h3>
+    <p class="ykw-note">全員に、確変台の予約チケットを配ります（1枚＝枠を1回予約できる。有効期限：配ってから60日。ゆうマートでは売れません）。1人にだけ渡すときは、ユーザー一覧の詳細から。</p>
+    <div class="ykw-grant"><select id="ykwGrantCount" aria-label="配る枚数">${[1, 2, 3, 4, 5].map((n) => `<option value="${n}"${G.count === n ? " selected" : ""}>${n}枚</option>`).join("")}</select>
+      <button type="button" class="ykw-tab is-on" data-ykw-grant="1" ${G.busy ? "disabled" : ""}>${G.busy ? "配っています…" : "全員に配る"}</button></div>
+    ${G.msg ? `<p class="ykw-note" style="font-weight:800;color:${G.error ? "#c0392b" : "#2c8a52"}">${esc(G.msg)}</p>` : ""}`;
+}
+
+async function grantAll() {
+  if (G.busy) return;
+  const count = Number(document.getElementById("ykwGrantCount")?.value) || 1;
+  G.count = count;
+  if (!confirm(`全員に、確変台の予約チケットを ${count} 枚ずつ配ります。よろしいですか？\n（配ったあとは取り消せません）`)) return;
+  G.id = G.id || crypto.randomUUID().replace(/-/g, "");
+  G.busy = true; G.msg = ""; G.error = false; render();
+  try {
+    const r = await cfg.callAdmin("grantKakuTicket", { all: true, count, grantId: G.id });
+    if (!r.busy) G.id = "";   // うまくいかなかった人がいるときは、同じ印で押し直す（配った人には2回目を配らない）
+    G.msg = `${r.granted} 人に ${count} 枚ずつ配りました。${r.already ? `（すでに配ってあった人：${r.already} 人）` : ""}${r.busy ? `（うまくいかなかった人：${r.busy} 人。もう一度押すと、その人だけに配ります）` : ""}`;
+    if (r.busy) G.error = true;
+  } catch (error) { console.error("確変チケットを配るエラー:", error); G.msg = "うまくいきませんでした。もう一度お試しください（二重には配りません）。"; G.error = true; }
+  G.busy = false; render();
 }
 
 document.addEventListener("click", (event) => {
+  const g = event.target.closest?.("[data-ykw-grant]");
+  if (g && document.getElementById("userManageKaku")?.contains(g)) { grantAll(); return; }
   const t = event.target.closest?.("[data-ykw-day],[data-ykw-reload]");
   if (!t || !document.getElementById("userManageKaku")?.contains(t)) return;
   if (t.dataset.ykwDay) kakuWinnersOpen(t.dataset.ykwDay === todayJst() ? "" : t.dataset.ykwDay);
@@ -64,7 +88,7 @@ function ensureStyles() {
   style.id = "yukakuwinners-styles";
   style.textContent = `
     .ykw-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; } .ykw-head h3 { margin: 0; font-size: 14px; }
-    .ykw-tabs { display: flex; gap: 6px; margin: 8px 0; }
+    .ykw-tabs { display: flex; gap: 6px; margin: 8px 0; } .ykw-sub { margin: 16px 0 0; font-size: 14px; } .ykw-grant { display: flex; align-items: center; gap: 8px; margin: 6px 0; } .ykw-grant select { padding: 6px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 14px; }
     .ykw-tab { padding: 6px 12px; border: 1px solid #d1d5db; border-radius: 999px; background: #fff; font-size: 12px; font-weight: 800; cursor: pointer; }
     .ykw-tab.is-on { background: #7c3aed; color: #fff; border-color: #7c3aed; }
     .ykw-note { margin: 6px 0; font-size: 12px; color: #4b5563; line-height: 1.7; }

@@ -50,7 +50,7 @@ import { transferInit, transferOpenUser, transferOpenAdmin, transferReset } from
 /* 📨 友達に紹介（ヘッダーの赤いボタン。端末の共有画面でリンクを送る） */
 import { inviteInit } from "./yuinvite.js?v=20261021-invite1";
 /* 🌈 確変台の当選者（管理者だけ） */
-import { kakuWinnersInit, kakuWinnersOpen, kakuWinnersReset } from "./yukakuwinners.js?v=20261021-winners1";
+import { kakuWinnersInit, kakuWinnersOpen, kakuWinnersReset } from "./yukakuwinners.js?v=20261026-grant1";
 import { keshiEnrollInit, keshiEnrollOpen, keshiEnrollReset } from "./yukeshi-admin.js?v=20261026-ltd10";
 import { economyAdminInit, economyAdminOpen, economyAdminReset } from "./yueconomy-admin.js?v=20261024-econ2";
 
@@ -6042,6 +6042,8 @@ const ADMIN_ASSET_ADJUST_MAX = 10000000;
 
 const ADMIN_ERROR_MESSAGES = {
   invalid_amount: `金額は1〜${ADMIN_COIN_ADJUST_MAX.toLocaleString()}の整数で入力してください。`,
+  invalid_count: "枚数は1〜5枚で指定してください。",
+  invalid_grant_id: "操作の印が正しくありません。もう一度お試しください。",
   insufficient_coins: "残高がマイナスになるため、減らせません。",
   balance_changed: "表示したあとに残高が変わっていました。最新の残高を表示し直したので、もう一度操作してください。",
   balance_too_large: "残高が大きくなりすぎるため、増やせません。",
@@ -6336,13 +6338,46 @@ function renderUserManageDetail(info) {
       <p id="umCoinError" class="admin-form-error"></p>
     </section>` : "";
 
-  /* 宝くじの購入の取り消し・全額返金（本人から頼まれたとき。いま販売中の回の分だけ） */
+  /* 確変チケットを1人に渡す（確認のあと Worker に頼む。grantId が同じ操作は、Worker が2回目から何もしない） */
+async function runUserManageKakuTicket(info) {
+  if (userManageBusy) return;
+  const errorEl = document.getElementById("umKakuTicketError");
+  showError(errorEl, "");
+  const count = Number(document.getElementById("umKakuTicketCount")?.value) || 1;
+  if (!confirm(`${info.name} さんに、確変台の予約チケットを ${count} 枚渡しますか？（有効期限：60日）`)) return;
+  info.kakuGrantId = info.kakuGrantId || crypto.randomUUID().replace(/-/g, "");
+  userManageBusy = true;
+  try {
+    const r = await callAdminApi("grantKakuTicket", { uid: info.uid, count, grantId: info.kakuGrantId });
+    info.kakuGrantId = "";
+    showAppToast("👤 ユーザー管理", r.granted ? `${info.name}に、確変台の予約チケットを ${count} 枚渡しました。` : "このチケットは、すでに渡してあります。");
+  } catch (error) {
+    console.error("確変チケットのエラー:", error.code || error.message);
+    showError(errorEl, describeAdminError(error));
+  } finally {
+    userManageBusy = false;
+  }
+}
+
+/* 宝くじの購入の取り消し・全額返金（本人から頼まれたとき。いま販売中の回の分だけ） */
   const lotteryHtml = hasUserDoc && info.user && !deleting ? `
     <section class="um-coins" aria-label="宝くじの取り消し">
       <div class="um-coins-balance">🎟 宝くじ</div>
       <div class="um-coins-row"><button type="button" class="secondary" data-um-lottery-refund>購入を取り消して全額返金…</button></div>
       <p class="um-note">いま販売中の回で、この人が買った宝くじを全部取り消し、全額を返金します（番号は空きに戻ります。抽選が済んだ回は取り消せません）。</p>
       <p id="umLotteryError" class="admin-form-error"></p>
+    </section>` : "";
+
+  /* 確変チケット（1回ぶん）を渡す。使い方・期限（60日）は、ゆう番くじ D賞と同じ */
+  const kakuTicketHtml = hasUserDoc && info.user && !deleting ? `
+    <section class="um-coins" aria-label="確変チケットを渡す">
+      <div class="um-coins-balance">🌈 確変チケット</div>
+      <div class="um-coins-row">
+        <select id="umKakuTicketCount" aria-label="渡す枚数">${[1, 2, 3, 4, 5].map((n) => `<option value="${n}">${n}枚</option>`).join("")}</select>
+        <button type="button" data-um-kaku-ticket>確変台の予約チケットを渡す</button>
+      </div>
+      <p class="um-note">1枚で、確変台の枠を1回、予約できます（有効期限：渡してから60日）。ゆうマートでは売れません。</p>
+      <p id="umKakuTicketError" class="admin-form-error"></p>
     </section>` : "";
 
   /* 総資産の増減（内訳は開いたときに Worker から読む） */
@@ -6364,6 +6399,7 @@ function renderUserManageDetail(info) {
     <dl class="um-detail">${rows.map(([k, v]) => `<dt>${escapeHTML(k)}</dt><dd>${escapeHTML(v)}</dd>`).join("")}</dl>
     ${coinHtml}
     ${lotteryHtml}
+    ${kakuTicketHtml}
     ${assetHtml}
     ${info.isAdmin ? `<p class="um-note">管理者のアカウントは停止・削除できません。</p>` : `<p class="um-note">サブアカウントかどうか確信がないときは、まず「停止」を使ってください（あとで解除できます）。完全削除は取り消せません。</p>`}
     <div class="um-actions">${buttons.join("")}</div>
@@ -6376,6 +6412,7 @@ function renderUserManageDetail(info) {
   modalEl.querySelector('[data-um-action="deleteAuthOnly"]')?.addEventListener("click", () => renderUserManageDeleteAuthOnly(info));
   modalEl.querySelectorAll("[data-um-coin]").forEach((button) => button.addEventListener("click", () => runUserManageAdjustCoins(info, button.dataset.umCoin)));
   modalEl.querySelector("[data-um-lottery-refund]")?.addEventListener("click", () => runUserManageLotteryRefund(info));
+  modalEl.querySelector("[data-um-kaku-ticket]")?.addEventListener("click", () => runUserManageKakuTicket(info));
   modalEl.querySelectorAll("[data-um-asset]").forEach((button) => button.addEventListener("click", () => previewUserManageAssets(info, button.dataset.umAsset)));
   if (assetHtml) loadUserManageAssets(info);
 }
