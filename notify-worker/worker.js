@@ -3098,32 +3098,44 @@ export function lotteryCfg(roundId) {
   return { poolSize: o?.pool || LOTTERY.poolSize, tiers: o?.tiers || LOTTERY.tiers };
 }
 
-/* 今より後の、いちばん近い金曜 14:30（JST）の抽選時刻（ミリ秒）。ちょうどの時刻は次の回になる */
+/* 抽選の時刻を、ふだんの金曜 14:30 からずらす回（回の id → 抽選の時刻）。id・販売の開始（月曜 8:00）・番号は変わらず、抽選と締切（5分前）の時刻だけが変わる。
+   2026-10-30 の回は、2026-10-27（火）12:10 に前倒し */
+const LOTTERY_DRAW_SHIFT = { "2026-10-30": Date.UTC(2026, 9, 27, 3, 10, 0) };
+const lotteryIdToMs = (id) => { const [y, m, d] = id.split("-").map(Number); return Date.UTC(y, m - 1, d, 5, 30, 0); };
+/* ふだんの金曜 14:30 の時刻 → その回の実際の抽選時刻 */
+const lotteryActualOf = (natural) => { const id = lotteryRoundId(natural), v = LOTTERY_DRAW_SHIFT[id]; return v !== undefined ? v : natural; };
+/* 実際の抽選時刻（ずらした時刻でも、ふだんの金曜 14:30 でも）→ ふだんの金曜 14:30 の時刻 */
+const lotteryNaturalOf = (drawMs) => { for (const [id, v] of Object.entries(LOTTERY_DRAW_SHIFT)) if (v === drawMs) return lotteryIdToMs(id); return drawMs; };
+/* ひとつ前の回の、実際の抽選時刻 */
+const lotteryPrevOf = (drawMs) => lotteryActualOf(lotteryNaturalOf(drawMs) - LOTTERY_WEEK_MS);
+/* 今より後の、いちばん近い抽選時刻（ミリ秒）。ふだんは金曜 14:30（JST）。ちょうどの時刻は次の回になる */
 export function lotteryNextDrawMs(nowMs) {
   const d = new Date(nowMs);
   let t = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 5, 30, 0) + lotteryMod(5 - d.getUTCDay(), 7) * 86400000;
   if (t <= nowMs) t += LOTTERY_WEEK_MS;
-  return t;
+  while (lotteryActualOf(t) <= nowMs) t += LOTTERY_WEEK_MS;   // 前倒しした回は、その時刻をすぎたら、次の回へ
+  return lotteryActualOf(t);
 }
 export function lotteryRoundId(drawMs) {
-  const d = new Date(drawMs + 9 * 3600000);
+  const d = new Date(lotteryNaturalOf(drawMs) + 9 * 3600000);
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
 }
 /* 販売の開始：抽選の週の月曜 8:00（日本時間）。抽選は金曜 14:30 なので、4日と6時間30分前 */
 export function lotterySaleStartMs(drawMs) { return drawMs - (4 * 86400000 + 6.5 * 3600000); }
 
 /* その回の名前・賞金の倍率・ビッグイベントかどうか（計算だけで決まる。Firestore には保存しない） */
-export function lotteryEventFor(drawMs) {
-  const id = lotteryRoundId(drawMs);
-  const idx = Math.round((drawMs - LOTTERY_EPOCH_MS) / LOTTERY_WEEK_MS);
+export function lotteryEventFor(at) {
+  const natural = lotteryNaturalOf(at), drawMs = lotteryActualOf(natural);   // at は、ふだんの金曜 14:30 でも、ずらした実際の時刻でもよい
+  const id = lotteryRoundId(natural);
+  const idx = Math.round((natural - LOTTERY_EPOCH_MS) / LOTTERY_WEEK_MS);
   // 6週に1回のビッグイベント。ただし、前後の週が特別回（年末・新春など）のときは、ビッグが続かないように見送る
-  const nearSpecial = [-1, 1].some((k) => LOTTERY_OVERRIDES[lotteryRoundId(drawMs + k * LOTTERY_WEEK_MS)]);
+  const nearSpecial = [-1, 1].some((k) => LOTTERY_OVERRIDES[lotteryRoundId(natural + k * LOTTERY_WEEK_MS)]);
   let big = lotteryMod(idx, 6) === 5 && !nearSpecial, name, scale;
   if (big) { name = LOTTERY_BIG_NAMES[lotteryMod(Math.floor(idx / 6), LOTTERY_BIG_NAMES.length)]; scale = LOTTERY_BIG_SCALE; }
   else { name = LOTTERY_NAMES[lotteryMod(idx, LOTTERY_NAMES.length)]; scale = LOTTERY_SCALES[lotteryMod(idx, LOTTERY_SCALES.length)]; }
   const o = LOTTERY_OVERRIDES[id];
   if (o) { name = o.name; scale = o.scale; big = o.big === true; }
-  return { id, drawMs, saleStartMs: lotterySaleStartMs(drawMs), closeMs: drawMs - LOTTERY.closeBeforeMs, index: idx, name, scale, big, price: LOTTERY.price, ...lotteryCfg(id) };
+  return { id, drawMs, saleStartMs: lotterySaleStartMs(natural), closeMs: drawMs - LOTTERY.closeBeforeMs, index: idx, name, scale, big, price: LOTTERY.price, ...lotteryCfg(id) };
 }
 /* 等級ごとの賞金（その回の倍率を反映。元返し等級は倍率をかけない） */
 export function lotteryPrizeOf(tier, scale) {
@@ -3355,7 +3367,7 @@ export async function lotteryRunDraw(deps, drawMs) {
 /* 毎分の cron から呼ぶ。直近の抽選時刻の直後（最初の10分は毎分、そのあと24時間は15分ごと）だけ動く。
    それ以外の分は Firestore に触れずにすぐ戻る */
 export async function runLotteryTick(env = {}, scheduledTime = Date.now(), deps = null) {
-  const drawMs = lotteryNextDrawMs(scheduledTime) - LOTTERY_WEEK_MS;
+  const drawMs = lotteryPrevOf(lotteryNextDrawMs(scheduledTime));
   const since = scheduledTime - drawMs;
   if (since < 0 || since > 24 * 3600000) return { skipped: "outside" };
   const mins = Math.floor(since / 60000);
@@ -3392,7 +3404,7 @@ async function lotteryStatus(deps, uid, body) {
   if (!published && !admin) return { ok: true, published: false, isTopAdmin: false, serverNowMs: now };
   const drawMs = lotteryNextDrawMs(now);
   const ev = lotteryEventFor(drawMs);
-  const prevId = lotteryRoundId(drawMs - LOTTERY_WEEK_MS);
+  const prevMs = lotteryPrevOf(drawMs), prevId = lotteryRoundId(prevMs);
   const phase = now < ev.saleStartMs ? "preparing" : now < ev.closeMs ? "selling" : "closed";
   // 前回の結果（確定した回は変わらないので、Worker のメモリに数分ためて読み取りを減らす）
   const prev = await lotteryCachedGet(deps, `lotteryRounds/${prevId}`, lotteryDoneTtl);
@@ -3408,7 +3420,7 @@ async function lotteryStatus(deps, uid, body) {
     myWins: ws.filter((w) => w.uid === uid).map((w) => ({ tier: w.tier, number: w.number, amount: w.amount })),
     myWin: ws.filter((w) => w.uid === uid).reduce((s, w) => s + (Number(w.amount) || 0), 0)
   } : null;
-  const base = { ok: true, published, isTopAdmin: admin, serverNowMs: now, phase, last, prev: { id: prevId, drawMs: drawMs - LOTTERY_WEEK_MS } }; // prev＝前回の回（結果の集計待ちかどうかの判定用）
+  const base = { ok: true, published, isTopAdmin: admin, serverNowMs: now, phase, last, prev: { id: prevId, drawMs: prevMs } }; // prev＝前回の回（結果の集計待ちかどうかの判定用）
   if (phase === "preparing") {
     // 次の回の販売が始まるまでは「準備中」。名前・賞金は出さず、自分の番号や残高も読まない（読み取りなし）
     // 管理者だけは、準備中でも次の回の名前・賞金・番号の数を先に見られる（抽選会ショーの試しにも使う）。読み取りは増えない
@@ -3883,9 +3895,10 @@ async function adminEconomyReport(deps) {
 
   // 宝くじ：直近の回（今の回と、終わった8回）
   const next = lotteryNextDrawMs(now);
-  const ids = Array.from({ length: 9 }, (_, k) => lotteryRoundId(next - k * LOTTERY_WEEK_MS));
+  const times = [next]; for (let k = 1; k < 9; k++) times.push(lotteryPrevOf(times[k - 1]));
+  const ids = times.map((t) => lotteryRoundId(t));
   const rounds = await fs.batchGet(ids.map((id) => `lotteryRounds/${id}`));
-  const lotteries = ids.map((id, i) => ({ id, ev: lotteryEventFor(next - i * LOTTERY_WEEK_MS), r: rounds[i] })).filter((x) => x.r)
+  const lotteries = ids.map((id, i) => ({ id, ev: lotteryEventFor(times[i]), r: rounds[i] })).filter((x) => x.r)
     .map(({ id, ev, r }) => {
       const sales = Number(r.sales) || 0, paid = Number(r.paid) || 0, done = r.status === "done";
       return { id, name: ev.name, done, tickets: Number(r.tickets) || 0, sales, paid, rtp: done && sales > 0 ? paid / sales : null };
