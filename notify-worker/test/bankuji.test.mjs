@@ -2,7 +2,7 @@
    実行：node --test "notify-worker/test/*.test.mjs" */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { BANKUJI, bankujiPickPrize, bankujiMakeAward, bankujiMode, bankujiApplyWindow, bankujiFirstDay, handleYuslotAction, resetBankujiCacheForTest, resetLotteryCacheForTest } from "../worker.js";
+import { BANKUJI, bankujiPickPrize, bankujiMakeAward, bankujiModeOf, bankujiPassOpenMs, bankujiPassCount, bankujiFirstDay, handleYuslotAction, resetBankujiCacheForTest, resetLotteryCacheForTest } from "../worker.js";
 
 console.warn = () => {};
 
@@ -91,8 +91,15 @@ test("設定：景品は299本＋ラストワン1本＝300枚。1日15枚・残�
   assert.equal(BANKUJI.prizes.reduce((s, p) => s + p.count, 0), 299);
   assert.equal(BANKUJI.pool, 300); assert.equal(BANKUJI.price, 200); assert.equal(BANKUJI.perDay, 15); assert.equal(BANKUJI.stopRemaining, 100);
   assert.equal(new Date(START + 9 * 3600000).toISOString(), "2026-10-26T08:00:00.000Z".replace("08:00", "08:00"));
-  assert.equal(bankujiFirstDay(), "2026-10-26"); assert.equal(bankujiMode("2026-10-26"), "open"); assert.equal(bankujiMode("2026-10-27"), "pass");
-  const w = bankujiApplyWindow("2026-10-27"); assert.equal(w.openMs, DAY2); assert.equal(w.closeMs, DAY2 + 30 * MIN);
+  assert.equal(bankujiFirstDay(), "2026-10-26");
+  assert.equal(bankujiPassOpenMs("2026-10-27"), DAY2 + 30 * MIN, "整理券の配布は毎日 8:30 から");
+  assert.deepEqual([85, 100, 101, 15].map(bankujiPassCount), [12, 14, 14, 2], "配る枚数＝残り÷15を切り上げ×2");
+  // 仕組み：残り101枚以上＝先着／100枚以下になった日＝その日は終了／次の日から＝整理券
+  assert.equal(bankujiModeOf({}, 150, "2026-10-27"), "open");
+  assert.equal(bankujiModeOf({ capDay: "2026-10-27" }, 90, "2026-10-27"), "capped");
+  assert.equal(bankujiModeOf({ capDay: "2026-10-27" }, 90, "2026-10-28"), "pass");
+  assert.equal(bankujiModeOf({}, 90, "2026-10-26"), "capped", "記録がなければ発売日");
+  assert.equal(bankujiModeOf({}, 90, "2026-10-27"), "pass");
 });
 
 test("景品の引き方：箱の残りから引くと、299回で本数がぴったり使い切られる（偏らず、余りも不足もない）", () => {
@@ -165,40 +172,72 @@ test("初日の100枚ルール：残り101枚なら次の人は15枚まで買え
   assert.equal((await c.buy("uT", "たろう", { random: 1 })).error, "closed_today");
 });
 
-test("2日目以降は整理券：申込は 8:00〜8:30 だけ。抽選は8:30のあと1回だけ。当たった人だけ買える。人数は「残り÷15を切り上げ×2」", async () => {
+test("残りが101枚以上のあいだは、2日目以降も整理券なしの先着で買える（整理券は配らない）", async () => {
   const { fs, state, buy, apply, status } = setup({ random: rngOf(6) });
-  seedSold(fs, 215);               // 残り85 → 6人ぶん×2＝12人
-  state.now = DAY2 - 3600000; assert.equal((await apply("uT", "たろう")).error, "apply_not_open");
-  state.now = DAY2 + MIN;
-  assert.equal((await buy("uT", "たろう", { random: 1 })).error, "pass_pending");
-  assert.equal((await status("uT", "たろう")).pass.state, "canApply");
-  assert.equal((await apply("uT", "たろう")).ok, true);
-  assert.equal((await apply("uT", "たろう")).already, true, "二重に申し込んでも1件");
-  assert.equal((await status("uT", "たろう")).pass.state, "applied");
-  for (let i = 0; i < 20; i++) { fs.putP(`users/u${i}`, { uid: `id${i}`, name: `u${i}`, coins: 5000 }); await apply(`id${i}`, `u${i}`); }
-  state.now = DAY2 + 31 * MIN;
-  assert.equal((await apply("uH", "はなこ")).error, "apply_closed");
+  seedSold(fs, 120);               // 残り180
+  state.now = DAY2 + MIN;          // 2日目の朝
   const st = await status("uT", "たろう");
-  const pass = fs.plain("bankujiPasses/r1_2026-10-27");
-  assert.equal(pass.applicants, 21); assert.equal(pass.count, 12); assert.equal(pass.winners.length, 12);
-  assert.ok(["won", "lost"].includes(st.pass.state));
-  const winnerIds = pass.winners;
-  const loser = ["uT", ...Array.from({ length: 20 }, (_, i) => `id${i}`)].find((id) => !winnerIds.includes(id));
-  const loserName = loser === "uT" ? "たろう" : `u${loser.slice(2)}`;
-  assert.equal((await buy(loser, loserName, { random: 1 })).error, "no_pass");
-  assert.equal((await status("uH", "はなこ")).pass.state, "none", "申し込んでいない人");
-  const win = winnerIds[0]; const winName = win === "uT" ? "たろう" : `u${win.slice(2)}`;
-  const r = await buy(win, winName, { random: 15 });
-  assert.equal(r.ok, true); assert.equal(r.remaining, 70);
-  assert.equal(fs.counts.query, 1, "抽選は1回だけ（申込の読み取りは1回）");
-  assert.equal(fs.plain("bankujiPasses/r1_2026-10-27").winners.length, 12);
+  assert.equal(st.mode, "open"); assert.equal(st.phase, "selling"); assert.equal(st.pass, null);
+  assert.equal((await apply("uT", "たろう")).error, "no_pass_needed");
+  const r = await buy("uT", "たろう", { random: 5 });
+  assert.equal(r.ok, true); assert.equal(r.remaining, 175);
+});
+
+test("100枚を切った日はその日の販売が終わり（capDay を記録）、次の日から完売まで整理券制。8:30 から先着で、配る枚数を超えては配らない", async () => {
+  const { fs, state, buy, apply, status } = setup({ random: rngOf(6) });
+  seedSold(fs, 199);               // 残り101
+  state.now = DAY2 + MIN;          // 2日目：まだ先着
+  assert.equal((await buy("uT", "たろう", { random: 15 })).ok, true);
+  assert.equal(fs.plain("bankujiRounds/r1").capDay, "2026-10-27", "100枚以下になった日を記録");
+  assert.equal((await buy("uH", "はなこ", { random: 1 })).error, "closed_today");
+  assert.equal((await status("uH", "はなこ")).phase, "closedToday");
+  assert.equal((await apply("uH", "はなこ")).error, "closed_today", "その日は整理券も配らない");
+  // 次の日：整理券制（残り86枚→ 6×2＝12枚）
+  const DAY3 = DAY2 + 86400000;
+  state.now = DAY3 + 10 * MIN;     // 8:10
+  const before = await status("uH", "はなこ");
+  assert.equal(before.mode, "pass"); assert.equal(before.phase, "needPass"); assert.equal(before.pass.state, "before"); assert.equal(before.pass.openMs, DAY3 + 30 * MIN); assert.equal(before.pass.count, 12);
+  assert.equal((await apply("uH", "はなこ")).error, "apply_not_open");
+  assert.equal((await buy("uH", "はなこ", { random: 1 })).error, "pass_pending");
+  state.now = DAY3 + 30 * MIN;     // 8:30
+  assert.equal((await status("uH", "はなこ")).pass.state, "canApply");
+  assert.equal((await buy("uH", "はなこ", { random: 1 })).error, "no_pass", "整理券がなければ買えない");
+  const ids = Array.from({ length: 14 }, (_, i) => `u${i}`);
+  ids.forEach((n, i) => fs.putP(`users/${n}`, { uid: `id${i}`, name: n, coins: 5000 }));
+  const got = [];
+  for (let i = 0; i < 14; i++) { const r = await apply(`id${i}`, ids[i]); got.push(r.ok ? "ok" : r.error); }
+  assert.deepEqual(got, [...Array(12).fill("ok"), "passes_gone", "passes_gone"], "先着12人まで");
+  const pass = fs.plain("bankujiPasses/r1_2026-10-28");
+  assert.equal(pass.count, 12); assert.equal(pass.winners.length, 12); assert.equal(pass.winners[0], "id0");
+  assert.equal((await apply("id0", "u0")).already, true, "二重にもらえない（枚数も減らない）");
+  assert.equal(fs.plain("bankujiPasses/r1_2026-10-28").winners.length, 12);
+  assert.equal((await status("id0", "u0")).pass.state, "won"); assert.equal((await status("id0", "u0")).phase, "selling");
+  assert.equal((await status("uH", "はなこ")).pass.state, "gone");
+  const r = await buy("id0", "u0", { random: 15 });
+  assert.equal(r.ok, true); assert.equal(r.remaining, 71);
+  assert.equal((await buy("id13", "u13", { random: 1 })).error, "no_pass", "もらえなかった人は買えない");
+  // 完売するまで毎日：さらに次の日も 8:30 から配る
+  state.now = DAY3 + 86400000 + 30 * MIN;
+  assert.equal((await apply("id13", "u13")).ok, true);
+  assert.equal(fs.plain("bankujiPasses/r1_2026-10-29").count, 5 * 2, "その朝の残り71枚→ 5×2＝10枚");
+});
+
+test("整理券：読み書きの回数（配る＝その日の書類の書き込み1回・もらえたときだけ。状態＝メモリ5秒）／軽い更新に整理券の残りが入る", async () => {
+  const { fs, state, apply, call } = setup({ random: rngOf(6) });
+  seedSold(fs, 215, null, { capDay: "2026-10-26" });
+  state.now = DAY2 + 30 * MIN;
+  const c0 = fs.counts.commit;
+  assert.equal((await apply("uT", "たろう")).ok, true);
+  assert.equal(fs.counts.commit, c0 + 1);
+  assert.equal((await apply("uT", "たろう")).already, true); assert.equal(fs.counts.commit, c0 + 1, "もらい済みは書かない");
+  const l = await call("uH", "はなこ", "bankujiLeft");
+  assert.equal(l.mode, "pass"); assert.equal(l.passCount, 12); assert.equal(l.passLeft, 11);
 });
 
 test("ラストワン賞：最後の1枚を買った人だけがもらえる。そのとき売り切れ（done）になり、買えなくなる。もらう景品は1回だけ", async () => {
   const { fs, state, buy, apply, status } = setup({ random: rngOf(8) });
   seedSold(fs, 285);               // 残り15、箱には14本
-  state.now = DAY2 + MIN; await apply("uT", "たろう");
-  state.now = DAY2 + 31 * MIN;
+  state.now = DAY2 + 31 * MIN; await apply("uT", "たろう");
   const r = await buy("uT", "たろう", { random: 15 });
   assert.equal(r.ok, true); assert.equal(r.lastOne, true); assert.equal(r.results.filter((x) => x.id === "L").length, 1);
   assert.equal(r.results.filter((x) => x.id !== "L").length, 14);
@@ -211,8 +250,7 @@ test("ラストワン賞：最後の1枚を買った人だけがもらえる。�
 test("ラストワン賞の「全5社5株」も、買った瞬間にゆう株へ自動で入る（すでに持っている株には足される）。当たった株の景品も同じ", async () => {
   const { fs, state, buy, apply } = setup({ random: rngOf(8), users: { "たろう": { uid: "uT", name: "たろう", coins: 5000, stocks: { YGM: { qty: 2, cost: 400 } } } } });
   seedSold(fs, 285);
-  state.now = DAY2 + MIN; await apply("uT", "たろう");
-  state.now = DAY2 + 31 * MIN;
+  state.now = DAY2 + 31 * MIN; await apply("uT", "たろう");
   const r = await buy("uT", "たろう", { random: 15 });
   assert.equal(r.lastOne, true);
   const user = fs.plain("users/たろう");
