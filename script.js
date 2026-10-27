@@ -52,7 +52,7 @@ import { inviteInit } from "./yuinvite.js?v=20261021-invite1";
 /* 🌈 確変台の当選者（管理者だけ） */
 import { kakuWinnersInit, kakuWinnersOpen, kakuWinnersReset } from "./yukakuwinners.js?v=20261026-grant1";
 import { keshiEnrollInit, keshiEnrollOpen, keshiEnrollReset } from "./yukeshi-admin.js?v=20261026-ltd10";
-import { economyAdminInit, economyAdminOpen, economyAdminReset } from "./yueconomy-admin.js?v=20261024-econ2";
+import { economyAdminInit, economyAdminOpen, economyAdminReset } from "./yueconomy-admin.js?v=20261027-prize1";
 
 import {
   getFirestore, initializeFirestore, collection, addDoc, getDocs, getDoc, doc, setDoc,

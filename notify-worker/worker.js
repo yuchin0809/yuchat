@@ -522,7 +522,7 @@ export async function handleAdminAction(deps, callerUid, body) {
 
   const action = typeof body?.action === "string" ? body.action : "";
   const uid = typeof body?.uid === "string" ? body.uid : "";
-  const noUidActions = ["listUsers", "notifyAnnouncement", "renameUserRefs", "transferList", "transferApprove", "transferReject", "kakuWinners", "keshiLeagueEnroll", "economyReport", "grantKakuTicket"];
+  const noUidActions = ["listUsers", "notifyAnnouncement", "renameUserRefs", "transferList", "transferApprove", "transferReject", "kakuWinners", "keshiLeagueEnroll", "economyReport", "grantKakuTicket", "bankujiPrize"];
   if (!noUidActions.includes(action) && !UID_PATTERN.test(uid)) return { status: 400, error: "invalid_uid" };
 
   try {
@@ -544,6 +544,7 @@ export async function handleAdminAction(deps, callerUid, body) {
       case "keshiLeagueEnroll": return await adminKeshiLeagueEnroll(deps, callerUid, body);
       case "economyReport": return await adminEconomyReport(deps);
       case "grantKakuTicket": return await adminGrantKakuTicket(deps, callerUid, uid, body);
+      case "bankujiPrize": return await adminBankujiPrize(deps, callerUid, body);
       case "transferList": return await adminTransferList(deps);
       case "transferApprove": return await adminTransferApprove(deps, callerUid, body);
       case "transferReject": return await adminTransferReject(deps, callerUid, body);
@@ -1068,6 +1069,61 @@ async function adminGrantKakuTicket(deps, callerUid, uid, body) {
     await writeAuditLog(deps, { type: "grantKakuTicket", byUid: callerUid, byName: callerDocs.length === 1 ? callerDocs[0].id : "", all, targetUid: all ? "" : uid, targetName: all ? "" : targets[0].name, count, users: tally.granted, grantId });
   }
   return { ok: true, all, count, name: all ? "" : targets[0].name, ...tally, total: targets.length };
+}
+
+/* 管理者：ゆう番くじの景品（A〜H賞）の取り消し（くじに戻す）。
+   ・list：その景品を持っている人（くじで引いた人）と、ゆうマートに出品中のものを返す。全員の券の書類を1回読む（管理者が押したときだけ）。
+   ・revoke：uid・n（その景品を引いた券の番号）を指定。その景品を持ちものから消し、券の番号を「売れていない」に戻し、景品を箱の残り（left）に戻す。
+     券代（1枚 200 コイン）は、持ち主に返す（refund: false で返さない）。ゆうマートで買った景品（bt）・使った景品・出品中の景品・完売後は取り消せない（先に解決する）。
+     持ちものの書類・くじの書類・持ち主のコイン・操作の記録は、1回の commit（書類は更新時刻の条件つき）。 */
+async function adminBankujiPrize(deps, callerUid, body) {
+  const B = BANKUJI, fs = deps.firestore, prizeId = typeof body?.prizeId === "string" ? body.prizeId : "A";
+  if (!B.prizes.some((p) => p.id === prizeId)) return { status: 400, error: "invalid_prize" };
+  const roundPath = bankujiRoundPath();
+  if (body?.mode !== "revoke") {
+    const [entries, mcur] = await Promise.all([fs.query("bankujiEntries", []), martLoad(deps)]);
+    const holders = [];
+    entries.forEach((e) => { (Array.isArray(e.data.prizes) ? e.data.prizes : []).forEach((r) => { if (r && r.id === prizeId) holders.push({ uid: String(e.data.uid || ""), name: String(e.data.name || ""), n: r.n, at: Number(r.at) || 0, bought: !!r.bt, used: Number(r.used) > 0 }); }); });
+    const listed = mcur.m.L.filter((L) => L.k === "prize" && L.pid === prizeId).map((L) => ({ id: L.i, seller: L.n, sellerUid: L.u, n: L.pz && L.pz.n }));
+    return { ok: true, prizeId, holders, listed };
+  }
+  const uid = typeof body?.uid === "string" ? body.uid : "", n = Number(body?.n), refund = body?.refund !== false;
+  if (!UID_PATTERN.test(uid) || !Number.isInteger(n) || n < 0 || n >= B.pool) return { status: 400, error: "bad_request" };
+  const docs = await findUserDocsByUid(fs, uid);
+  if (docs.length !== 1) return { status: 409, error: docs.length === 0 ? "user_not_found" : "multiple_user_docs" };
+  const name = docs[0].id, entryPath = `bankujiEntries/${B.round}_${uid}`;
+  const mcur = await martLoad(deps);
+  if (mcur.m.L.some((L) => L.k === "prize" && L.pid === prizeId && L.pz && L.pz.n === n)) return { status: 409, error: "listed" };   // ゆうマートに出品中（先に取り下げさせる）
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const [entryRaw, roundRaw] = await Promise.all([fs.getRaw(entryPath), fs.getRaw(roundPath)]);
+    if (!entryRaw || !roundRaw) return { status: 409, error: "not_found" };
+    const entry = decodeFields(entryRaw.fields), round = decodeFields(roundRaw.fields);
+    const prizes = Array.isArray(entry.prizes) ? entry.prizes : [];
+    const rec = prizes.find((r) => r && r.id === prizeId && r.n === n);
+    if (!rec) return { status: 409, error: "not_found" };
+    if (rec.bt) return { status: 409, error: "bought" };
+    if (Number(rec.used) > 0) return { status: 409, error: "used" };
+    if (round.status === "done") return { status: 409, error: "sold_out" };
+    const bits = bankujiBitsOf(round);
+    if (bits[n] !== "1") return { status: 409, error: "ticket_not_sold" };
+    const nextBits = bits.slice(0, n) + "0" + bits.slice(n + 1);
+    const left = { ...bankujiInitialLeft(), ...(round.left && typeof round.left === "object" ? round.left : {}) };
+    delete left.L;
+    left[prizeId] = (Number(left[prizeId]) || 0) + 1;
+    const roundFields = { soldBits: nextBits, sold: Math.max(0, (Number(round.sold) || 0) - 1), left };
+    const entryFields = { prizes: prizes.filter((r) => r !== rec), tickets: (Array.isArray(entry.tickets) ? entry.tickets : []).filter((t) => t !== n) };
+    const writes = [
+      { update: { name: fs.docName(entryPath), fields: encodeFields(entryFields) }, updateMask: { fieldPaths: Object.keys(entryFields) }, currentDocument: { updateTime: entryRaw.updateTime } },
+      { update: { name: fs.docName(roundPath), fields: encodeFields(roundFields) }, updateMask: { fieldPaths: Object.keys(roundFields) }, currentDocument: { updateTime: roundRaw.updateTime } },
+      { update: { name: fs.docName(`adminAuditLogs/${crypto.randomUUID().replace(/-/g, "")}`), fields: encodeFields({ action: "bankujiRevoke", prizeId, ticket: n, targetUid: uid, targetName: name, refund: refund ? B.price : 0, byUid: callerUid, result: "ok" }) }, updateTransforms: [{ fieldPath: "at", setToServerValue: "REQUEST_TIME" }], currentDocument: { exists: false } }
+    ];
+    if (refund) writes.unshift(martIncCoins(deps, name, B.price));
+    try { await fs.commit(writes); }
+    catch (error) { if (isRetryableCommitError(error)) continue; throw error; }
+    lotteryDocCache.delete(roundPath);
+    return { ok: true, prizeId, name, ticket: n, refund: refund ? B.price : 0 };
+  }
+  return { status: 409, error: "busy" };
 }
 
 async function adminAdjustCoins(deps, callerUid, uid, body) {
