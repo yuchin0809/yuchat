@@ -3,7 +3,7 @@
    ・何も書き換えない。読み取りは、開いたとき1回と「最新を読み込む」のとき（Worker 側で十数回ぶんの読み取り）。 */
 
 let cfg = null;
-const S = { data: null, busy: false, msg: "", loaded: false };
+const S = { data: null, busy: false, msg: "", loaded: false, prize: { id: "A", data: null, busy: false, msg: "" } };
 let stylesDone = false;
 
 export function economyAdminInit(config) { cfg = config; }
@@ -29,6 +29,41 @@ function verdict(t) {
   if (t.level === "mid") return { cls: "mid", text: `🟡 ゆるやかなインフレ：${v}` };
   if (t.level === "deflation") return { cls: "def", text: `🔵 デフレ気味：${v}` };
   return { cls: "low", text: `🟢 安定：${v}` };
+}
+
+/* 🎊 ゆう番くじの景品の取り消し（くじに戻す）：その景品を持っている人を探して、取り消す。券の番号は売れていない状態に戻り、景品は箱に戻り、券代（200コイン）は持ち主に返す */
+const PRIZE_ERR = { listed: "ゆうマートに出品中です（先に出品を取り下げさせてください）", bought: "ゆうマートで買った景品なので、取り消せません", used: "すでに使った景品なので、取り消せません", sold_out: "完売したので、取り消せません", ticket_not_sold: "券の番号が売れた状態ではありません", not_found: "その景品が見つかりません（すでに取り消した・動かした）", busy: "ほかの操作と重なりました。もう一度お試しください" };
+function prizeHtml(esc) {
+  const P = S.prize, d = P.data;
+  let body = "";
+  if (d) {
+    const rows = d.holders.map((h) => `<div class="yec-pz"><span><b>${esc(h.name)}</b>　券 ${h.n + 1} 番　${h.at ? esc(new Date(h.at + 9 * 3600000).toISOString().replace("T", " ").slice(5, 16)) : ""}${h.bought ? "（マートで買った）" : ""}${h.used ? "（使用ずみ）" : ""}</span>
+      <button type="button" class="yec-btn yec-danger" data-ec="prize-revoke" data-uid="${esc(h.uid)}" data-n="${h.n}" data-name="${esc(h.name)}" ${P.busy || h.bought || h.used ? "disabled" : ""}>取り消してくじに戻す</button></div>`).join("");
+    const listed = d.listed.map((l) => `<div class="yec-note">🏪 ゆうマートに出品中：${esc(l.seller)}（出品の取り下げは、ゆうマートの管理者欄の「取り下げさせる」）</div>`).join("");
+    body = `${rows || `<p class="yec-note">${esc(d.prizeId)}賞を持っている人は、いません。</p>`}${listed}`;
+  }
+  return `<h4>🎊 ゆう番くじ：景品の取り消し（くじに戻す）</h4>
+    <p class="yec-note">景品を持っている人を探して、取り消します。券の番号は売れていない状態に戻り、景品は箱に戻って、ほかの人が引けるようになります。券代（200コイン）は持ち主に返します。</p>
+    <div class="yec-row"><select id="yecPrizeId">${["A", "B", "C", "D", "E", "F", "G", "H"].map((x) => `<option value="${x}"${P.id === x ? " selected" : ""}>${x}賞</option>`).join("")}</select> <button type="button" class="yec-btn" data-ec="prize-find" ${P.busy ? "disabled" : ""}>${P.busy && !d ? "探しています…" : "持っている人を探す"}</button></div>
+    ${body}${P.msg ? `<p class="${P.msg.startsWith("✅") ? "yec-ok" : "yec-err"}">${esc(P.msg)}</p>` : ""}`;
+}
+async function prizeFind() {
+  const sel = document.getElementById("yecPrizeId"); if (sel) S.prize.id = sel.value;
+  S.prize.busy = true; S.prize.msg = ""; render();
+  try { S.prize.data = await cfg.callAdmin("bankujiPrize", { prizeId: S.prize.id }); }
+  catch (error) { console.error("景品の検索エラー:", error); S.prize.msg = "読み込めませんでした。もう一度お試しください。"; }
+  S.prize.busy = false; render();
+}
+async function prizeRevoke(t) {
+  const name = t.dataset.name, n = Number(t.dataset.n);
+  if (!confirm(`${name} さんの ${S.prize.id}賞（券 ${n + 1} 番）を取り消して、くじに戻します。\n券代 200 コインは ${name} さんに返します。よろしいですか？`)) return;
+  S.prize.busy = true; S.prize.msg = ""; render();
+  try {
+    const r = await cfg.callAdmin("bankujiPrize", { mode: "revoke", prizeId: S.prize.id, uid: t.dataset.uid, n });
+    S.prize.msg = `✅ ${r.name} さんの ${r.prizeId}賞を取り消して、くじに戻しました（券 ${r.ticket + 1} 番は売れていない状態に戻り、${r.refund} コインを返しました）。`;
+    S.prize.data = await cfg.callAdmin("bankujiPrize", { prizeId: S.prize.id });
+  } catch (error) { console.error("景品の取り消しエラー:", error); S.prize.msg = PRIZE_ERR[error && error.code] || "うまくいきませんでした。もう一度お試しください。"; }
+  S.prize.busy = false; render();
 }
 
 /* 今日の13:00の処理（株価・利息）が済んでいるか。済んでいなければ、見守りが何をしたかも出す */
@@ -86,14 +121,17 @@ function render() {
     <h4>宝くじの収支（還元率が 100% を超えると、コインが増える側）</h4>
     ${lot ? `<table class="yec-table"><thead><tr><th>抽選日</th><th>名前</th><th>売上</th><th>賞金</th><th>還元率</th></tr></thead><tbody>${lot}</tbody></table>` : `<p class="yec-note">記録のある回がありません。</p>`}
     ${bk ? `<h4>ゆう番くじ</h4><p class="yec-note">売れた枚数：${fmt(bk.sold)} / ${fmt(bk.pool)}（売上 ${fmt(bk.sales)} コイン）／ コイン景品：${fmt(bk.coinPrizes)} コイン／ 株の景品：B賞 ${bk.stockPrizes.B}本（25株）・G賞 ${bk.stockPrizes.G}本（1〜3株）</p>` : ""}
+    ${prizeHtml(esc)}
     ${(d.notes || []).map((n) => `<p class="yec-note">※${esc(n)}</p>`).join("")}
     ${S.msg ? `<p class="yec-err">${esc(S.msg)}</p>` : ""}`;
 }
 
 document.addEventListener("click", (event) => {
   const t = event.target.closest?.("[data-ec]");
-  if (!t || !document.getElementById("userManageEconomy")?.contains(t) || S.busy) return;
+  if (!t || !document.getElementById("userManageEconomy")?.contains(t) || S.busy || S.prize.busy) return;
   if (t.dataset.ec === "load") load();
+  else if (t.dataset.ec === "prize-find") prizeFind();
+  else if (t.dataset.ec === "prize-revoke") prizeRevoke(t);
 });
 
 function ensureStyles() {
@@ -111,6 +149,9 @@ function ensureStyles() {
   #userManageEconomy .yec-band { display: grid; grid-template-columns: 90px 1fr 56px; gap: 6px; align-items: center; font-size: 12px; margin: 3px 0; } #userManageEconomy .yec-band i { display: block; height: 10px; border-radius: 5px; background: linear-gradient(90deg, #ffb300, #ff2d78); min-width: 2px; } #userManageEconomy .yec-band em { font-style: normal; text-align: right; }
   #userManageEconomy .yec-spark { width: 100%; max-width: 320px; height: 46px; display: block; }
   #userManageEconomy .yec-table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 6px 0; font-variant-numeric: tabular-nums; } #userManageEconomy .yec-table th, #userManageEconomy .yec-table td { padding: 4px 5px; border-bottom: 1px solid #eee; text-align: right; } #userManageEconomy .yec-table th:first-child, #userManageEconomy .yec-table td:first-child { text-align: left; } #userManageEconomy .yec-table td:nth-child(2) { text-align: left; }
-  #userManageEconomy .yec-up { color: #c0392b; font-weight: 800; }`;
+  #userManageEconomy .yec-up { color: #c0392b; font-weight: 800; }
+  #userManageEconomy .yec-row { display: flex; gap: 6px; align-items: center; margin: 6px 0; } #userManageEconomy select { padding: 6px; border: 1px solid #ccc; border-radius: 8px; }
+  #userManageEconomy .yec-pz { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; background: #f6f3ff; border-radius: 10px; padding: 8px 10px; margin: 4px 0; font-size: 13px; }
+  #userManageEconomy .yec-danger { background: #c0392b; } #userManageEconomy .yec-btn:disabled { opacity: .5; cursor: default; } #userManageEconomy .yec-ok { color: #2c8a52; font-weight: 800; font-size: 13px; }`;
   document.head.appendChild(el);
 }
