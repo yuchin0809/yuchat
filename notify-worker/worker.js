@@ -3497,15 +3497,15 @@ async function lotteryBuy(deps, uid, body) {
    🎊 ゆう番くじ（ゆうくじ売り場の「ゆう番くじ売り場」）
    ・総数 300 枚・1枚 200 コイン。300枚の一覧から、自分で選んで買う。景品は買った瞬間に決まる（サーバーだけが決める）。
    ・1人あたり1日（日本時間 0:00 区切り）15枚まで。
-   ・初日（発売日）は先着。購入前の残りが 101 枚以上のあいだだけ買える（残りが 100 枚以下になったら、その日の販売は終了。
-     残り 101 枚のときに買い始めた人は15枚まで買える＝そのあとの人は買えない）。
-   ・2日目以降は整理券制：毎朝 8:00〜8:30 に希望者が申し込み、8:30 に抽選（当たった人だけ、その日の終わりまで買える）。
-     当たりの人数は「残り枚数 ÷ 15 を切り上げた数 × 2」（申込が少なければ全員）。抽選は最初に見た人の呼び出しで1回だけ行う（二重に決まらない）。
+   ・残りが 101 枚以上のあいだは、毎日先着（整理券なし）。購入前の残りが 101 枚以上のときだけ買える（残りが 100 枚以下になったら、その日の販売は終了。
+     残り 101 枚のときに買い始めた人は15枚まで買える＝そのあとの人は買えない）。100 枚以下になった最初の日は capDay に記録する。
+   ・次の日からは整理券制（完売するまで毎日）：毎朝 8:30 から、先着で整理券を配る（抽選はなし）。持っている人だけ、その日の終わりまで買える。
+     配る枚数は「その朝の残り枚数 ÷ 15 を切り上げた数 × 2」。整理券は bankujiPasses/{回}_{日付} の winners に、先着順で1人ずつ足す（更新時刻の条件つき＝枚数を超えて配らない）。
    ・景品の決め方：箱に入っている景品の残り本数から、枚数ぶんをランダムに引く。いちばん最後の1枚だけが「ラストワン賞」。
      （選んだ番号と景品は関係がない。どの番号を選んでも、残りの景品から公平に引く）
    ・景品は、コインとゆう株は買った瞬間に渡す。確変台の予約権・会社の運営権・消しバトの限定品は「もちもの」に記録する（使える機能は順次）。
-   ・Firestore：bankujiRounds（売れた番号の表と景品の残り本数）・bankujiEntries（買った人ごとの券と景品）・bankujiPasses（整理券の抽選結果）・
-     bankujiApply（整理券の申込）。すべて Worker（サービスアカウント）だけが読み書きする（ブラウザからは読めない）。
+   ・Firestore：bankujiRounds（売れた番号の表と景品の残り本数・capDay）・bankujiEntries（買った人ごとの券と景品）・bankujiPasses（その日の整理券の枚数と配った人）。
+     すべて Worker（サービスアカウント）だけが読み書きする（ブラウザからは読めない）。
    ・購入は「読み取り3回（残高・自分の券・売れた番号の表）＋書き込み3件の commit 1回」。同時に買われたら、どちらか一方だけが成功して、もう一方は「もう一度」。
    ・販売の一時停止：worldConfig/bankuji（最上位管理者だけが変更）。
    ========================================================= */
@@ -3517,7 +3517,7 @@ export const BANKUJI = {
   perDay: 15,
   stopRemaining: 100,                                   // 初日：購入前の残りがこれ以下なら、その日の販売は終了
   saleStartMs: Date.UTC(2026, 9, 25, 23, 0, 0),         // 2026-10-26（月）8:00 JST ＝ 2026-10-25 23:00 UTC
-  applyOpen: [8, 0], applyClose: [8, 30],               // 整理券の申込（日本時間）
+  passOpen: [8, 30],                                    // 整理券の配布を始める時刻（日本時間・毎日）
   passFactor: 2,
   rightDays: 60,                                        // 確変台の予約権の有効日数
   lastStockQty: 5,                                      // ラストワン賞の、全5社それぞれの株数
@@ -3536,8 +3536,11 @@ export const BANKUJI = {
 const BANKUJI_GEAR_SLOTS = ["body", "edge", "sole", "weight"];
 const BANKUJI_COLOR_CODES = ["gold", "silver", "rainbow", "blackgold"];
 export const bankujiFirstDay = () => jstDateString(BANKUJI.saleStartMs);
-export const bankujiMode = (day) => (day === bankujiFirstDay() ? "open" : "pass");
-export const bankujiApplyWindow = (day) => ({ openMs: jstTimeMs(day, ...BANKUJI.applyOpen), closeMs: jstTimeMs(day, ...BANKUJI.applyClose) });
+/* その日の販売の仕組み：残りが 101 枚以上＝先着（open）。100 枚以下になった日＝その日の販売は終了（capped）。次の日から＝整理券制（pass。完売まで毎日）。
+   100 枚以下になった最初の日は、くじの書類の capDay（記録がなければ発売日） */
+export const bankujiModeOf = (round, remaining, day) => (remaining > BANKUJI.stopRemaining ? "open" : (round && round.capDay ? String(round.capDay) : bankujiFirstDay()) >= day ? "capped" : "pass");
+export const bankujiPassOpenMs = (day) => jstTimeMs(day, ...BANKUJI.passOpen);
+export const bankujiPassCount = (remaining) => BANKUJI.passFactor * Math.ceil(Math.max(0, remaining) / BANKUJI.perDay);
 const bankujiInitialLeft = () => Object.fromEntries(BANKUJI.prizes.map((p) => [p.id, p.count]));
 const bankujiPrizeById = (id) => (id === BANKUJI.last.id ? BANKUJI.last : BANKUJI.prizes.find((p) => p.id === id));
 /* お客さんに見せる景品の一覧（名前・本数・説明） */
@@ -3601,8 +3604,7 @@ async function bankujiUse(deps, uid, body) {
 }
 
 let bankujiPauseCache = { value: null, at: 0 };
-const bankujiPassCache = new Map();
-export function resetBankujiCacheForTest() { bankujiPauseCache = { value: null, at: 0 }; bankujiPassCache.clear(); }
+export function resetBankujiCacheForTest() { bankujiPauseCache = { value: null, at: 0 }; }
 
 async function bankujiGetPaused(deps, maxAgeMs = 60000) {
   const now = deps.now();
@@ -3627,33 +3629,14 @@ async function bankujiSetPaused(deps, uid, body) {
   return { ok: true, paused };
 }
 
-/* その日の整理券の抽選（申込の締切のあと。最初に呼ばれたときに1回だけ決めて、書類に残す。ほかの人が先に決めていたらそれに従う） */
-async function bankujiEnsurePass(deps, day, remaining) {
-  const R = BANKUJI.round, path = `bankujiPasses/${R}_${day}`;
-  const cached = bankujiPassCache.get(path);
-  if (cached) return cached;
-  let doc = await deps.firestore.get(path);
-  if (!doc) {
-    const apps = await deps.firestore.query("bankujiApply", [["round", "EQUAL", R], ["day", "EQUAL", day]]);
-    const uids = [...new Set(apps.map((a) => a.data.uid).filter(Boolean))];
-    for (let i = uids.length - 1; i > 0; i--) { const j = Math.floor(deps.random() * (i + 1)); [uids[i], uids[j]] = [uids[j], uids[i]]; }
-    const count = Math.min(uids.length, BANKUJI.passFactor * Math.ceil(Math.max(0, remaining) / BANKUJI.perDay));
-    const data = { round: R, day, drawnAtMs: deps.now(), applicants: uids.length, count, winners: uids.slice(0, count) };
-    doc = (await deps.firestore.createIfAbsent(path, data)) ? data : await deps.firestore.get(path);
-  }
-  if (doc) bankujiPassCache.set(path, doc);
-  return doc || { winners: [], count: 0, applicants: 0 };
-}
-
+/* 整理券の状態（整理券制の日だけ）。配る数と残りは、その日の書類（bankujiPasses）から。書類は Worker のメモリに5秒だけ置く */
 async function bankujiPassState(deps, uid, day, now, remaining) {
-  const R = BANKUJI.round, w = bankujiApplyWindow(day);
-  const info = { openMs: w.openMs, closeMs: w.closeMs };
-  const applied = async () => !!(await deps.firestore.get(`bankujiApply/${R}_${day}_${uid}`));
-  if (now < w.openMs) return { ...info, state: "before" };
-  if (now < w.closeMs) return { ...info, state: (await applied()) ? "applied" : "canApply" };
-  const pass = await bankujiEnsurePass(deps, day, remaining);
-  if (Array.isArray(pass.winners) && pass.winners.includes(uid)) return { ...info, state: "won", count: pass.count, applicants: pass.applicants };
-  return { ...info, state: (await applied()) ? "lost" : "none", count: pass.count, applicants: pass.applicants };
+  const openMs = bankujiPassOpenMs(day);
+  if (now < openMs) return { state: "before", openMs, count: bankujiPassCount(remaining), left: bankujiPassCount(remaining) };
+  const doc = await lotteryCachedGet(deps, `bankujiPasses/${BANKUJI.round}_${day}`, 5000);
+  const count = doc ? Number(doc.count) || 0 : bankujiPassCount(remaining), winners = Array.isArray(doc?.winners) ? doc.winners : [], left = Math.max(0, count - winners.length);
+  if (winners.includes(uid)) return { state: "won", openMs, count, left };
+  return { state: left > 0 ? "canApply" : "gone", openMs, count, left };
 }
 
 const bankujiRoundPath = () => `bankujiRounds/${BANKUJI.round}`;
@@ -3668,8 +3651,14 @@ async function bankujiLeft(deps) {
   const now = deps.now(), B = BANKUJI;
   if (now < B.saleStartMs) return { ok: true, phase: "before" };
   const round = await lotteryCachedGet(deps, bankujiRoundPath(), 5000);
-  const sold = bankujiBitsOf(round);
-  return { ok: true, serverNowMs: now, sold, remaining: B.pool - bankujiCountSold(sold), left: bankujiLeftOf(round), stopRemaining: B.stopRemaining, done: round?.status === "done" };
+  const sold = bankujiBitsOf(round), remaining = B.pool - bankujiCountSold(sold), day = jstDateString(now), mode = bankujiModeOf(round, remaining, day);
+  const out = { ok: true, serverNowMs: now, sold, remaining, left: bankujiLeftOf(round), stopRemaining: B.stopRemaining, done: round?.status === "done", mode };
+  if (mode === "pass" && now >= bankujiPassOpenMs(day)) {   // 整理券の残り（その日の書類を、メモリに5秒だけ置いて読む）
+    const doc = await lotteryCachedGet(deps, `bankujiPasses/${B.round}_${day}`, 5000);
+    const count = doc ? Number(doc.count) || 0 : bankujiPassCount(remaining);
+    out.passCount = count; out.passLeft = Math.max(0, count - (Array.isArray(doc?.winners) ? doc.winners.length : 0));
+  }
+  return out;
 }
 
 async function bankujiStatus(deps, uid, body) {
@@ -3682,18 +3671,19 @@ async function bankujiStatus(deps, uid, body) {
   }
   const paused = await bankujiGetPaused(deps);
   if (paused && !admin) return { ...head, phase: "paused" };
-  const day = jstDateString(now), mode = bankujiMode(day), R = B.round;
+  const day = jstDateString(now), R = B.round;
   const [round, entry, me] = await Promise.all([
     lotteryCachedGet(deps, bankujiRoundPath(), 8000),
     deps.firestore.get(`bankujiEntries/${R}_${uid}`),
     loadMyUser(deps.firestore, uid, body?.username)
   ]);
   const sold = bankujiBitsOf(round);
-  const remaining = B.pool - bankujiCountSold(sold);
+  const remaining = B.pool - bankujiCountSold(sold), mode = bankujiModeOf(round, remaining, day);
   const todayCount = entry?.dayKey === day ? Number(entry.dayCount) || 0 : 0;
   let phase, pass = null;
   if (remaining <= 0 || round?.status === "done") phase = "soldout";
-  else if (mode === "open") phase = remaining > B.stopRemaining ? "selling" : "closedToday";
+  else if (mode === "open") phase = "selling";
+  else if (mode === "capped") phase = "closedToday";
   else { pass = await bankujiPassState(deps, uid, day, now, remaining); phase = pass.state === "won" ? "selling" : "needPass"; }
   return {
     ...head, phase, mode, paused, price: B.price, pool: B.pool, perDay: B.perDay, prizes: bankujiPublicPrizes(),
@@ -3704,21 +3694,37 @@ async function bankujiStatus(deps, uid, body) {
   };
 }
 
+/* 整理券をもらう（整理券制の日の 8:30 から。先着順。配る枚数を超えては配らない＝書類の更新時刻の条件つきで1人ずつ足す）。
+   読み取り：くじの書類・その日の整理券の書類（1回ずつ）。書き込み：整理券の書類1回（もらえたときだけ） */
 async function bankujiApply(deps, uid, body) {
   const now = deps.now(), B = BANKUJI;
   if (now < B.saleStartMs) return { status: 409, error: "not_started" };
   if ((await bankujiGetPaused(deps)) && !slotIsTopAdmin(deps, uid)) return { status: 409, error: "paused" };
-  const day = jstDateString(now);
-  if (bankujiMode(day) === "open") return { status: 409, error: "no_pass_needed" };
-  const w = bankujiApplyWindow(day);
-  if (now < w.openMs) return { status: 409, error: "apply_not_open", openMs: w.openMs };
-  if (now >= w.closeMs) return { status: 409, error: "apply_closed" };
-  const round = await lotteryCachedGet(deps, bankujiRoundPath(), 8000);
-  if (round?.status === "done") return { status: 409, error: "sold_out" };
-  const me = await loadMyUser(deps.firestore, uid, body?.username);
-  if (me.error) return me.error;
-  const made = await deps.firestore.createIfAbsent(`bankujiApply/${B.round}_${day}_${uid}`, { round: B.round, day, uid, name: me.name, atMs: now });
-  return { ok: true, already: !made, drawMs: w.closeMs };
+  const day = jstDateString(now), round = await deps.firestore.get(bankujiRoundPath());
+  const remaining = B.pool - bankujiCountSold(bankujiBitsOf(round));
+  if (remaining <= 0 || round?.status === "done") return { status: 409, error: "sold_out" };
+  const mode = bankujiModeOf(round, remaining, day);
+  if (mode === "open") return { status: 409, error: "no_pass_needed" };
+  if (mode === "capped") return { status: 409, error: "closed_today" };
+  const openMs = bankujiPassOpenMs(day);
+  if (now < openMs) return { status: 409, error: "apply_not_open", openMs };
+  const fs = deps.firestore, path = `bankujiPasses/${B.round}_${day}`;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const raw = await fs.getRaw(path), d = raw ? decodeFields(raw.fields) : null;
+    const winners = Array.isArray(d?.winners) ? d.winners : [];
+    if (winners.includes(uid)) return { ok: true, already: true, left: Math.max(0, (Number(d.count) || 0) - winners.length) };
+    const count = d ? Number(d.count) || 0 : bankujiPassCount(remaining);   // その日の枚数は、最初に配った人が書く（その朝の残り枚数から）
+    if (winners.length >= count) return { status: 409, error: "passes_gone", count };
+    const next = [...winners, uid];
+    try {
+      await fs.commit([raw
+        ? { update: { name: fs.docName(path), fields: encodeFields({ winners: next }) }, updateMask: { fieldPaths: ["winners"] }, currentDocument: { updateTime: raw.updateTime } }
+        : { update: { name: fs.docName(path), fields: encodeFields({ round: B.round, day, count, winners: next, firstAtMs: now }) }, currentDocument: { exists: false } }]);
+    } catch (error) { if (isRetryableCommitError(error)) continue; throw error; }
+    lotteryDocCache.delete(path);
+    return { ok: true, already: false, left: Math.max(0, count - next.length), count };
+  }
+  return { status: 409, error: "busy" };
 }
 
 async function bankujiBuy(deps, uid, body) {
@@ -3734,7 +3740,7 @@ async function bankujiBuy(deps, uid, body) {
   } else count = Number(body?.random);
   if (!Number.isInteger(count) || count < 1 || count > B.perDay) return { status: 400, error: "bad_count" };
 
-  const day = jstDateString(now), mode = bankujiMode(day), R = B.round;
+  const day = jstDateString(now), R = B.round;
   const me = await loadMyUser(deps.firestore, uid, body?.username);
   if (me.error) return me.error;
   const meData = decodeFields(me.raw.fields);
@@ -3749,13 +3755,13 @@ async function bankujiBuy(deps, uid, body) {
   const bits = bankujiBitsOf(round);
   const remaining = B.pool - bankujiCountSold(bits);
   if (remaining <= 0 || round.status === "done") return { status: 409, error: "sold_out" };
-  if (mode === "open") {
-    if (remaining <= B.stopRemaining) return { status: 409, error: "closed_today" };
-  } else {
-    const w = bankujiApplyWindow(day);
-    if (now < w.closeMs) return { status: 409, error: "pass_pending", closeMs: w.closeMs };
-    const pass = await bankujiEnsurePass(deps, day, remaining);
-    if (!(Array.isArray(pass.winners) && pass.winners.includes(uid))) return { status: 409, error: "no_pass" };
+  const mode = bankujiModeOf(round, remaining, day);
+  if (mode === "capped") return { status: 409, error: "closed_today" };
+  if (mode === "pass") {
+    const openMs = bankujiPassOpenMs(day);
+    if (now < openMs) return { status: 409, error: "pass_pending", openMs };
+    const pass = await deps.firestore.get(`bankujiPasses/${R}_${day}`);
+    if (!(Array.isArray(pass?.winners) && pass.winners.includes(uid))) return { status: 409, error: "no_pass" };
   }
   const todayCount = entry.dayKey === day ? Number(entry.dayCount) || 0 : 0;
   if (todayCount + count > B.perDay) return { status: 409, error: "daily_limit", left: Math.max(0, B.perDay - todayCount) };
@@ -3803,7 +3809,7 @@ async function bankujiBuy(deps, uid, body) {
   const nextBits = next.join("");
   const soldNow = B.pool - (remaining - count);
   const gotLast = awards.some((a) => a.kind === "last");
-  const roundFields = { round: R, soldBits: nextBits, sold: soldNow, left, status: gotLast ? "done" : "selling", ...(gotLast ? { lastName: me.name, lastAtMs: now } : {}) };
+  const roundFields = { round: R, soldBits: nextBits, sold: soldNow, left, status: gotLast ? "done" : "selling", ...(gotLast ? { lastName: me.name, lastAtMs: now } : {}), ...(B.pool - soldNow <= B.stopRemaining && !round.capDay ? { capDay: day } : {}) };   // 100枚以下になった日を記録（その日の販売は終わり、次の日から整理券制）
   const entryFields = {
     uid, name: me.name, round: R,
     tickets: [...(Array.isArray(entry.tickets) ? entry.tickets : []), ...chosen],

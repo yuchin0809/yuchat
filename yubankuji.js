@@ -2,7 +2,7 @@
    🎊 ゆう番くじ売り場の画面（yuworld.js から呼ばれる）
 
    ・発売前（ふつうの人）：カウントダウンと、A賞・B賞・ラストワン賞のヒントだけ（くじの中身は発売日に発表）。
-   ・発売後：300枚の一覧から自分で選んで買う。1人1日15枚まで。初日は先着、2日目以降は整理券（毎朝 8:00〜8:30 に申込→抽選）。
+   ・発売後：300枚の一覧から自分で選んで買う。1人1日15枚まで。残りが101枚以上のあいだは先着、100枚以下になったら次の日から整理券制（完売まで毎朝 8:30 から先着で配る）。
    ・買ったあとは「券をめくる」演出（タップでめくる／スキップで全部いっぺんに）。景品は買った瞬間にサーバー（Worker）が決めていて、画面は見せるだけ。
    ・管理者だけ：発売前でも本物の売り場を「テスト」で見られる（コインは引かれず、結果もどこにも保存されない）。販売の一時停止・再開もできる。
    ・サーバーの書類（Firestore）には触れず、Worker の bankuji* アクションだけを呼ぶ。
@@ -146,34 +146,36 @@ async function pollLight() {
     const soldChanged = r.sold !== st.sold;
     st.left = r.left; st.remaining = r.remaining; st.sold = r.sold;
     paintLight();
+    if (r.passLeft != null && st.pass && st.pass.state === "canApply") {   // 整理券の残り（先着で配っているあいだ）
+      st.pass.left = r.passLeft; const el = $("#ybPassLeft"); if (el) el.textContent = fmt(r.passLeft);
+      if (r.passLeft <= 0) { load(); return; }
+    }
     if (soldChanged) {
       const had = picks.size;
       picks = new Set([...picks].filter((n) => st.sold[n] !== "1"));
       const grid = $("#ybGrid"); if (grid) { grid.innerHTML = gridHtml(st.phase === "selling"); refreshPicks(); }
       if (picks.size < had) setNote("選んだ券の一部が、先に売れてしまいました。");
     }
-    if (r.done || (st.mode === "open" && st.phase === "selling" && st.remaining <= (r.stopRemaining || 0))) load();   // 完売・その日の販売の終わりは、全体を読み直す
+    if (r.done || (r.mode && r.mode !== st.mode) || (st.mode === "open" && st.phase === "selling" && st.remaining <= (r.stopRemaining || 0))) load();   // 完売・その日の販売の終わりは、全体を読み直す
   } catch (_) { /* 次の回にもう一度 */ }
   finally { lightBusy = false; }
 }
 
 function gateHtml(test) {
   const p = st.pass;
-  if (test) return `<div class="yb-card yb-gate"><b>🧪 本番の流れ（テストなので何も起きません）</b><p>初日（${mmdd(st.saleStartMs)}）は先着。残りが100枚以下になると、その日の販売は終了。2日目からは毎朝 8:00〜8:30 に整理券に申し込み、当たった人だけが買えます。</p></div>`;
+  if (test) return `<div class="yb-card yb-gate"><b>🧪 本番の流れ（テストなので何も起きません）</b><p>残りが101枚以上のあいだは、毎日先着で買えます。残りが100枚以下になると、その日の販売は終了。次の日からは、完売まで毎朝 8:30 から整理券を先着で配り、持っている人だけが買えます。</p></div>`;
   if (st.phase === "soldout") return `<div class="yb-card yb-gate"><b>🎉 完売しました！</b><p>ラストワン賞は ${st.lastOne ? `<b>${ctx.esc(st.lastOne.name)}</b> さん` : "出ました"}！</p></div>`;
-  if (st.phase === "closedToday") return `<div class="yb-card yb-gate"><b>⏰ 今日の販売は終了しました</b><p>明日からは整理券制です。毎朝 8:00〜8:30 に「整理券をもらう」で申し込み、当たった人だけが、その日にくじを買えます。</p></div>`;
+  if (st.phase === "closedToday") return `<div class="yb-card yb-gate"><b>⏰ 今日の販売は終了しました</b><p>残りが100枚以下になったので、明日からは整理券制です。完売まで毎朝 8:30 から、整理券を先着で配ります（持っている人だけが、その日にくじを買えます）。</p></div>`;
   if (st.phase === "needPass" && p) {
-    if (p.state === "before") return `<div class="yb-card yb-gate"><b>🎫 整理券の申込は ${hhmm(p.openMs)} から</b><p>${hhmm(p.openMs)}〜${hhmm(p.closeMs)} に申し込むと、${hhmm(p.closeMs)} の抽選で当たった人だけが、今日くじを買えます。</p><div class="yb-count" id="ybGateCount" data-to="${p.openMs}"></div></div>`;
-    if (p.state === "canApply") return `<div class="yb-card yb-gate"><b>🎫 整理券の申込中！</b><p>${hhmm(p.closeMs)} までに申し込むと、抽選で当たった人だけが今日くじを買えます。</p><button type="button" class="yb-buy" id="ybApply">整理券をもらう（申し込む）</button><div class="yb-count" id="ybGateCount" data-to="${p.closeMs}"></div></div>`;
-    if (p.state === "applied") return `<div class="yb-card yb-gate"><b>✅ 申し込みました</b><p>${hhmm(p.closeMs)} の抽選のあと、ここで結果が分かります。</p><div class="yb-count" id="ybGateCount" data-to="${p.closeMs}"></div></div>`;
-    if (p.state === "lost") return `<div class="yb-card yb-gate"><b>😢 今回は整理券が当たりませんでした</b><p>（${fmt(p.applicants)}人の申込から ${fmt(p.count)}人に配られました）明日 8:00〜8:30 にまた申し込めます。</p></div>`;
-    return `<div class="yb-card yb-gate"><b>🎫 今日の整理券は締め切りました</b><p>明日 8:00〜8:30 に申し込めます。</p></div>`;
+    const passLeft = `<p>今日の整理券：先着 ${fmt(p.count)}枚（残り <b id="ybPassLeft">${fmt(p.left)}</b>枚）</p>`;
+    if (p.state === "before") return `<div class="yb-card yb-gate"><b>🎫 整理券は ${hhmm(p.openMs)} から配ります</b><p>残りが100枚以下なので、整理券制です。${hhmm(p.openMs)} から先着で配ります。持っている人だけが、今日くじを買えます。</p>${passLeft}<div class="yb-count" id="ybGateCount" data-to="${p.openMs}"></div></div>`;
+    if (p.state === "canApply") return `<div class="yb-card yb-gate"><b>🎫 整理券を配布中！（先着）</b>${passLeft}<button type="button" class="yb-buy" id="ybApply">整理券をもらう</button></div>`;
+    return `<div class="yb-card yb-gate"><b>🎫 今日の整理券は配り終わりました</b><p>明日の ${hhmm(p.openMs)} から、また先着で配ります（完売するまで毎日）。</p></div>`;
   }
-  if (st.mode === "pass" && p && p.state === "won") return `<div class="yb-card yb-gate yb-win"><b>🎉 整理券が当たりました！</b><p>今日の分（あと ${Math.max(0, st.perDay - st.todayCount)}枚）を買えます。</p></div>`;
-  if (st.mode === "open") return `<div class="yb-card yb-gate"><b>🏃 今日は先着販売です</b><p>残りが100枚以下になると、今日の販売は終了します（明日から整理券制）。</p></div>`;
+  if (st.mode === "pass" && p && p.state === "won") return `<div class="yb-card yb-gate yb-win"><b>🎉 整理券をもらいました！</b><p>今日の分（あと ${Math.max(0, st.perDay - st.todayCount)}枚）を買えます。</p></div>`;
+  if (st.mode === "open") return `<div class="yb-card yb-gate"><b>🏃 いまは先着販売です</b><p>残りが100枚以下になると、その日の販売は終了します（次の日から、整理券制）。</p></div>`;
   return "";
 }
-
 function gridHtml(canBuy) {
   const sold = st.sold || "";
   let out = "";
@@ -226,7 +228,7 @@ function setNote(t) { note = t; const el = $("#ybNote"); if (el) el.textContent 
 
 const ERR = {
   bad_count: "1回に買えるのは15枚までです。", daily_limit: "今日の購入上限（15枚）に達しています。", insufficient_coins: "コインが足りません。",
-  closed_today: "今日の販売は終了しました（明日から整理券制）。", no_pass: "今日は整理券が当たっていないので買えません。", pass_pending: "整理券の抽選が終わるまでお待ちください。",
+  closed_today: "今日の販売は終了しました（明日から整理券制）。", no_pass: "今日は整理券をもらっていないので買えません。", pass_pending: "整理券は 8:30 から配ります。お待ちください。",
   sold_out: "売り切れです。", paused: "ただいま一時停止中です。", busy: "混み合っています。もう一度「買う」を押してください。", not_started: "まだ発売前です。",
   not_enough: "残りの枚数が足りません。", taken: "選んだ券の一部が、先に売れてしまいました。選びなおしてください。", bad_request: "選んだ券を確認できませんでした。"
 };
@@ -275,7 +277,8 @@ async function useGear(n) {
 }
 async function applyPass() {
   if (busy) return; busy = true;
-  try { await ctx.api("bankujiApply"); } catch (e) { const code = e && (e.code || (e.detail && e.detail.error)); setNote(code === "apply_closed" ? "申込は締め切りました。" : "申し込めませんでした。"); }
+  try { const r = await ctx.api("bankujiApply"); setNote(r && r.already ? "すでに整理券をもらっています。" : "整理券をもらいました！くじを買えます。"); }
+  catch (e) { const code = e && (e.code || (e.detail && e.detail.error)); setNote(code === "passes_gone" ? "ごめんなさい、今日の整理券は配り終わりました。" : code === "apply_not_open" ? "整理券は 8:30 から配ります。" : code === "busy" ? "混み合っています。もう一度押してください。" : "もらえませんでした。"); }
   busy = false; load();
 }
 async function togglePause() {
