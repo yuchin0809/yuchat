@@ -324,3 +324,27 @@ test("残り本数：発売前は何も返さない", async () => {
   const before = setup({ now: START - 60000 });
   assert.equal((await before.call("uT", "たろう", "bankujiLeft")).phase, "before");
 });
+
+test("今日の購入上限のリセット（管理者）：1回のリセットで、全員の「今日買った枚数」が 0 に戻る。1人ずつは書かない。次の日は自動で 0。リセットしたあとの分は、また数える", async () => {
+  const { fs, state, buy, status, deps } = setup({ random: rngOf(12), users: { "たろう": { uid: "uT", name: "たろう", coins: 20000 }, "はなこ": { uid: "uH", name: "はなこ", coins: 20000 } } });
+  assert.equal((await buy("uT", "たろう", { random: 15 })).ok, true);
+  assert.equal((await buy("uH", "はなこ", { random: 10 })).ok, true);
+  assert.equal((await buy("uT", "たろう", { random: 1 })).error, "daily_limit");
+  assert.equal((await status("uT", "たろう")).todayCount, 15);
+  const before = JSON.stringify([...fs.docs.entries()].filter(([p]) => p.startsWith("bankujiEntries/")));
+  const c0 = fs.counts.commit;
+  const { handleAdminAction } = await import("../worker.js");
+  const r = await handleAdminAction({ ...deps, adminUid: ADMIN }, ADMIN, { action: "bankujiResetLimit" });
+  assert.equal(r.ok, true); assert.equal(r.n, 1);
+  assert.equal(fs.counts.commit, c0 + 1, "書き込みは1回の commit");
+  assert.equal(JSON.stringify([...fs.docs.entries()].filter(([p]) => p.startsWith("bankujiEntries/"))), before, "1人ずつの書類は書き換えない");
+  assert.equal((await status("uT", "たろう")).todayCount, 0); assert.equal((await status("uH", "はなこ")).todayCount, 0);
+  assert.equal((await buy("uT", "たろう", { random: 15 })).ok, true, "リセット後は、また15枚まで買える");
+  assert.equal((await buy("uT", "たろう", { random: 1 })).error, "daily_limit", "リセットしたあとの分は、また数える");
+  assert.equal((await status("uH", "はなこ")).todayCount, 0);
+  const r2 = await handleAdminAction({ ...deps, adminUid: ADMIN }, ADMIN, { action: "bankujiResetLimit" });
+  assert.equal(r2.n, 2); assert.equal((await status("uT", "たろう")).todayCount, 0, "2回目のリセットも効く");
+  assert.equal((await handleAdminAction({ ...deps, adminUid: ADMIN }, "uT", { action: "bankujiResetLimit" })).error, "not_admin");
+  state.now += 86400000;   // 次の日は、リセットの番号に関係なく、自動で 0（日付が変わる）
+  assert.equal((await status("uT", "たろう")).todayCount, 0);
+});

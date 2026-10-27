@@ -522,7 +522,7 @@ export async function handleAdminAction(deps, callerUid, body) {
 
   const action = typeof body?.action === "string" ? body.action : "";
   const uid = typeof body?.uid === "string" ? body.uid : "";
-  const noUidActions = ["listUsers", "notifyAnnouncement", "renameUserRefs", "transferList", "transferApprove", "transferReject", "kakuWinners", "keshiLeagueEnroll", "economyReport", "grantKakuTicket", "bankujiPrize"];
+  const noUidActions = ["listUsers", "notifyAnnouncement", "renameUserRefs", "transferList", "transferApprove", "transferReject", "kakuWinners", "keshiLeagueEnroll", "economyReport", "grantKakuTicket", "bankujiPrize", "bankujiResetLimit"];
   if (!noUidActions.includes(action) && !UID_PATTERN.test(uid)) return { status: 400, error: "invalid_uid" };
 
   try {
@@ -545,6 +545,7 @@ export async function handleAdminAction(deps, callerUid, body) {
       case "economyReport": return await adminEconomyReport(deps);
       case "grantKakuTicket": return await adminGrantKakuTicket(deps, callerUid, uid, body);
       case "bankujiPrize": return await adminBankujiPrize(deps, callerUid, body);
+      case "bankujiResetLimit": return await adminBankujiResetLimit(deps, callerUid);
       case "transferList": return await adminTransferList(deps);
       case "transferApprove": return await adminTransferApprove(deps, callerUid, body);
       case "transferReject": return await adminTransferReject(deps, callerUid, body);
@@ -3707,6 +3708,26 @@ async function bankujiPassState(deps, uid, day, now, remaining) {
   return { state: left > 0 ? "canApply" : "gone", openMs, count, left };
 }
 
+/* 今日の購入上限のリセット：くじの書類の limitReset（{ day, n }）を1つ増やすと、その日の全員の「今日買った枚数」が 0 に戻る（1人ずつは書かない）。
+   各人の書類には、買ったときのリセット番号（dayReset）を残してあり、いまの番号とちがえば、今日の分は数えない */
+const bankujiResetN = (round, day) => (round && round.limitReset && round.limitReset.day === day ? Number(round.limitReset.n) || 0 : 0);
+const bankujiTodayCount = (entry, round, day) => (entry && entry.dayKey === day && (Number(entry.dayReset) || 0) === bankujiResetN(round, day) ? Number(entry.dayCount) || 0 : 0);
+async function adminBankujiResetLimit(deps, callerUid) {
+  const fs = deps.firestore, now = deps.now(), day = jstDateString(now), path = bankujiRoundPath();
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const raw = await fs.getRaw(path), round = raw ? decodeFields(raw.fields) : {};
+    const n = bankujiResetN(round, day) + 1, fields = { limitReset: { day, n } };
+    try {
+      await fs.commit([
+        { update: { name: fs.docName(path), fields: encodeFields(fields) }, updateMask: { fieldPaths: ["limitReset"] }, currentDocument: raw ? { updateTime: raw.updateTime } : { exists: false } },
+        { update: { name: fs.docName(`adminAuditLogs/${crypto.randomUUID().replace(/-/g, "")}`), fields: encodeFields({ action: "bankujiResetLimit", day, n, byUid: callerUid, result: "ok" }) }, updateTransforms: [{ fieldPath: "at", setToServerValue: "REQUEST_TIME" }], currentDocument: { exists: false } }
+      ]);
+    } catch (error) { if (isRetryableCommitError(error)) continue; throw error; }
+    lotteryDocCache.delete(path);
+    return { ok: true, day, n };
+  }
+  return { status: 409, error: "busy" };
+}
 const bankujiRoundPath = () => `bankujiRounds/${BANKUJI.round}`;
 const bankujiBitsOf = (round) => (typeof round?.soldBits === "string" && round.soldBits.length === BANKUJI.pool ? round.soldBits : "0".repeat(BANKUJI.pool));
 const bankujiCountSold = (bits) => bits.split("1").length - 1;
@@ -3747,7 +3768,7 @@ async function bankujiStatus(deps, uid, body) {
   ]);
   const sold = bankujiBitsOf(round);
   const remaining = B.pool - bankujiCountSold(sold), mode = bankujiModeOf(round, remaining, day);
-  const todayCount = entry?.dayKey === day ? Number(entry.dayCount) || 0 : 0;
+  const todayCount = bankujiTodayCount(entry, round, day);
   let phase, pass = null;
   if (remaining <= 0 || round?.status === "done") phase = "soldout";
   else if (mode === "open") phase = "selling";
@@ -3831,7 +3852,7 @@ async function bankujiBuy(deps, uid, body) {
     const pass = await deps.firestore.get(`bankujiPasses/${R}_${day}`);
     if (!(Array.isArray(pass?.winners) && pass.winners.includes(uid))) return { status: 409, error: "no_pass" };
   }
-  const todayCount = entry.dayKey === day ? Number(entry.dayCount) || 0 : 0;
+  const todayCount = bankujiTodayCount(entry, round, day), resetN = bankujiResetN(round, day);
   if (todayCount + count > B.perDay) return { status: 409, error: "daily_limit", left: Math.max(0, B.perDay - todayCount) };
   if (count > remaining) return { status: 409, error: "not_enough", remaining };
 
@@ -3882,7 +3903,7 @@ async function bankujiBuy(deps, uid, body) {
     uid, name: me.name, round: R,
     tickets: [...(Array.isArray(entry.tickets) ? entry.tickets : []), ...chosen],
     prizes: [...(Array.isArray(entry.prizes) ? entry.prizes : []), ...awards],
-    dayKey: day, dayCount: todayCount + count
+    dayKey: day, dayCount: todayCount + count, dayReset: resetN
   };
   try {
     await deps.firestore.commit([

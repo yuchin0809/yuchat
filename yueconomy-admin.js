@@ -44,6 +44,8 @@ function prizeHtml(esc) {
   }
   return `<h4>🎊 ゆう番くじ：景品の取り消し（くじに戻す）</h4>
     <p class="yec-note">景品を持っている人を探して、取り消します。券の番号は売れていない状態に戻り、景品は箱に戻って、ほかの人が引けるようになります。券代（200コイン）は持ち主に返します。</p>
+    <div class="yec-row"><button type="button" class="yec-btn yec-danger" data-ec="limit-reset" ${P.busy ? "disabled" : ""}>今日の購入上限を、みんなリセットする</button></div>
+    <p class="yec-note">ゆう番くじの「1人1日15枚まで」を、今日の分だけ、全員 0 枚に戻します（整理券は戻りません）。</p>
     <div class="yec-row"><select id="yecPrizeId">${["A", "B", "C", "D", "E", "F", "G", "H"].map((x) => `<option value="${x}"${P.id === x ? " selected" : ""}>${x}賞</option>`).join("")}</select> <button type="button" class="yec-btn" data-ec="prize-find" ${P.busy ? "disabled" : ""}>${P.busy && !d ? "探しています…" : "持っている人を探す"}</button></div>
     ${body}${P.msg ? `<p class="${P.msg.startsWith("✅") ? "yec-ok" : "yec-err"}">${esc(P.msg)}</p>` : ""}`;
 }
@@ -52,6 +54,13 @@ async function prizeFind() {
   S.prize.busy = true; S.prize.msg = ""; render();
   try { S.prize.data = await cfg.callAdmin("bankujiPrize", { prizeId: S.prize.id }); }
   catch (error) { console.error("景品の検索エラー:", error); S.prize.msg = "読み込めませんでした。もう一度お試しください。"; }
+  S.prize.busy = false; render();
+}
+async function limitReset() {
+  if (!confirm("ゆう番くじの、今日の購入上限（1人1日15枚）を、全員 0 枚に戻します。よろしいですか？")) return;
+  S.prize.busy = true; S.prize.msg = ""; render();
+  try { await cfg.callAdmin("bankujiResetLimit", {}); S.prize.msg = "✅ 今日の購入上限を、全員 0 枚に戻しました。"; }
+  catch (error) { console.error("購入上限のリセットエラー:", error); S.prize.msg = "うまくいきませんでした。もう一度お試しください。"; }
   S.prize.busy = false; render();
 }
 async function prizeRevoke(t) {
@@ -132,6 +141,7 @@ document.addEventListener("click", (event) => {
   if (t.dataset.ec === "load") load();
   else if (t.dataset.ec === "prize-find") prizeFind();
   else if (t.dataset.ec === "prize-revoke") prizeRevoke(t);
+  else if (t.dataset.ec === "limit-reset") limitReset();
 });
 
 function ensureStyles() {
