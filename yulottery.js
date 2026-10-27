@@ -33,6 +33,8 @@ const DAYS = ["日", "月", "火", "水", "木", "金", "土"];
 const reduced = () => { try { return window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch (_) { return false; } };
 const $ = (s) => ctx && ctx.root.querySelector(s);
 const nowMs = () => Date.now() + offset;
+/* ふだんは毎週金曜 14:30。時刻をずらした回は、「今回だけ」と出す */
+const drawNote = (ms) => { const d = new Date(ms + 9 * 3600000); return d.getUTCDay() === 5 && d.getUTCHours() === 14 && d.getUTCMinutes() === 30 ? "（毎週金曜 14:30）" : "（今回だけ時間を変更しました）"; };
 function fmtDraw(ms) {
   const d = new Date(ms + 9 * 3600000);
   return `${d.getUTCMonth() + 1}/${d.getUTCDate()}(${DAYS[d.getUTCDay()]}) ${d.getUTCHours()}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
@@ -175,7 +177,7 @@ function draw() {
         <p class="yl-sub">ふつうの人には、販売開始（${fmtDraw(e.saleStartMs)}）まで名前も賞金も出ません。</p></div>` : "";
     ctx.root.innerHTML = `${head}${admin}${adminPreviewHtml()}${peek}
       <div class="yl-card yl-prep"><div class="yl-prep-icon">🚧</div><b>次の宝くじは準備中です</b>
-        <p>販売開始：${fmtDraw(e.saleStartMs)}（毎週月曜 8:00）<br>次の抽選：${fmtDraw(e.drawMs)}（毎週金曜 14:30）</p>
+        <p>販売開始：${fmtDraw(e.saleStartMs)}（毎週月曜 8:00）<br>次の抽選：${fmtDraw(e.drawMs)}${drawNote(e.drawMs)}</p>
         <div class="yl-count" id="ylCount"></div>
         <p class="yl-sub">名前と賞金は、販売が始まってからのお楽しみ！</p></div>
       ${last || `<div class="yl-card yl-msg"><p>${st.prev && nowMs() >= st.prev.drawMs && nowMs() < st.prev.drawMs + 5 * 60000 ? "🥁 抽選結果を集計中…まもなく発表！" : "前回の結果はまだありません。"}</p></div>`}`;
@@ -194,7 +196,7 @@ function draw() {
     <div class="yl-banner ${e.big ? "big" : ""}">
       ${e.big ? `<div class="yl-bigbadge">🌟 ビッグイベント 🌟</div>` : ""}
       <div class="yl-name">${esc(e.name)}</div>
-      <div class="yl-draw">抽選：${fmtDraw(e.drawMs)}（毎週金曜 14:30）</div>
+      <div class="yl-draw">抽選：${fmtDraw(e.drawMs)}${drawNote(e.drawMs)}</div>
       <div class="yl-count" id="ylCount"></div>
       <div class="yl-pot-label">1等 賞金（全体で1本）</div>
       <div class="yl-pot"><span id="ylPot">${fmt(top ? top.prize : 0)}</span><small>コイン</small></div>

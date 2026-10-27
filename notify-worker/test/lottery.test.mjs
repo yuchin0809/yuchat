@@ -64,6 +64,7 @@ function fakeFs(initial = {}) {
 const ADMIN = "adminUid";
 const T = Date.UTC(2026, 9, 23, 5, 30, 0);          // 2026-10-23（金）14:30 JST（最初の抽選）
 const MIN = 60000, WEEK = 7 * 86400000;
+const SHIFT = Date.UTC(2026, 9, 27, 3, 10, 0);       // 2026-10-27（火）12:10 JST（10/30 の回の抽選を前倒し）
 const rngOf = (seed) => { let s = seed >>> 0 || 1; return () => { s ^= s << 13; s ^= s >>> 17; s ^= s << 5; s >>>= 0; return s / 4294967296; }; };
 function setup({ now = T - 3 * 3600000, users, extra = {}, random = rngOf(7) } = {}) {
   resetLotteryCacheForTest();
@@ -81,8 +82,8 @@ const coins = (fs, n) => Number(fs.docs.get(`users/${n}`).fields.coins.integerVa
 test("抽選日時：次の金曜 14:30（JST）。ちょうどの時刻は次の回。回IDは抽選日", () => {
   assert.equal(lotteryNextDrawMs(Date.UTC(2026, 9, 19, 1, 0, 0)), T, "月曜 → 今週金曜");
   assert.equal(lotteryNextDrawMs(T - 1), T);
-  assert.equal(lotteryNextDrawMs(T), T + WEEK, "抽選の瞬間から次の回");
-  assert.equal(lotteryNextDrawMs(T + 30 * MIN), T + WEEK, "抽選後は来週");
+  assert.equal(lotteryNextDrawMs(T), SHIFT, "抽選の瞬間から次の回（10/30 の回は火曜 12:10 に前倒し）");
+  assert.equal(lotteryNextDrawMs(T + 30 * MIN), SHIFT, "抽選後は次の回");
   assert.equal(lotteryRoundId(T), "2026-10-23");
   assert.equal(new Date(T + 9 * 3600000).getUTCHours(), 14);
   assert.equal(new Date(T + 9 * 3600000).getUTCMinutes(), 30);
@@ -703,4 +704,32 @@ test("管理者だけは、準備中でも次の回の名前・賞金・番号�
   const after = await handleYuslotAction(deps, "uT", { action: "lotteryStatus", username: "たろう" });
   assert.equal(after.last.numbers.filter((n) => n.tier === "3等").length, 10);
   assert.equal(after.last.numbers.filter((n) => n.tier === "4等").length, 0, "4等以下は1つずつは出さない");
+});
+
+test("抽選の前倒し：10/30 の回は 10/27（火）12:10 に抽選。id・販売開始（月曜 8:00）・締切（5分前）が正しい。時刻をすぎたら、次の回は 11/06 の金曜 14:30", () => {
+  const mon = Date.UTC(2026, 9, 26, 1, 0, 0), tue = Date.UTC(2026, 9, 27, 2, 48, 0);   // 月曜 10:00／火曜 11:48
+  assert.equal(lotteryNextDrawMs(mon), SHIFT); assert.equal(lotteryNextDrawMs(tue), SHIFT); assert.equal(lotteryNextDrawMs(SHIFT - 1), SHIFT);
+  assert.equal(lotteryNextDrawMs(SHIFT), T + 2 * WEEK, "12:10 ちょうどから次の回（11/06 の金曜 14:30）");
+  assert.equal(lotteryNextDrawMs(T + 8 * 86400000), T + 2 * WEEK);
+  for (const at of [SHIFT, T + WEEK]) {   // 実際の時刻でも、ふだんの金曜 14:30 の時刻でも、同じ回
+    const ev = lotteryEventFor(at);
+    assert.equal(ev.id, "2026-10-30"); assert.equal(ev.drawMs, SHIFT); assert.equal(ev.closeMs, SHIFT - 5 * MIN);
+    assert.equal(ev.saleStartMs, Date.UTC(2026, 9, 25, 23, 0, 0), "販売は月曜 8:00 のまま");
+  }
+  assert.equal(lotteryRoundId(SHIFT), "2026-10-30");
+  assert.equal(lotteryEventFor(T + 2 * WEEK).id, "2026-11-06"); assert.equal(lotteryEventFor(T + 2 * WEEK).drawMs, T + 2 * WEEK);
+  assert.equal(lotteryEventFor(T).drawMs, T, "前の回はそのまま");
+});
+
+test("抽選の前倒し：cron は 12:10 から 10/30 の回を抽選する（金曜 14:30 ではなく）。そのあと金曜には、もう抽選しない", async () => {
+  const { deps, buy, state, fs } = setup({ now: Date.UTC(2026, 9, 27, 2, 0, 0) });   // 火曜 11:00
+  const b0 = await buy("uT", "たろう", 3, "random"); assert.equal(b0.ok, true, JSON.stringify(b0));
+  assert.equal((await runLotteryTick({}, SHIFT - MIN, deps)).skipped, "outside", "12:10 の前は動かない");
+  state.now = SHIFT - 6 * MIN; const b1 = await buy("uH", "はなこ", 1, "random"); assert.equal(b1.ok, true, JSON.stringify(b1));
+  state.now = SHIFT - 2 * MIN; const b2 = await buy("uH", "はなこ", 1, "random"); assert.equal(b2.error, "sales_closed", JSON.stringify(b2));
+  state.now = SHIFT;
+  const r = await runLotteryTick({}, SHIFT, deps);
+  assert.equal(r.status, "drawn"); assert.ok(fs.docs.has("lotteryRounds/2026-10-30"));
+  assert.equal((await runLotteryTick({}, SHIFT + MIN, deps)).skipped, "done");
+  assert.equal((await runLotteryTick({}, T + WEEK, deps)).skipped, "outside", "金曜 14:30 には、もう何もしない（前の回の24時間をすぎている）");
 });
