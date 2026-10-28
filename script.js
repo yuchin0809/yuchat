@@ -6313,6 +6313,7 @@ function renderUserManageDetail(info) {
     ["最終ログイン", formatUmDate(Math.max(auth?.lastLoginAt || 0, auth?.lastRefreshAt || 0) || null)],
     ...(info.user ? [["コイン", info.user.coins === null ? "-" : `🪙 ${info.user.coins.toLocaleString()}`]] : []),
     ...(info.user?.nameChangedFrom ? [["前の名前", info.user.nameChangedFrom]] : []),
+    ...(info.user ? [["防犯グッズ", info.user.guards && Object.keys(info.user.guards).length ? Object.entries(info.user.guards).sort().map(([w, g]) => `${w}の週：Lv${g && g.lv}（払った ${g && g.paid}）`).join(" ／ ") : "なし"]] : []),
     ["状態", deleting ? `削除の途中（${info.deletion.failedStep || info.deletion.status}）` : suspended ? `停止中${info.suspended?.reason ? `（${info.suspended.reason}）` : ""}` : "利用中"],
     ...(info.userDocNames.length > 1 ? [["注意", `同じ uid のユーザーデータが ${info.userDocNames.length} 件あります（${info.userDocNames.join("、")}）`]] : [])
   ];

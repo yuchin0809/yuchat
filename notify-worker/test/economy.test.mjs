@@ -479,3 +479,13 @@ test("HTTP：/economy はログインが必要（ID トークンなしは 401）
   assert.equal(r.status, 400);
   assert.equal((await r.json()).error, "unknown_action");
 });
+
+test("名前変更の引き継ぎ：防犯グッズ・スリの記録・スリの通知の設定も、新しい名前に引き継ぐ（買った防犯グッズが名前変更で消えない）", async () => {
+  const { firestore, deps } = setup({ coins: 1234, extra: { guards: { "2026-10-26": { lv: 3, paid: 800 } }, theft: { day: "2026-10-27", week: "2026-10-26", n: 1, last: { date: "2026-10-27", repelled: true, lv: 3, lost: 0 } }, theftPush: true } });
+  firestore.put("users/たろう2", encF({ uid: "uT", name: "たろう2" }));
+  const r = await handleEconomyAction(deps, "uT", { action: "renameCarry", from: "たろう", to: "たろう2" });
+  assert.equal(r.carried, true);
+  const to = decF(firestore.docs.get("users/たろう2").fields);
+  assert.deepEqual(to.guards, { "2026-10-26": { lv: 3, paid: 800 } });
+  assert.equal(to.theft.n, 1); assert.equal(to.theftPush, true);
+});

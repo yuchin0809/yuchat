@@ -647,7 +647,9 @@ async function adminInspectUser(deps, uid) {
       createdAt: userData.createdAt || null,
       lastSeen: userData.lastSeen || null,
       totalBetAmount: typeof userData.totalBetAmount === "number" ? userData.totalBetAmount : null,
-      nameChangedFrom: userData.nameChangedFrom || ""
+      nameChangedFrom: userData.nameChangedFrom || "",
+      guards: userData.guards && typeof userData.guards === "object" ? userData.guards : null,   // 防犯グッズ（週の月曜の日付 → { lv, paid }）。買ったのに消える、の調べ用
+      theftLast: userData.theft && userData.theft.last ? userData.theft.last : null
     } : null,
     auth: summarizeAuthUser(authUser),
     suspended: suspended ? { reason: suspended.reason || "", suspendedAt: suspended.suspendedAt || null } : null,
@@ -1490,7 +1492,7 @@ const DERBY_SERVER_GENERATORS = ["github-actions", "worker"];
 const DERBY_SERVER_RESULTS_FROM = null;
 
 const ECONOMY_ACTIONS = ["bankDeposit", "bankWithdraw", "bankBorrow", "bankRepay", "stockTrade", "loginBonus", "bonus500", "placeBet", "ensureRaceResult", "settleMyBets", "startingCoins", "renameCarry", "syncNameClaim", "transferRequest", "transferCancel", "transferMine", "guardBuy", "theftPush"];
-const ECON_CARRY_FIELDS = ["coins", "bonus500Granted", "bonus500GrantedAt", "totalBetAmount", "bank", "stocks", "lastLoginBonusDate", "lastAnnouncementReadAt", "slotSpins", "slotWagered", "slotKakuSpins", "slotKakuWagered"];
+const ECON_CARRY_FIELDS = ["coins", "bonus500Granted", "bonus500GrantedAt", "totalBetAmount", "bank", "stocks", "lastLoginBonusDate", "lastAnnouncementReadAt", "slotSpins", "slotWagered", "slotKakuSpins", "slotKakuWagered", "guards", "theft", "theftPush", "slotKakuSeat"];
 
 export function jstDateString(ms) {
   return new Date(ms + JST_OFFSET_MS).toISOString().slice(0, 10);
