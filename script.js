@@ -37,22 +37,8 @@ import {
   FIXED_PAYOUT_RULE
 } from "./derby-odds.js?v=20261013-fixed-odds";
 
-/* 🎡 ゆうワールド（ゆうスロなどのお店）。残高・抽選・公開・営業時間の判定はすべて Worker 任せ（Firebase には触らない） */
-import {
-  initYuWorld, openYuWorldView, stopYuWorldView
-} from "./yuworld.js?v=20261026-yuworld54";
-import { initYuMart, openYuMartView, stopYuMartView } from "./yumart.js?v=20261027-cm1";
-import { renderYachtRoom } from "./yuyacht.js?v=20261026-yacht6";
-import { renderKeshiRoom } from "./yukeshi-room.js?v=20261026-ltd10";
-
-/* 💸 コインの送金（申請は本人・OK/却下は管理者）。中身の確定は Worker */
-import { transferInit, transferOpenUser, transferOpenAdmin, transferReset } from "./yutransfer.js?v=20261020-transfer1";
 /* 📨 友達に紹介（ヘッダーの赤いボタン。端末の共有画面でリンクを送る） */
 import { inviteInit } from "./yuinvite.js?v=20261021-invite1";
-/* 🌈 確変台の当選者（管理者だけ） */
-import { kakuWinnersInit, kakuWinnersOpen, kakuWinnersReset } from "./yukakuwinners.js?v=20261026-grant1";
-import { keshiEnrollInit, keshiEnrollOpen, keshiEnrollReset } from "./yukeshi-admin.js?v=20261026-ltd10";
-import { economyAdminInit, economyAdminOpen, economyAdminReset } from "./yueconomy-admin.js?v=20261027-reset1";
 
 import {
   getFirestore, initializeFirestore, collection, addDoc, getDocs, getDoc, doc, setDoc,
@@ -62,10 +48,6 @@ import {
 } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
 /* ゆう銀行の返済期限（Timestamp）に使う */
 import { Timestamp } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
-
-import {
-  getMessaging, getToken, onMessage, isSupported, deleteToken
-} from "https://www.gstatic.com/firebasejs/12.19.0/firebase-messaging.js";
 
 import {
   getAuth, GoogleAuthProvider, signInWithPopup, signInAnonymously,
@@ -668,18 +650,22 @@ recoverBackButton?.addEventListener("click", async () => {
 ========================================================= */
 
 /* 自分のユーザー名を探す：①この端末で最後に使った名前 ②uid が一致するユーザー */
+/* ここで自分のユーザー情報を読めた＝Firestore がログイン情報を受け取っている。startApp で同じ確認をもう一度しないための印 */
+let firestoreAuthVerifiedUid = null;
+
 async function findOwnUserProfile(user) {
   const savedName = localStorage.getItem("yuuchat_username");
 
   if (savedName) {
     const snapshot = await getDoc(doc(db, "users", savedName));
     if (snapshot.exists() && snapshot.data().uid === user.uid) {
+      firestoreAuthVerifiedUid = user.uid;
       return { name: savedName, data: snapshot.data() };
     }
   }
 
   const result = await getDocs(query(collection(db, "users"), where("uid", "==", user.uid), limit(1)));
-  if (!result.empty) return { name: result.docs[0].id, data: result.docs[0].data() };
+  if (!result.empty) { firestoreAuthVerifiedUid = user.uid; return { name: result.docs[0].id, data: result.docs[0].data() }; }
   return null;
 }
 
@@ -848,17 +834,18 @@ async function enterAppAs(name, existingData, seq) {
   /* プロフィール画像はこのアカウントのものだけを使う（新しいアカウントは画像なし） */
   myProfileImageData = await normalizeProfileImage(existingData?.profileImage || "");
 
-  try {
-    await withTimeout(saveUserProfile(), 15000, "app-timeout-save");
-  } catch (error) {
-    if (!existingData) {
+  if (existingData) {
+    /* 既存のアカウントは、保存の完了を待たずに画面を出す（失敗してもログインは続ける）。読み取り済みの情報を渡して、同じ文書の読み直しもしない */
+    saveUserProfile(existingData).catch((error) => logFirebaseError("プロフィール更新エラー（ログインは続行）", error));
+  } else {
+    try {
+      await withTimeout(saveUserProfile(), 15000, "app-timeout-save");
+    } catch (error) {
       username = null;
       localStorage.removeItem("yuuchat_username");
       myProfileImageData = "";
       throw error;
     }
-    /* 既存のアカウントはプロフィールの更新に失敗してもログインは続ける */
-    logFirebaseError("プロフィール更新エラー（ログインは続行）", error);
   }
 
   if (seq !== authResolveSeq) return;
@@ -872,12 +859,11 @@ async function enterAppAs(name, existingData, seq) {
   }
 }
 
-async function saveUserProfile() {
+async function saveUserProfile(knownData) {
   if (!currentUser || !username) return;
 
   const userRef = doc(db, "users", username);
-  const existing = await getDoc(userRef);
-  const oldData = existing.exists() ? existing.data() : {};
+  const oldData = knownData || ((await getDoc(userRef)).data() || {});
 
   await setDoc(userRef, {
     uid: currentUser.uid,
@@ -1018,7 +1004,8 @@ async function startApp() {
 
   const session = ++appSessionSeq;
   const startedUid = currentUser.uid;
-  await waitForFirestoreAuth();
+  if (firestoreAuthVerifiedUid === startedUid) firestoreAuthVerifiedUid = null;
+  else await waitForFirestoreAuth();
   if (session !== appSessionSeq || !currentUser || currentUser.uid !== startedUid || !username) return;
 
   /* チャット・グループの読み取りは token.name で本人確認するので、購読の前に名前クレームを同期する */
@@ -1029,7 +1016,7 @@ async function startApp() {
     resetNewMessageWatch();
     listenFriends();
     listenGroups();
-    restoreNotificationsIfGranted();
+    setTimeout(restoreNotificationsIfGranted, 3000);   /* 通知の再設定は急がない（起動の通信と取り合わないよう、少し待つ） */
     updateNotifyAnnouncement();
     listenMyCoins();
     listenMyBetHistory();
@@ -3228,10 +3215,19 @@ function getUnsupportedNotificationText() {
   return "この端末・ブラウザでは通知を利用できません。";
 }
 
+/* 通知（FCM）の部品は、通知まわりを使うときに初めて読み込む（起動を軽くするため） */
+let fcmModulePromise = null;
+function loadFcmModule() {
+  if (!fcmModulePromise) {
+    fcmModulePromise = import("https://www.gstatic.com/firebasejs/12.19.0/firebase-messaging.js").catch((error) => { fcmModulePromise = null; throw error; });
+  }
+  return fcmModulePromise;
+}
+
 async function isFcmAvailable() {
   if (typeof Notification === "undefined" || !("serviceWorker" in navigator)) return false;
   try {
-    return await isSupported();
+    return await (await loadFcmModule()).isSupported();
   } catch (error) {
     console.error("通知の対応確認エラー:", error);
     return false;
@@ -3315,7 +3311,7 @@ async function restoreNotificationsIfGranted() {
 async function getFcmMessaging() {
   if (fcmMessaging) return fcmMessaging;
   if (!(await isFcmAvailable())) return null;
-  fcmMessaging = getMessaging(firebaseApp);
+  fcmMessaging = (await loadFcmModule()).getMessaging(firebaseApp);
   return fcmMessaging;
 }
 
@@ -3327,6 +3323,7 @@ async function registerFcmToken() {
     if (!messaging) return false;
 
     const registration = await navigator.serviceWorker.register("./firebase-messaging-sw.js");
+    const { getToken } = await loadFcmModule();
     const token = await getToken(messaging, {
       vapidKey: VAPID_PUBLIC_KEY,
       serviceWorkerRegistration: registration
@@ -3366,7 +3363,7 @@ async function unregisterFcmTokenForThisDevice() {
 
   /* FCM 側のトークン無効化は、通信が遅くても画面を待たせないよう待たない */
   getFcmMessaging()
-    .then((messaging) => (messaging ? deleteToken(messaging) : null))
+    .then(async (messaging) => (messaging ? (await loadFcmModule()).deleteToken(messaging) : null))
     .catch((error) => console.warn("FCMトークン無効化失敗:", error));
 }
 
@@ -3416,9 +3413,10 @@ async function requestPushNotification(messageId) {
 }
 
 /* アプリを開いて見ているときに FCM で届いた通知 → アプリ内トースト */
-function setupForegroundMessageListener(messaging) {
+async function setupForegroundMessageListener(messaging) {
   if (fcmForegroundListenerReady || !messaging) return;
   fcmForegroundListenerReady = true;
+  const { onMessage } = await loadFcmModule();
 
   onMessage(messaging, (payload) => {
     const data = payload?.data || {};
@@ -3667,6 +3665,7 @@ tabButtons.forEach((button) => {
 function switchView(view) {
   /* 👤 ユーザー管理は管理者だけ（タブも管理者にだけ表示） */
   if (view === "usermanage" && !isAdminUser()) view = "chat";
+  currentViewName = view;
   const views = { chat: chatView, derby: derbyView, economy: economyView, games: gamesView, yuworld: yuworldView, mart: martView, announcements: announcementsView, mypage: mypageView, usermanage: userManageView };
 
   Object.entries(views).forEach(([name, element]) => {
@@ -3696,8 +3695,45 @@ function switchView(view) {
   if (view === "usermanage") openUserManageView();
 }
 
-/* 🎡 ゆうワールド（ゆうスロ）を初期化する。トークン・ユーザー名・最上位管理者かどうかは呼ばれた時点の状態を使う */
-initYuWorld({
+/* =========================================================
+   あとから読み込む画面（起動を軽くするため）
+   ・ゆうワールド / ゆうマート / 送金 / ゲーム部屋の描画 / 管理者の画面は、開くときに初めて読み込む
+   ・呼び出し側は今までと同じ名前の関数を呼ぶだけ（読み込み済みならそのまま実行、まだなら読み込んでから実行）
+========================================================= */
+
+let currentViewName = "chat";
+
+function lazyModule(url, init) {
+  let mod = null;
+  let promise = null;
+  return {
+    load() {
+      if (!promise) {
+        promise = import(url).then((m) => { mod = m; if (init) init(m); return m; }).catch((error) => { promise = null; throw error; });
+      }
+      return promise;
+    },
+    get: () => mod
+  };
+}
+
+function lazyLoadFailed(error) {
+  console.error("画面の読み込みエラー:", error);
+  showAppToast("読み込めませんでした", "通信環境をご確認のうえ、もう一度お試しください。");
+}
+
+/* 開く：読み込み → まだその画面を見ていれば開く。stop/reset：読み込み済みのときだけ */
+function lazyOpener(mod, name, stillWanted) {
+  return (...args) => mod.load().then((m) => (stillWanted() ? m[name](...args) : undefined)).catch(lazyLoadFailed);
+}
+function lazyCaller(mod, name) {
+  return (...args) => { const m = mod.get(); return m ? m[name](...args) : undefined; };
+}
+
+const adminCfg = () => ({ callAdmin: (action, payload) => callAdminApi(action, payload), isAdmin: () => isAdminUser(), esc: (v) => escapeHTML(v) });
+
+/* 🎡 ゆうワールド（ゆうスロ）。トークン・ユーザー名・最上位管理者かどうかは呼ばれた時点の状態を使う */
+const lazyYuWorld = lazyModule("./yuworld.js?v=20261026-yuworld54", (m) => m.initYuWorld({
   openGame: (type) => openGameFromWorld(type),
   pendingInviteTypes: () => pendingGameInvites.map((invite) => invite.gameType),
   endpoint: NOTIFY_ENDPOINT.replace(/\/notify$/, "/yuslot"),
@@ -3705,25 +3741,25 @@ initYuWorld({
   getUsername: () => username,
   isTopAdmin: () => isAdminUser(),
   onSettled: () => { /* 精算後は既存の coins リスナーが users の残高を拾って各画面を更新する */ }
-});
+}));
+function showLazyPlaceholder(id) {
+  const el = document.getElementById(id);
+  if (el && !el.firstElementChild && !el.textContent.trim()) el.innerHTML = `<div class="empty-state">読み込み中…</div>`;
+}
+const openYuWorldView = () => { showLazyPlaceholder("yuworldRoot"); return lazyOpener(lazyYuWorld, "openYuWorldView", () => currentViewName === "yuworld")(); };
+const stopYuWorldView = lazyCaller(lazyYuWorld, "stopYuWorldView");
 
 /* 🏪 ゆうマート */
-initYuMart({
+const lazyYuMart = lazyModule("./yumart.js?v=20261027-cm1", (m) => m.initYuMart({
   endpoint: NOTIFY_ENDPOINT.replace(/\/notify$/, "/yuslot"),
   getToken: () => currentUser.getIdToken(),
   getUsername: () => username
-});
-
-/* 📨 友達に紹介 */
-inviteInit(document.getElementById("inviteButton"), (title, body) => showAppToast(title, body));
-
-/* 🌈 確変台の当選者（管理者だけ） */
-kakuWinnersInit({ callAdmin: (action, payload) => callAdminApi(action, payload), isAdmin: () => isAdminUser(), esc: (v) => escapeHTML(v) });
-keshiEnrollInit({ callAdmin: (action, payload) => callAdminApi(action, payload), isAdmin: () => isAdminUser(), esc: (v) => escapeHTML(v) });
-economyAdminInit({ callAdmin: (action, payload) => callAdminApi(action, payload), isAdmin: () => isAdminUser(), esc: (v) => escapeHTML(v) });
+}));
+const openYuMartView = () => { showLazyPlaceholder("yumartRoot"); return lazyOpener(lazyYuMart, "openYuMartView", () => currentViewName === "mart")(); };
+const stopYuMartView = lazyCaller(lazyYuMart, "stopYuMartView");
 
 /* 💸 コインの送金の画面 */
-transferInit({
+const lazyTransfer = lazyModule("./yutransfer.js?v=20261020-transfer1", (m) => m.transferInit({
   callEconomy: (action, payload) => callEconomyApi(action, payload),
   callAdmin: (action, payload) => callAdminApi(action, payload),
   isLoggedIn: () => Boolean(currentUser && username),
@@ -3732,7 +3768,39 @@ transferInit({
   getFriends: () => friendsData.map((f) => f.friend).filter(Boolean),
   esc: (v) => escapeHTML(v),
   toast: (title, body) => showAppToast(title, body)
-});
+}));
+const transferOpenUser = lazyOpener(lazyTransfer, "transferOpenUser", () => currentViewName === "economy");
+const transferOpenAdmin = lazyOpener(lazyTransfer, "transferOpenAdmin", () => currentViewName === "usermanage");
+const transferReset = lazyCaller(lazyTransfer, "transferReset");
+
+/* 🌈 管理者の画面（確変台の当選者・最強決定戦のエントリー・経済の状態） */
+const lazyKakuWinners = lazyModule("./yukakuwinners.js?v=20261026-grant1", (m) => m.kakuWinnersInit(adminCfg()));
+const kakuWinnersOpen = lazyOpener(lazyKakuWinners, "kakuWinnersOpen", () => currentViewName === "usermanage");
+const kakuWinnersReset = lazyCaller(lazyKakuWinners, "kakuWinnersReset");
+const lazyKeshiEnroll = lazyModule("./yukeshi-admin.js?v=20261026-ltd10", (m) => m.keshiEnrollInit(adminCfg()));
+const keshiEnrollOpen = lazyOpener(lazyKeshiEnroll, "keshiEnrollOpen", () => currentViewName === "usermanage");
+const keshiEnrollReset = lazyCaller(lazyKeshiEnroll, "keshiEnrollReset");
+const lazyEconomyAdmin = lazyModule("./yueconomy-admin.js?v=20261027-reset1", (m) => m.economyAdminInit(adminCfg()));
+const economyAdminOpen = lazyOpener(lazyEconomyAdmin, "economyAdminOpen", () => currentViewName === "usermanage");
+const economyAdminReset = lazyCaller(lazyEconomyAdmin, "economyAdminReset");
+
+/* 🎲 ヨット / 🥊 消しバトの部屋の描画：読み込み前は準備中の表示を出し、読み込めたらもう一度描く */
+const lazyYachtRoom = lazyModule("./yuyacht.js?v=20261026-yacht6");
+const lazyKeshiRoom = lazyModule("./yukeshi-room.js?v=20261026-ltd10");
+function lazyRoomRenderer(mod, name) {
+  return (boardEl, room, c) => {
+    const m = mod.get();
+    if (m) return m[name](boardEl, room, c);
+    if (!boardEl.firstElementChild) boardEl.innerHTML = `<div class="empty-state">読み込み中…</div>`;
+    mod.load().then((loaded) => { if (boardEl.isConnected) loaded[name](boardEl, room, c); }).catch(lazyLoadFailed);
+    return undefined;
+  };
+}
+const renderYachtRoom = lazyRoomRenderer(lazyYachtRoom, "renderYachtRoom");
+const renderKeshiRoom = lazyRoomRenderer(lazyKeshiRoom, "renderKeshiRoom");
+
+/* 📨 友達に紹介 */
+inviteInit(document.getElementById("inviteButton"), (title, body) => showAppToast(title, body));
 
 /* =========================================================
    ログアウト
