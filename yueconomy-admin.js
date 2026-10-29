@@ -80,9 +80,10 @@ function dailyLine(x, esc) {
   if (!x) return "";
   if (x.done) return `<p class="yec-note">今日（${esc(x.today)}）の株価・利息の更新：済み</p>`;
   const w = x.watch;
-  const why = !w ? "見守りはまだ確かめていません（13:10 から確かめます）"
+  const why = !w ? "まだ確かめていません（13:00 から確かめます）"
+    : w.result === "worker_error" ? "サーバーが自分で更新しようとして失敗しました（しばらくして、もう一度やります）"
     : w.result === "dispatched" ? "見守りが自動実行を頼みました（数分で反映されます）"
-    : w.result === "no_token" ? "見守りは動けません：Cloudflare に GITHUB_DISPATCH_TOKEN が未登録です"
+    : w.result === "no_token" ? "サーバーでの更新が終わっていません（予備の GITHUB_DISPATCH_TOKEN も未登録です）"
     : `見守りが自動実行を頼めませんでした（GitHub の応答 ${esc(String(w.status))}）`;
   return `<p class="yec-note" style="color:#c0392b;font-weight:bold">⚠ 今日（${esc(x.today)}）の株価・利息の更新は、まだ済んでいません。${why}。</p>`;
 }

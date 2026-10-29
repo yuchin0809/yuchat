@@ -25,6 +25,7 @@ ALLOWED_ORIGINS = "https://yuchin0809.github.io"
 # 自動開催の回（11:30・15:02）は計算だけで決まり、手動レースだけ1回問い合わせる
 # あわせて、毎週金曜 14:30（日本時間）の宝くじの抽選も確かめる（worker.js の scheduled → runLotteryTick）
 # 抽選時刻の直後以外の分は計算だけで終わり、Firestore には触れない
+# ゆう経済の1日1回の処理（13:00 の株価・利息・総資産ランキング）と、総資産ランキングの1時間おきの更新（9:05〜16:25）も、ここで行う（worker.js の runEconomyTick）
 [triggers]
 crons = ["* * * * *"]
 

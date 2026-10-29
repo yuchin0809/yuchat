@@ -3780,7 +3780,7 @@ const kakuWinnersReset = lazyCaller(lazyKakuWinners, "kakuWinnersReset");
 const lazyKeshiEnroll = lazyModule("./yukeshi-admin.js?v=20261026-ltd10", (m) => m.keshiEnrollInit(adminCfg()));
 const keshiEnrollOpen = lazyOpener(lazyKeshiEnroll, "keshiEnrollOpen", () => currentViewName === "usermanage");
 const keshiEnrollReset = lazyCaller(lazyKeshiEnroll, "keshiEnrollReset");
-const lazyEconomyAdmin = lazyModule("./yueconomy-admin.js?v=20261027-reset1", (m) => m.economyAdminInit(adminCfg()));
+const lazyEconomyAdmin = lazyModule("./yueconomy-admin.js?v=20261029-econ1", (m) => m.economyAdminInit(adminCfg()));
 const economyAdminOpen = lazyOpener(lazyEconomyAdmin, "economyAdminOpen", () => currentViewName === "usermanage");
 const economyAdminReset = lazyCaller(lazyEconomyAdmin, "economyAdminReset");
 

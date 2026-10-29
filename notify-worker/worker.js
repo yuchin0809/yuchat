@@ -68,6 +68,8 @@ export default {
     ctx.waitUntil(runTheftTick(env, event.scheduledTime).catch((error) => console.error("theft tick error", String(error?.message || error).slice(0, 300))));
     /* 🛠 ゆう経済の1日1回の処理（株価・利息など）の見守り：GitHub Actions の定期実行が来なかった日の保険。決まった数回の分だけ動く */
     ctx.waitUntil(runDailyWatchdogTick(env, event.scheduledTime).catch((error) => console.error("daily watchdog error", String(error?.message || error).slice(0, 300))));
+    /* 🛠 ゆう経済の1日1回の処理（株価・利息・ゆう税・総資産ランキング）と、総資産ランキングの1時間おきの更新。決まった分以外は Firestore に触れずにすぐ戻る */
+    ctx.waitUntil(runEconomyTick(env, event.scheduledTime).catch((error) => console.error("economy tick error", String(error?.message || error).slice(0, 300))));
     /* 🎫 先着ゲームの週間ランキング：毎週金曜 15:10（日本時間）に結果発表（1位500・2位250・3位100コイン）。それ以外の分は Firestore に触れずにすぐ戻る */
     ctx.waitUntil(runBattleWeekTick(env, event.scheduledTime).catch((error) => console.error("battle week error", String(error?.message || error).slice(0, 300))));
     /* 🎲 ヨットの週間ランキング：毎週金曜 15:10（日本時間）に結果発表（1位500・2位300・3位100コイン。お知らせ・通知は出さない）。それ以外の分は Firestore に触れずにすぐ戻る */
@@ -7238,6 +7240,686 @@ export async function runDailyWatchdogTick(env = {}, scheduledTime = Date.now(),
   if (res.status !== 204) { console.warn("derby-runner の手動実行を頼めませんでした", res.status); await note("dispatch_failed", res.status); return { dispatched: false, status: res.status }; }
   await note("dispatched", 204);
   return { dispatched: true };
+}
+
+/* =========================================================
+   🛠 ゆう経済の1日1回の処理（株価・利息・ゆう税・ボーナス・総資産ランキング）を、この Worker 自身で行う
+   ・これまでは GitHub Actions の derby-runner（日本時間 13:00 以降）と、1時間おきのランキング更新（9:00〜16:59）が行っていた。
+     GitHub の定期実行は、遅れたり、まったく来ない日がある（来ない日は、株価もランキングも止まる）。
+   ・毎分動くこの Worker が、13:00 から決まった数回の分に、今日の分が済んでいるか（rankings/assets の date と complete）を確かめ、
+     済んでいなければ、そのまま行う（株価の更新 → 利息・返済期限切れ・ゆう税・追加ボーナス → 総資産ランキング → 経済の毎日の記録）。
+     計算は derby-runner/economy.mjs と同じ（同じ入力から同じ結果になることを、テストで確かめている）。何回動いても二重にならない（日付の印と、更新時刻の条件つきの書き込み）。
+   ・総資産ランキングの1時間おきの更新も、9:05〜16:25 に行う（rankings/assets の users・userCount・liveUpdatedAt だけを書く）。
+   ・読み取り：確かめる分に rankings/assets を1件。行うときだけ market/current 1・users 全件 1回。書き込み：market/current 1・変わる人だけ・rankings/assets 1・economyStats/history 1。
+   ・株価の乱数の種：Secret「STOCK_SEED_SECRET」があればそれ、無ければ FIREBASE_SERVICE_ACCOUNT の秘密鍵のハッシュ（derby-runner と同じ作り方。鍵そのものは使わない）。どちらも無ければ株価は更新しない。
+========================================================= */
+const DJ_STOCK_NEWS = {
+  YGM: {
+    good: [
+      "新作RPG「ユウクエスト」の予約が過去最高を記録",
+      "人気シリーズの続編を電撃発表",
+      "海外の大手配信サイトでの独占配信が決定",
+      "スマホ向け新作が無料ランキング1位を獲得",
+      "eスポーツ大会の公式スポンサー契約を締結",
+      "アニメ化プロジェクトが始動、関連グッズも好調",
+      "年末商戦の売上が予想を大きく上回る",
+      "オンラインゲームの同時接続数が過去最高に",
+      "有名クリエイターが開発チームに加入",
+      "VR対応の新作体験会に長蛇の列",
+      "ゲーム大賞でグランプリを受賞",
+      "大型アップデートで休眠ユーザーが続々復帰",
+      "人気キャラクターのコラボカフェが大盛況",
+      "海外売上比率が初めて5割を突破",
+      "新しいゲーム機向けに主力タイトルを投入",
+      "サブスクリプションの会員数が100万人を突破",
+      "映画化が決定し、話題がSNSで拡散",
+      "インディーゲーム支援プログラムが好評",
+      "自社イベントのチケットが即日完売",
+      "過去作のリマスター版が想定の3倍の販売",
+      "ゲーム配信者との提携で認知度が急上昇",
+      "新しいスタジオを開設し開発体制を強化",
+      "学習用ゲームが全国の学校で採用",
+      "大手玩具メーカーとの業務提携を発表",
+      "通期の利益予想を上方修正",
+      "株主優待にゲーム内アイテムを追加",
+      "人気タイトルのダウンロード数が1億回を突破",
+      "クラウドゲーム事業が黒字化",
+      "音楽ゲームの楽曲が音楽配信ランキング入り",
+      "新作の世界同時発売日が決定"
+    ],
+    bad: [
+      "期待の新作の発売が半年延期に",
+      "オンラインゲームで大規模なサーバー障害",
+      "人気タイトルの不具合で返金対応へ",
+      "主要クリエイターが独立を発表",
+      "ガチャの表示に誤りがあり運営が謝罪",
+      "海外での販売が想定を大きく下回る",
+      "新作の評価がレビューサイトで低迷",
+      "開発費が膨らみ通期の利益予想を下方修正",
+      "大型イベントが天候不良で中止に",
+      "人気キャラクターの著作権を巡りトラブル",
+      "スマホゲームのユーザー数が減少傾向",
+      "競合他社が類似タイトルを格安で発売",
+      "セキュリティ問題でアカウントの一部が流出か",
+      "eスポーツ大会で運営トラブルが発生",
+      "コラボ企画が直前で中止に",
+      "サブスクリプションの解約が増加",
+      "アップデートが不評で炎上",
+      "開発スタジオの一部閉鎖を発表",
+      "ゲーム機向け新作の出荷数が伸び悩む",
+      "海外子会社の業績が悪化",
+      "人気シリーズの続編が開発中止に",
+      "広告費の増加で利益が圧迫",
+      "主力タイトルのサービス終了を発表",
+      "映画版の公開が延期に",
+      "不正ツールの横行でランキングが混乱",
+      "年末商戦の売上が前年を下回る",
+      "大型アップデートの配信が延期",
+      "クラウドゲーム事業の赤字が拡大",
+      "人気配信者との契約が終了",
+      "新作の初週販売本数が予想を下回る"
+    ]
+  },
+  YMT: {
+    good: [
+      "ネット通販の注文数が過去最高を更新",
+      "全国に新店舗を20店オープン",
+      "当日配送エリアを大幅に拡大",
+      "プライベートブランド商品が大ヒット",
+      "ポイント還元キャンペーンで来店客が急増",
+      "物流センターの自動化でコストを削減",
+      "人気ブランドとの独占販売契約を締結",
+      "年末セールの売上が前年比150%に",
+      "会員数が1000万人を突破",
+      "地方の商店街と共同で新サービスを開始",
+      "無人レジの導入で待ち時間を大幅短縮",
+      "食品の宅配サービスが共働き世帯に好評",
+      "アプリのダウンロード数がランキング1位に",
+      "海外向け越境通販が好調",
+      "環境に優しい梱包が消費者から高評価",
+      "ドローン配送の実証実験に成功",
+      "既存店の売上が12か月連続で前年超え",
+      "大型ショッピングモールの出店が決定",
+      "通期の利益予想を上方修正",
+      "ライブコマースの視聴者数が急増",
+      "人気キャラクターとのコラボ商品が即完売",
+      "返品無料サービスで顧客満足度が向上",
+      "サブスク型の定期便サービスが好調",
+      "新しい決済方法の導入で購入率が上昇",
+      "業界の顧客満足度調査で1位を獲得",
+      "季節商品の売れ行きが想定を上回る",
+      "配送スタッフの待遇改善で人材確保が進む",
+      "大手メーカーと共同で限定商品を開発",
+      "AIによる在庫管理で売れ残りが減少",
+      "株主への配当を増やすと発表"
+    ],
+    bad: [
+      "物流センターで大規模なシステム障害",
+      "配送の遅れが相次ぎ苦情が増加",
+      "人件費の上昇で利益が圧迫",
+      "競合の格安通販に顧客が流出",
+      "プライベートブランド商品で自主回収",
+      "既存店の売上が前年を下回る",
+      "大型店舗の閉店を発表",
+      "会員情報の一部が流出した可能性",
+      "ポイント制度の改悪に不満の声",
+      "海外事業から撤退を発表",
+      "仕入れ価格の高騰で値上げへ",
+      "年末セールの売上が想定を下回る",
+      "配送料の値上げで注文数が減少",
+      "新物流センターの稼働が延期",
+      "大雨の影響で一部地域への配送を停止",
+      "人気ブランドとの契約が終了",
+      "アプリの不具合で注文ができない状態に",
+      "通期の利益予想を下方修正",
+      "在庫の積み上がりで値下げ販売が増加",
+      "出店計画を大幅に縮小",
+      "返品の増加でコストが膨らむ",
+      "表示価格の誤りで大量注文が発生",
+      "配送スタッフ不足でサービスを一部休止",
+      "決済システムの障害で売上機会を逃す",
+      "ライブコマース事業が伸び悩む",
+      "季節商品の売れ行きが不振",
+      "競合が同じ地域に大型店を出店",
+      "広告費の増加が利益を圧迫",
+      "取引先の倒産で商品の供給が滞る",
+      "顧客満足度調査で順位が大きく後退"
+    ]
+  },
+  YFD: {
+    good: [
+      "新商品のスナック菓子が大ヒット",
+      "人気レストランチェーンを買収",
+      "健康志向の新ブランドが若者に人気",
+      "海外の大手スーパーで販売開始",
+      "冷凍食品の売上が過去最高に",
+      "テレビ番組で紹介された商品が品切れ続出",
+      "原材料の調達コストが下がり利益が改善",
+      "新しい工場が完成し生産能力が倍増",
+      "季節限定メニューが話題に",
+      "給食向けの新サービスが全国で採用",
+      "人気カフェとのコラボ商品が即完売",
+      "食品コンテストで金賞を受賞",
+      "宅配サービスとの提携で注文が急増",
+      "通期の利益予想を上方修正",
+      "賞味期限を延ばす新技術を開発",
+      "飲食店の来店客数が前年比120%に",
+      "植物由来の新食品が注目を集める",
+      "地域の名産品を使った商品がヒット",
+      "海外の展示会で大型契約を獲得",
+      "人気スポーツ選手と広告契約",
+      "食品ロス削減の取り組みが高評価",
+      "新業態の店舗に行列ができる",
+      "アプリ会員限定メニューで客単価が上昇",
+      "ロングセラー商品の売上がさらに伸びる",
+      "健康食品の新ラインナップを発表",
+      "大手コンビニでの取り扱いが決定",
+      "株主優待に人気商品の詰め合わせを追加",
+      "テイクアウト需要の増加で売上好調",
+      "自社農園の拡大で原材料を安定確保",
+      "配当の増額を発表"
+    ],
+    bad: [
+      "主力商品で異物混入が発覚し自主回収",
+      "原材料の高騰で値上げへ",
+      "工場の設備故障で生産が一時停止",
+      "飲食店の来店客数が減少",
+      "新メニューの評判が振るわず",
+      "海外工場で品質問題が発生",
+      "天候不順で原材料の収穫量が減少",
+      "人気商品の販売を終了",
+      "食品表示の誤りが見つかり謝罪",
+      "物流費の上昇で利益が圧迫",
+      "競合が同じ価格帯で新商品を投入",
+      "店舗の一部閉鎖を発表",
+      "通期の利益予想を下方修正",
+      "冷凍食品の売上が伸び悩む",
+      "コラボ商品が予定より売れず在庫が増加",
+      "人手不足で一部店舗の営業時間を短縮",
+      "健康ブームの一服で関連商品が不振",
+      "海外での販売許可の取得が遅れる",
+      "大手コンビニとの取引が縮小",
+      "SNSで商品の味の変更に批判が集まる",
+      "電気代の高騰で製造コストが上昇",
+      "新工場の稼働が延期",
+      "買収したレストランチェーンが赤字",
+      "食品ロスの増加が問題に",
+      "広告に起用したタレントの不祥事",
+      "季節限定メニューが材料不足で販売中止",
+      "宅配サービスとの提携が終了",
+      "人気商品の容量を減らし値段据え置きに批判",
+      "海外事業の業績が悪化",
+      "配当の減額を発表"
+    ]
+  },
+  YEN: {
+    good: [
+      "新型の太陽光パネルの発電効率が世界最高水準に",
+      "大型の洋上風力発電所の建設が決定",
+      "電気料金の新プランで契約数が急増",
+      "次世代バッテリーの量産に成功",
+      "政府の再生可能エネルギー支援策の対象に",
+      "電気自動車の充電スタンドを全国に拡大",
+      "海外の発電プロジェクトを受注",
+      "燃料費の下落で利益が大幅に改善",
+      "水素エネルギーの実証実験に成功",
+      "地熱発電所が予定より早く稼働",
+      "大手メーカーと蓄電池の共同開発を発表",
+      "電力の安定供給で顧客満足度が向上",
+      "通期の利益予想を上方修正",
+      "スマートメーターの導入で業務効率が向上",
+      "工場向けの省エネサービスが好調",
+      "新しい送電網の整備で供給能力が増加",
+      "環境に配慮した経営が投資家から高評価",
+      "家庭用蓄電池の販売が過去最高に",
+      "バイオマス発電の燃料を安定確保",
+      "海外市場への進出が順調",
+      "電力の卸売価格の上昇で収益が拡大",
+      "新しい発電技術の特許を取得",
+      "地域の自治体と電力供給契約を締結",
+      "電気自動車メーカーと充電サービスで提携",
+      "AIによる需要予測で発電の無駄を削減",
+      "老朽化した発電所の更新が完了",
+      "再生可能エネルギーの比率が5割を突破",
+      "大口の企業向け契約を相次いで獲得",
+      "配当の増額を発表",
+      "株主優待に電気料金の割引を追加"
+    ],
+    bad: [
+      "発電所でトラブルが発生し運転を停止",
+      "燃料価格の高騰で利益が大幅に減少",
+      "台風の影響で広い範囲が停電",
+      "洋上風力発電所の建設が延期",
+      "新型バッテリーの量産が遅れる",
+      "電気料金の値上げで解約が増加",
+      "海外の発電プロジェクトで損失が発生",
+      "太陽光パネルの不具合で一部回収",
+      "通期の利益予想を下方修正",
+      "政府の補助金が縮小される見通し",
+      "送電網の工事が地域の反対で中断",
+      "競合の新規参入で価格競争が激化",
+      "水素エネルギー事業の採算が合わず縮小",
+      "地熱発電所の稼働が延期",
+      "システム障害で電気料金の請求を誤る",
+      "充電スタンドの利用が伸び悩む",
+      "環境への影響を巡り批判が集まる",
+      "大口顧客との契約が終了",
+      "電力の卸売価格の下落で収益が悪化",
+      "老朽化した設備の修理費が膨らむ",
+      "猛暑で電力の調達コストが急上昇",
+      "家庭用蓄電池の販売が不振",
+      "海外市場から撤退を発表",
+      "発電所の点検で不正が見つかる",
+      "バイオマス発電の燃料が不足",
+      "電力需給がひっ迫し節電を要請",
+      "スマートメーターの導入が遅れる",
+      "共同開発の提携が解消に",
+      "配当の減額を発表",
+      "大規模な設備投資で借入金が増加"
+    ]
+  },
+  YPY: {
+    good: [
+      "スマホ決済の利用者数が3000万人を突破",
+      "大手コンビニ全店で利用可能に",
+      "海外での決済サービスを開始",
+      "ポイント還元キャンペーンで取引額が急増",
+      "銀行と提携し新しい口座サービスを開始",
+      "決済手数料の収入が過去最高に",
+      "不正利用を防ぐ新しい認証技術を導入",
+      "個人間送金の利用が若者に広がる",
+      "通期の利益予想を上方修正",
+      "大手通販サイトとの提携を発表",
+      "公共料金の支払いに対応",
+      "加盟店数が200万店を突破",
+      "後払いサービスの利用が好調",
+      "セキュリティ評価で最高ランクを取得",
+      "地方自治体のキャッシュレス事業に採用",
+      "交通機関での利用が可能に",
+      "AIによる与信審査で貸し倒れが減少",
+      "新しいクレジットカードの申込が殺到",
+      "海外旅行者向けサービスが好評",
+      "家計簿アプリとの連携で利用が増加",
+      "大型商業施設で独占キャンペーン",
+      "給与のデジタル払いに対応",
+      "取引量の増加でシステム投資が実を結ぶ",
+      "業界の利用満足度調査で1位を獲得",
+      "中小店舗向けの手数料無料プランが好評",
+      "国際ブランドとの提携を発表",
+      "保険サービスの販売が好調",
+      "投資サービスの口座数が急増",
+      "配当の増額を発表",
+      "株主優待に決済ポイントを追加"
+    ],
+    bad: [
+      "大規模なシステム障害で決済が一時停止",
+      "不正利用の被害が相次ぎ補償へ",
+      "ポイント還元の縮小で利用者が減少",
+      "競合が手数料ゼロを打ち出し加盟店が流出",
+      "海外事業で損失が発生",
+      "金融当局から業務改善命令",
+      "個人情報の一部が流出した可能性",
+      "後払いサービスの貸し倒れが増加",
+      "通期の利益予想を下方修正",
+      "大手通販サイトとの提携が終了",
+      "決済手数料の引き下げで収益が悪化",
+      "新サービスの開始が延期",
+      "アプリの更新で使いにくくなったと不評",
+      "クレジットカード事業の赤字が拡大",
+      "交通機関での導入計画が白紙に",
+      "システム投資の費用が膨らむ",
+      "加盟店からの手数料値上げ反対が広がる",
+      "国際ブランドとの交渉が難航",
+      "キャンペーンの不具合でポイントを誤付与",
+      "投資サービスで顧客の損失が問題に",
+      "保険サービスの販売が伸び悩む",
+      "海外旅行者向けサービスを縮小",
+      "取引の承認に時間がかかるトラブル",
+      "給与デジタル払いの対応が遅れる",
+      "自治体のキャッシュレス事業の契約を失う",
+      "セキュリティ評価のランクが下がる",
+      "家計簿アプリとの連携を終了",
+      "経営陣の相次ぐ退任を発表",
+      "配当の減額を発表",
+      "大型キャンペーンの費用で赤字に"
+    ]
+  }
+};
+export const STOCK_NEWS_COPY = DJ_STOCK_NEWS;
+
+const DJ_STOCK_CODES = Object.keys(ASSET_STOCK_INITIAL_PRICES);   // YGM, YMT, YFD, YEN, YPY（derby-runner の STOCK_COMPANIES と同じ並び）
+const DJ_MIN_PRICE = 10;
+const DJ_BANK_INTEREST_RATE = 0.01, DJ_BANK_INTEREST_MAX = 100, DJ_BONUS_COINS = 500;
+const DJ_STOCK_DRIFT = 0.002, DJ_STOCK_VOLATILITY = 0.025, DJ_STOCK_PULL = 0.05, DJ_STOCK_EVENT_CHANCE = 0.03;
+const DJ_STOCK_EVENT_MIN = 0.15, DJ_STOCK_EVENT_MAX = 0.30, DJ_NEWS_GOOD_CHANCE = 0.55, DJ_NEWS_EFFECT_MIN = 0.04, DJ_NEWS_EFFECT_MAX = 0.10;
+const DJ_STOCK_DAY_MIN_CHANGE = -0.5, DJ_STOCK_DAY_MAX_CHANGE = 0.6, DJ_HISTORY_DAYS = 30, DJ_RECENT_NEWS_KEEP = 60, DJ_HISTORY_POINTS = 120;
+const DJ_TAX_FREE = 5000;
+const DJ_TAX_BRACKETS = [{ upTo: 10000, rate: 0.02 }, { upTo: 15000, rate: 0.04 }, { upTo: 20000, rate: 0.06 }, { upTo: Infinity, rate: 0.08 }];
+const DJ_DAILY_MINUTE_OF_DAY = 13 * 60;   // 日本時間 13:00
+/* 今日の分を確かめる時刻（日本時間の「0:00 からの分」）。13:00〜13:04 は毎分（すぐ済ませる）、そのあとは取りこぼしたときのやり直し */
+const DJ_DAILY_CHECK_MINUTES = [780, 781, 782, 783, 784, 795, 810, 840, 870, 920, 980, 1090, 1220, 1400];
+/* 総資産ランキングの1時間おきの更新（9:00〜16:59）：各時の :05 と :25（:25 は、:05 が取りこぼされたときだけ動く） */
+const DJ_RANK_LIVE_FROM_HOUR = 9, DJ_RANK_LIVE_TO_HOUR = 17, DJ_RANK_LIVE_FRESH_MS = 45 * 60000;
+
+export function djSeededRandom(seedText) {
+  let h = 1779033703 ^ seedText.length;
+  for (let i = 0; i < seedText.length; i++) {
+    h = Math.imul(h ^ seedText.charCodeAt(i), 3432918353);
+    h = (h << 13) | (h >>> 19);
+  }
+  let a = h >>> 0;
+  return () => {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function djGaussian(rand) {
+  const u = Math.max(rand(), 1e-12), v = rand();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+const djHex = (bytes) => [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, "0")).join("");
+
+/* 株価の秘密値（derby-runner の getStockSeedSecret と同じ作り方） */
+export async function djStockSecret(env = {}) {
+  if (env.STOCK_SEED_SECRET) return String(env.STOCK_SEED_SECRET);
+  if (env.FIREBASE_SERVICE_ACCOUNT) {
+    try {
+      const key = JSON.parse(env.FIREBASE_SERVICE_ACCOUNT).private_key;
+      if (key) return djHex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`yuuchat-stock-seed:v1:${key}`)));
+    } catch { /* 読めなければ、秘密値なし */ }
+  }
+  return null;
+}
+async function djSecretSeed(secret, label) {
+  if (typeof secret !== "string" || secret.length === 0) throw new Error("stock secret missing");
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  return djHex(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(label)));
+}
+function djDaysBetween(fromDate, toDate) {
+  if (!fromDate) return 0;
+  return Math.max(0, Math.round((Date.parse(`${toDate}T00:00:00Z`) - Date.parse(`${fromDate}T00:00:00Z`)) / 86400000));
+}
+
+export async function djPickDailyNews(dateText, recentNewsIds, secret) {
+  const rand = djSeededRandom(await djSecretSeed(secret, `${dateText}:news`));
+  const roll = rand();
+  const count = roll < 0.25 ? 1 : roll < 0.75 ? 2 : 3;
+  const codes = [...DJ_STOCK_CODES];
+  for (let i = codes.length - 1; i > 0; i--) { const j = Math.floor(rand() * (i + 1)); [codes[i], codes[j]] = [codes[j], codes[i]]; }
+  const recent = new Set(recentNewsIds || []);
+  return codes.slice(0, count).map((code) => {
+    const kind = rand() < DJ_NEWS_GOOD_CHANCE ? "good" : "bad";
+    const list = DJ_STOCK_NEWS[code][kind].map((text, i) => ({ id: `${code}-${kind[0]}${String(i + 1).padStart(2, "0")}`, text }));
+    const fresh = list.filter((n) => !recent.has(n.id));
+    const pool = fresh.length ? fresh : list;
+    const chosen = pool[Math.floor(rand() * pool.length)];
+    const size = DJ_NEWS_EFFECT_MIN + (DJ_NEWS_EFFECT_MAX - DJ_NEWS_EFFECT_MIN) * rand();
+    return { id: chosen.id, code, kind, text: chosen.text, effectPct: Math.round((kind === "good" ? size : -size) * 1000) / 10 };
+  });
+}
+
+/* 前日の株価のまとめから、その日の株価を計算する（derby-runner の computeDailyMarket と同じ結果） */
+export async function djComputeDailyMarket(previous, dateText, secret) {
+  const prev = previous && previous.companies ? previous : { companies: Object.fromEntries(DJ_STOCK_CODES.map((c) => [c, { price: ASSET_STOCK_INITIAL_PRICES[c], history: [ASSET_STOCK_INITIAL_PRICES[c]] }])), recentNewsIds: [] };
+  const startDate = prev.startDate || dateText;
+  const days = djDaysBetween(startDate, dateText);
+  const news = await djPickDailyNews(dateText, prev.recentNewsIds || [], secret);
+  const companies = {};
+  const events = [];
+  for (const code of DJ_STOCK_CODES) {
+    const initial = ASSET_STOCK_INITIAL_PRICES[code];
+    const before = prev.companies[code] || { price: initial, history: [initial] };
+    const price = Math.max(DJ_MIN_PRICE, Number(before.price) || initial);
+    const rand = djSeededRandom(await djSecretSeed(secret, `${dateText}:${code}`));
+    const trend = initial * Math.pow(1 + DJ_STOCK_DRIFT, days);
+    let change = DJ_STOCK_DRIFT + djGaussian(rand) * DJ_STOCK_VOLATILITY + DJ_STOCK_PULL * Math.log(trend / price);
+    const eventRoll = rand();
+    const eventSize = DJ_STOCK_EVENT_MIN + (DJ_STOCK_EVENT_MAX - DJ_STOCK_EVENT_MIN) * rand();
+    if (eventRoll < DJ_STOCK_EVENT_CHANCE) { change += eventSize; events.push({ code, kind: "surge", pct: Math.round(eventSize * 1000) / 10 }); }
+    else if (eventRoll < DJ_STOCK_EVENT_CHANCE * 2) { change -= eventSize; events.push({ code, kind: "crash", pct: Math.round(-eventSize * 1000) / 10 }); }
+    news.filter((n) => n.code === code).forEach((n) => { change += n.effectPct / 100; });
+    change = Math.min(DJ_STOCK_DAY_MAX_CHANGE, Math.max(DJ_STOCK_DAY_MIN_CHANGE, change));
+    const next = Math.max(DJ_MIN_PRICE, Math.round(price * (1 + change)));
+    const history = [...(Array.isArray(before.history) ? before.history : [price]), next].slice(-DJ_HISTORY_DAYS);
+    companies[code] = { price: next, prevPrice: price, changePct: Math.round(((next - price) / price) * 1000) / 10, history };
+  }
+  return { date: dateText, startDate, companies, todayNews: news, events, recentNewsIds: [...(prev.recentNewsIds || []), ...news.map((n) => n.id)].slice(-DJ_RECENT_NEWS_KEEP) };
+}
+
+export function djTaxOf(total) {
+  let tax = 0, lo = DJ_TAX_FREE;
+  for (const b of DJ_TAX_BRACKETS) {
+    if (total <= lo) break;
+    tax += (Math.min(total, b.upTo) - lo) * b.rate;
+    lo = b.upTo;
+  }
+  return Math.floor(tax);
+}
+function djBank(bank) {
+  const b = bank && typeof bank === "object" ? bank : {};
+  return { ...b, deposit: Math.max(0, Math.floor(Number(b.deposit) || 0)), interestBase: Math.max(0, Math.floor(Number(b.interestBase) || 0)), loan: Math.max(0, Math.floor(Number(b.loan) || 0)) };
+}
+function djAssets(data, prices) {
+  const bank = djBank(data.bank);
+  const coins = Number(data.coins) || 0;
+  const stockValue = Object.entries(data.stocks && typeof data.stocks === "object" ? data.stocks : {}).reduce((s, [code, h]) => s + Math.max(0, Math.floor(Number(h?.qty) || 0)) * (Number(prices[code]) || 0), 0);
+  return { coins, deposit: bank.deposit, stockValue, loan: bank.loan, total: coins + bank.deposit + stockValue - bank.loan };
+}
+/* 総資産ランキング（同額は同じ順位。多い順、同額は名前の順） */
+export function djBuildRanking(entries) {
+  const sorted = [...entries].sort((a, b) => (b.total - a.total) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  let rank = 0, prev = null;
+  return sorted.map((e, i) => { if (e.total !== prev) { rank = i + 1; prev = e.total; } return { ...e, rank }; });
+}
+
+/* 1人分の1日1回の処理（利息 → 返済期限切れの自動返済 → ゆう税 → 追加ボーナス）。変更が無ければ null。
+   戻り値：{ coins（変えるときだけ）, bankSet（変える bank の項目だけ）, bonus, interest, repaid, tax }（derby-runner の applyDailyUserUpdate と同じ計算） */
+export function djApplyDailyUserUpdate(data, today, nowMs, prices = null) {
+  const bank = djBank(data.bank);
+  let coins = typeof data.coins === "number" ? data.coins : null;
+  let coinsChanged = false, bankChanged = false, interest = 0, repaid = null, bonus = false;
+
+  if ((bank.deposit > 0 || bank.interestBase > 0) && bank.interestDate !== today) {
+    interest = Math.min(Math.floor(Math.min(bank.deposit, bank.interestBase) * DJ_BANK_INTEREST_RATE), DJ_BANK_INTEREST_MAX);
+    bank.deposit += interest; bank.interestDate = today; bank.lastInterest = interest; bankChanged = true;
+  }
+  const due = typeof bank.loanDueAt === "string" ? Date.parse(bank.loanDueAt) : NaN;
+  if (bank.loan > 0 && Number.isFinite(due) && due <= nowMs && bank.overdueDate !== today) {
+    const fromDeposit = Math.min(bank.deposit, bank.loan);
+    bank.deposit -= fromDeposit; bank.loan -= fromDeposit;
+    const fromCoins = coins === null ? 0 : Math.min(Math.max(0, Math.floor(coins)), bank.loan);
+    if (coins !== null) coins -= fromCoins;
+    bank.loan -= fromCoins;
+    repaid = { date: today, amount: fromDeposit + fromCoins, fromDeposit, fromCoins, remaining: bank.loan };
+    bank.lastAutoRepay = repaid; bank.overdueDate = today; bank.overdue = bank.loan > 0;
+    if (bank.loan === 0) { bank.loanDueAt = null; bank.loanTakenAt = null; }
+    bankChanged = true;
+    if (fromCoins > 0) coinsChanged = true;
+  }
+  let tax = 0;
+  if (prices && bank.taxDate !== today) {
+    const cash = coins === null ? 0 : Math.max(0, Math.floor(coins));
+    const stockValue = djAssets(data, prices).stockValue;
+    const total = (coins === null ? 0 : coins) + bank.deposit + stockValue - bank.loan;
+    tax = Math.min(djTaxOf(total), cash + bank.deposit);
+    if (tax > 0) {
+      const fromCoins = Math.min(cash, tax), fromDeposit = tax - fromCoins;
+      if (fromCoins > 0) { coins -= fromCoins; coinsChanged = true; }
+      bank.deposit -= fromDeposit; bank.taxDate = today; bank.lastTax = tax; bankChanged = true;
+    }
+  }
+  if (bankChanged) bank.interestBase = bank.deposit;
+  if (coins !== null && data.bonus500Granted !== true) { coins += DJ_BONUS_COINS; bonus = true; coinsChanged = true; }
+  if (!bankChanged && !coinsChanged) return null;
+  const bankSet = {};
+  if (bankChanged) {
+    const old = djBank(data.bank);
+    Object.keys(bank).forEach((k) => { if (JSON.stringify(bank[k]) !== JSON.stringify(old[k]) || !(data.bank && k in data.bank)) bankSet[k] = bank[k]; });
+  }
+  return { coins: coinsChanged ? coins : null, bankSet, bonus, interest, repaid, tax };
+}
+
+/* users の1人分の書き込み（変えた項目だけ。更新時刻の条件つき） */
+function djUserWrite(fs, name, updateTime, change) {
+  const fields = {}, mask = [];
+  if (change.coins !== null) { fields.coins = encodeValue(change.coins); mask.push("coins"); }
+  Object.entries(change.bankSet).forEach(([k, v]) => { (fields.bank ||= { mapValue: { fields: {} } }).mapValue.fields[k] = encodeValue(v); mask.push(`bank.${k}`); });
+  if (change.bonus) { fields.bonus500Granted = encodeValue(true); mask.push("bonus500Granted"); }
+  const write = { update: { name: fs.docName(`users/${name}`), fields }, updateMask: { fieldPaths: mask }, currentDocument: { updateTime } };
+  if (change.bonus) write.updateTransforms = [{ fieldPath: "bonus500GrantedAt", setToServerValue: "REQUEST_TIME" }];
+  return write;
+}
+
+const djReadUsers = async (fs) => (await fs.query("users", [], { select: ["uid", "coins", "bank", "stocks", "bonus500Granted"] })).filter((u) => u.data && typeof u.data.coins === "number");
+
+let djDailyRunning = false;
+const djDailyDone = new Set();
+export function resetEconomyTickForTest() { djDailyRunning = false; djDailyDone.clear(); }
+
+/* 1日1回の処理の本体。戻り値：{ status: "ok" | "error" | "skipped", ... } */
+export async function runEconomyDaily(deps, env = {}, nowMs = Date.now()) {
+  const fs = deps.firestore;
+  const today = jstDateString(nowMs);
+  const result = { date: today, status: "skipped", errors: [] };
+  if (((nowMs + KAKU_JST) % KAKU_DAY_MS) < DJ_DAILY_MINUTE_OF_DAY * KAKU_MIN) { result.reason = "before_13"; return result; }
+  const rankingRaw = await fs.getRaw("rankings/assets");
+  const ranking = rankingRaw ? decodeFields(rankingRaw.fields) : null;
+  if (ranking && ranking.date === today && ranking.complete === true) { result.reason = "done"; return result; }
+
+  /* 1. 株価（まだ今日の分が無ければ計算して、「まだ無ければ作る」条件つきで書く） */
+  const marketRaw = await fs.getRaw("market/current");
+  let market = marketRaw ? decodeFields(marketRaw.fields) : null;
+  if (!market || market.date !== today) {
+    const secret = await djStockSecret(env);
+    if (!secret) throw new Error("stock secret missing");
+    const next = await djComputeDailyMarket(market, today, secret);
+    await fs.commit([{
+      update: { name: fs.docName("market/current"), fields: encodeFields({ ...next, updatedBy: "worker" }) },
+      updateTransforms: [{ fieldPath: "updatedAt", setToServerValue: "REQUEST_TIME" }],
+      currentDocument: marketRaw ? { updateTime: marketRaw.updateTime } : { exists: false }
+    }]);
+    market = next;
+    result.marketUpdated = true;
+  }
+  const prices = marketPricesOf(market);
+  result.news = (market.todayNews || []).map((n) => `${n.code}:${n.kind}`);
+
+  /* 2〜4. 利息・返済期限切れ・ゆう税・追加ボーナス（変わる人だけ。書く前に読んだ更新時刻と違っていたら、その人だけ読み直してやり直す） */
+  const users = await djReadUsers(fs);
+  Object.assign(result, { users: users.length, interestUsers: 0, interestTotal: 0, autoRepaid: 0, autoRepaidTotal: 0, bonusGranted: 0, taxUsers: 0, taxTotal: 0 });
+  const finalData = new Map(users.map((u) => [u.id, u.data]));
+  const tally = (c) => {
+    if (c.interest > 0) { result.interestUsers++; result.interestTotal += c.interest; }
+    if (c.repaid) { result.autoRepaid++; result.autoRepaidTotal += c.repaid.amount; }
+    if (c.bonus) result.bonusGranted++;
+    if (c.tax > 0) { result.taxUsers++; result.taxTotal += c.tax; }
+  };
+  const merged = (data, c) => {
+    const next = { ...data };
+    if (c.coins !== null) next.coins = c.coins;
+    if (Object.keys(c.bankSet).length) next.bank = { ...djBank(data.bank), ...c.bankSet };
+    if (c.bonus) next.bonus500Granted = true;
+    return next;
+  };
+  for (const u of users) {
+    let data = u.data, updateTime = u.updateTime;
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      const change = djApplyDailyUserUpdate(data, today, nowMs, prices);
+      if (!change) break;
+      try {
+        await fs.commit([djUserWrite(fs, u.id, updateTime, change)]);
+        finalData.set(u.id, merged(data, change));
+        tally(change);
+        break;
+      } catch (error) {
+        if (!isRetryableCommitError(error) || attempt === 4) { result.errors.push(`user ${u.id}: ${String(error?.message || error).slice(0, 120)}`); break; }
+        const fresh = await fs.getRaw(`users/${u.id}`);
+        if (!fresh) { finalData.delete(u.id); break; }
+        data = decodeFields(fresh.fields); updateTime = fresh.updateTime; finalData.set(u.id, data);
+      }
+    }
+  }
+
+  /* 5. 総資産ランキング（ここまでの最新の値。全員が対象） */
+  const entries = [...finalData.entries()].filter(([, d]) => typeof d.coins === "number").map(([name, d]) => ({ name, ...djAssets(d, prices) }));
+  const rows = djBuildRanking(entries);
+  await fs.commit([{
+    update: { name: fs.docName("rankings/assets"), fields: encodeFields({ date: today, complete: result.errors.length === 0, prices, users: rows, userCount: rows.length, updatedBy: "worker" }) },
+    updateTransforms: [{ fieldPath: "updatedAt", setToServerValue: "REQUEST_TIME" }, { fieldPath: "liveUpdatedAt", setToServerValue: "REQUEST_TIME" }]
+  }]);
+  result.rankingUsers = rows.length;
+
+  /* 経済の毎日の記録（1日1点。失敗しても、今日の処理は止めない） */
+  try {
+    const histRaw = await fs.getRaw("economyStats/history");
+    const hist = histRaw ? decodeFields(histRaw.fields) : {};
+    const points = (Array.isArray(hist.points) ? hist.points : []).filter((p) => p && p.date !== today);
+    points.push({ date: today, ...economySummary(rows), interestUsers: result.interestUsers, interestTotal: result.interestTotal, autoRepaidTotal: result.autoRepaidTotal, bonusGranted: result.bonusGranted, taxUsers: result.taxUsers, taxTotal: result.taxTotal });
+    await fs.commit([{ update: { name: fs.docName("economyStats/history"), fields: encodeFields({ points: points.slice(-DJ_HISTORY_POINTS), updatedBy: "worker" }) }, updateMask: { fieldPaths: ["points", "updatedBy"] }, updateTransforms: [{ fieldPath: "updatedAt", setToServerValue: "REQUEST_TIME" }] }]);
+  } catch (error) {
+    result.errors.push(`economyStats: ${String(error?.message || error).slice(0, 120)}`);
+  }
+  result.status = result.errors.length ? "error" : "ok";
+  console.log(JSON.stringify({ economyDaily: { ...result } }));
+  return result;
+}
+
+/* 総資産ランキングの1時間おきの更新（9:00〜16:59）。ランキングの書類が無ければ何もしない（最初の13:00の処理が作る） */
+export async function runEconomyRankingLive(deps, nowMs = Date.now()) {
+  const fs = deps.firestore;
+  const hour = Math.floor(((nowMs + KAKU_JST) % KAKU_DAY_MS) / 3600000);
+  if (hour < DJ_RANK_LIVE_FROM_HOUR || hour >= DJ_RANK_LIVE_TO_HOUR) return { status: "skipped", reason: "outside" };
+  const rankingRaw = await fs.getRaw("rankings/assets");
+  if (!rankingRaw) return { status: "skipped", reason: "no_ranking" };
+  const live = rankingRaw.fields?.liveUpdatedAt?.timestampValue;
+  if (live && nowMs - Date.parse(live) < DJ_RANK_LIVE_FRESH_MS) return { status: "skipped", reason: "fresh" };
+  const marketRaw = await fs.getRaw("market/current");
+  if (!marketRaw) return { status: "skipped", reason: "no_market" };
+  const prices = marketPricesOf(decodeFields(marketRaw.fields));
+  const users = await djReadUsers(fs);
+  const rows = djBuildRanking(users.map((u) => ({ name: u.id, ...djAssets(u.data, prices) })));
+  await fs.commit([{
+    update: { name: fs.docName("rankings/assets"), fields: { users: encodeValue(rows), userCount: encodeValue(rows.length) } },
+    updateMask: { fieldPaths: ["users", "userCount"] },
+    updateTransforms: [{ fieldPath: "liveUpdatedAt", setToServerValue: "REQUEST_TIME" }],
+    currentDocument: { updateTime: rankingRaw.updateTime }
+  }]);
+  console.log(JSON.stringify({ economyRankingLive: { users: rows.length } }));
+  return { status: "ok", users: rows.length };
+}
+
+export async function runEconomyTick(env = {}, scheduledTime = Date.now(), deps = null) {
+  const minuteOfDay = Math.floor(((scheduledTime + KAKU_JST) % KAKU_DAY_MS) / KAKU_MIN);
+  const today = kakuDayId(scheduledTime);
+  const dailyDue = DJ_DAILY_CHECK_MINUTES.includes(minuteOfDay) && !djDailyDone.has(today);
+  const rankDue = minuteOfDay % 60 === 5 || minuteOfDay % 60 === 25;
+  if (!dailyDue && !rankDue) return { skipped: "outside" };
+  if (djDailyRunning) return { skipped: "running" };
+  djDailyRunning = true;
+  const d = deps || createDefaultDeps(env);
+  const out = {};
+  try {
+    if (dailyDue) {
+      try {
+        out.daily = await runEconomyDaily(d, env, scheduledTime);
+        if (out.daily.status === "ok" || out.daily.reason === "done") djDailyDone.add(today);
+      } catch (error) {
+        out.daily = { status: "error", error: String(error?.message || error).slice(0, 200) };
+        console.error("economy daily error", out.daily.error);
+      }
+      /* 管理者の画面で「見守りが何をしたか」が分かるように、行った結果を残す（済んでいた日・13:00 前は書かない） */
+      if (out.daily.status === "ok" || out.daily.status === "error") { try { await d.firestore.set("economyStats/dailyWatch", { date: today, result: out.daily.status === "ok" ? "worker_ok" : "worker_error", status: null, atMs: scheduledTime }); } catch { /* 記録できなくても続ける */ } }
+    }
+    if (rankDue) {
+      try { out.live = await runEconomyRankingLive(d, scheduledTime); } catch (error) { out.live = { status: "error" }; console.error("economy ranking live error", String(error?.message || error).slice(0, 200)); }
+    }
+  } finally {
+    djDailyRunning = false;
+  }
+  return out;
 }
 
 /* =========================================================
