@@ -3,7 +3,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { handleRequest, createDefaultDeps, verifyFirebaseIdToken, resetJwksCacheForTest, notifyForGameInvite } from "../worker.js";
+import { buildNotificationData, notificationPreview, handleRequest, createDefaultDeps, verifyFirebaseIdToken, resetJwksCacheForTest, notifyForGameInvite } from "../worker.js";
 
 const PROJECT = "demo-yuuchat";
 const ORIGIN = "https://yuchin0809.github.io";
@@ -55,8 +55,8 @@ const baseDocs = () => ({
   "fcmTokens/tokB1": { uid: "uB" },
   "fcmTokens/tokB2": { uid: "uB" },
   "fcmTokens/tokC": { uid: "uC" },
-  "messages/m1": { type: "friend", sender: "えー", senderUid: "uA", receiver: "びー", friendshipId: "えー_びー", createdAt: "2026-10-08T02:59:30Z" },
-  "messages/g1m": { type: "group", sender: "えー", senderUid: "uA", groupId: "g1", createdAt: "2026-10-08T02:59:30Z" },
+  "messages/m1": { type: "friend", sender: "えー", senderUid: "uA", receiver: "びー", friendshipId: "えー_びー", text: "今日のレース、どれ買う？", createdAt: "2026-10-08T02:59:30Z" },
+  "messages/g1m": { type: "group", sender: "えー", senderUid: "uA", groupId: "g1", text: "今日のレース、どれ買う？", createdAt: "2026-10-08T02:59:30Z" },
   "messages/old": { type: "friend", sender: "えー", senderUid: "uA", receiver: "びー", friendshipId: "えー_びー", createdAt: "2026-10-08T02:00:00Z" }
 });
 
@@ -116,7 +116,7 @@ test("友達チャット：相手の全端末へ送り、送信者には送ら�
   assert.equal(r.cors, ORIGIN);
   assert.deepEqual(sent.map((s) => s.token).sort(), ["tokB1", "tokB2"]);
   assert.deepEqual([r.body.sent, r.body.failed, r.body.removed], [1, 1, 1]);
-  assert.equal(sent[0].data.body, "えーさんからメッセージが届きました");
+  assert.equal(sent[0].data.title, "えー", "1対1：タイトルは送った人"); assert.equal(sent[0].data.body, "今日のレース、どれ買う？", "本文が出る（LINE と同じ）");
   assert.equal(deps.firestore.store.has("fcmTokens/tokB2"), false);
   assert.equal(deps.firestore.store.has("notificationLogs/m1"), true);
 });
@@ -176,7 +176,7 @@ test("グループ：送信者以外のメンバー全員へ", async () => {
   const r = await json(await handleRequest(request("/notify", { token: "uA", body: { messageId: "g1m" } }), env, deps));
   assert.equal(r.status, 200);
   assert.deepEqual(sent.map((s) => s.token).sort(), ["tokB1", "tokB2", "tokC"]);
-  assert.match(sent[0].data.body, /仲良しグループに新しいメッセージがあります/);
+  assert.equal(sent[0].data.title, "仲良し", "グループ：タイトルはグループ名（LINE と同じ）"); assert.equal(sent[0].data.body, "えー：今日のレース、どれ買う？", "本文は「送った人：本文」");
 });
 
 test("送信者本人のメッセージでなければ送らない（403）", async () => {
@@ -288,4 +288,19 @@ test("ゲームの招待：通知を ON にしていない相手（トークン�
   const { deps, sent } = makeDeps(docs);
   const r = await json(await handleRequest(request("/notify", { token: "uA", body: { inviteId: "room1_uB" } }), env, deps));
   assert.equal(r.status, 200); assert.deepEqual([r.body.sent, r.body.failed], [0, 0]); assert.equal(sent.length, 0);
+});
+
+test("通知の文：本文は25文字まで・改行は空白・画像は「画像を送信しました」・本文が空なら「メッセージを送信しました」", () => {
+  assert.equal(notificationPreview({ text: "あ".repeat(25) }), "あ".repeat(25), "25文字ちょうどはそのまま");
+  assert.equal(notificationPreview({ text: "あ".repeat(26) }), "あ".repeat(24) + "…", "26文字以上は、25文字に切る（最後が…）");
+  assert.equal(notificationPreview({ text: "1行目\n\n  2行目\t3行目" }), "1行目 2行目 3行目");
+  assert.equal(notificationPreview({ image: "data:image/jpeg;base64,xxxx" }), "画像を送信しました");
+  assert.equal(notificationPreview({ image: "data:image/jpeg;base64,xxxx", text: "見て" }), "画像を送信しました", "画像つきは、画像として出す");
+  assert.equal(notificationPreview({ text: "   " }), "メッセージを送信しました");
+  assert.equal(notificationPreview({}), "メッセージを送信しました");
+  const g = buildNotificationData("m9", { sender: "ゆうた", image: "data:image/png;base64,yy" }, { chatType: "group", groupId: "g1", groupName: "あいグループ" });
+  assert.deepEqual([g.title, g.body, g.kind, g.tag], ["あいグループ", "ゆうた：画像を送信しました", "message", "message-m9"]);
+  const f = buildNotificationData("m8", { sender: "ゆうた", text: "こんにちは" }, { chatType: "friend", friendshipId: "a_b" });
+  assert.deepEqual([f.title, f.body], ["ゆうた", "こんにちは"]);
+  assert.match(f.link, /friendship=a_b/);
 });

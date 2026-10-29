@@ -289,8 +289,17 @@ export async function resolveRecipients(fs, message, uid) {
   return null;
 }
 
+/* 通知の文（LINE の通知にならう）。本文は25文字まで・改行は空白にする。画像は本文のかわりに「画像を送信しました」。
+   グループ：タイトル＝グループ名／本文＝「送った人：本文」。1対1：タイトル＝送った人／本文＝本文 */
+const NOTIFY_TEXT_MAX = 25;
+export function notificationPreview(message) {
+  if (message.image) return "画像を送信しました";
+  const text = truncate(String(message.text || "").replace(/\s+/g, " ").trim(), NOTIFY_TEXT_MAX);
+  return text || "メッセージを送信しました";
+}
 export function buildNotificationData(messageId, message, target) {
   const sender = truncate(message.sender || "友達", 30);
+  const preview = notificationPreview(message);
 
   if (target.chatType === "group") {
     return {
@@ -298,8 +307,8 @@ export function buildNotificationData(messageId, message, target) {
       messageId,
       chatType: "group",
       groupId: target.groupId,
-      title: "ゆうChat",
-      body: `${truncate(target.groupName, 30)}グループに新しいメッセージがあります`,
+      title: truncate(target.groupName, 30),
+      body: `${sender}：${preview}`,
       link: `./?open=chat&group=${encodeURIComponent(target.groupId)}`,
       tag: `message-${messageId}`
     };
@@ -310,8 +319,8 @@ export function buildNotificationData(messageId, message, target) {
     messageId,
     chatType: "friend",
     friendshipId: target.friendshipId,
-    title: "ゆうChat",
-    body: `${sender}さんからメッセージが届きました`,
+    title: sender,
+    body: preview,
     link: `./?open=chat&friendship=${encodeURIComponent(target.friendshipId)}`,
     tag: `message-${messageId}`
   };
