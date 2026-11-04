@@ -72,6 +72,8 @@ export default {
     ctx.waitUntil(runEconomyTick(env, event.scheduledTime).catch((error) => console.error("economy tick error", String(error?.message || error).slice(0, 300))));
     /* 🏦 ゆう基金：毎日 9:15（日本時間）に、スリ・ゆう税でたまったコインを、総資産の少ない人から順に配る。それ以外の分は Firestore に触れずにすぐ戻る */
     ctx.waitUntil(runFundTick(env, event.scheduledTime).catch((error) => console.error("fund tick error", String(error?.message || error).slice(0, 300))));
+    /* 🏦 ゆう基金ができる前に集めた分（ゆう税・スリ）を、1回だけ基金に足す（11/4〜11/5 の 10 分おき。済んだら何もしない） */
+    ctx.waitUntil(runFundBackfillTick(env, event.scheduledTime).catch((error) => console.error("fund backfill error", String(error?.message || error).slice(0, 300))));
     /* 🎫 先着ゲームの週間ランキング：毎週金曜 15:10（日本時間）に結果発表（1位500・2位250・3位100コイン）。それ以外の分は Firestore に触れずにすぐ戻る */
     ctx.waitUntil(runBattleWeekTick(env, event.scheduledTime).catch((error) => console.error("battle week error", String(error?.message || error).slice(0, 300))));
     /* 🎲 ヨットの週間ランキング：毎週金曜 15:10（日本時間）に結果発表（1位500・2位300・3位100コイン。お知らせ・通知は出さない）。それ以外の分は Firestore に触れずにすぐ戻る */
@@ -535,7 +537,7 @@ export async function handleAdminAction(deps, callerUid, body) {
 
   const action = typeof body?.action === "string" ? body.action : "";
   const uid = typeof body?.uid === "string" ? body.uid : "";
-  const noUidActions = ["listUsers", "notifyAnnouncement", "renameUserRefs", "transferList", "transferApprove", "transferReject", "kakuWinners", "keshiLeagueEnroll", "economyReport", "grantKakuTicket", "bankujiPrize", "bankujiResetLimit", "fundDistribute"];
+  const noUidActions = ["listUsers", "notifyAnnouncement", "renameUserRefs", "transferList", "transferApprove", "transferReject", "kakuWinners", "keshiLeagueEnroll", "economyReport", "grantKakuTicket", "bankujiPrize", "bankujiResetLimit", "fundDistribute", "fundBackfill"];
   if (!noUidActions.includes(action) && !UID_PATTERN.test(uid)) return { status: 400, error: "invalid_uid" };
 
   try {
@@ -560,6 +562,7 @@ export async function handleAdminAction(deps, callerUid, body) {
       case "bankujiPrize": return await adminBankujiPrize(deps, callerUid, body);
       case "bankujiResetLimit": return await adminBankujiResetLimit(deps, callerUid);
       case "fundDistribute": return await adminFundDistribute(deps, callerUid);
+      case "fundBackfill": return await adminFundBackfill(deps, callerUid, body);
       case "transferList": return await adminTransferList(deps);
       case "transferApprove": return await adminTransferApprove(deps, callerUid, body);
       case "transferReject": return await adminTransferReject(deps, callerUid, body);
@@ -4013,7 +4016,7 @@ async function adminEconomyReport(deps) {
     ok: true, serverNowMs: now,
     current: { ...current, date: ranking?.date || null, updatedAt: ranking?.liveUpdatedAt || ranking?.updatedAt || null },
     top, history: points, trend: economyTrend(points), lotteries, bankuji,
-    fund: { balance: Math.max(0, Math.floor(Number(fund?.balance) || 0)), date: fund?.date || null, status: fund?.status || null, count: Math.max(0, Math.floor(Number(fund?.count) || 0)), total: Math.max(0, Math.floor(Number(fund?.total) || 0)) },
+    fund: { balance: Math.max(0, Math.floor(Number(fund?.balance) || 0)), date: fund?.date || null, status: fund?.status || null, count: Math.max(0, Math.floor(Number(fund?.count) || 0)), total: Math.max(0, Math.floor(Number(fund?.total) || 0)), backfill: fund?.backfill ? { tax: Number(fund.backfill.tax) || 0, theft: Number(fund.backfill.theft) || 0, total: Number(fund.backfill.total) || 0 } : null },
     daily: { today: kakuDayId(now), done: ranking?.date === kakuDayId(now) && ranking?.complete === true, watch: watch && watch.date === kakuDayId(now) ? { result: String(watch.result || ""), status: watch.status ?? null, atMs: Number(watch.atMs) || 0 } : null },
     notes: ["ダービー・ゆうスロ・ヨットの収支は、まだ計測していません（コインの総量の増え方には入っています）。", "ログインボーナスは1日50コイン×ログインした人数です。預金の利息は毎日13:00に付き、日ごとの合計が「推移」に出ます。"]
   };
@@ -8083,6 +8086,67 @@ export async function runFundTick(env = {}, scheduledTime = Date.now(), deps = n
   const out = await runFundDistribute(d, scheduledTime);
   if (out.status === "done" || out.reason === "done" || out.reason === "small_pool" || out.reason === "no_one") fundDoneDays.add(day);
   return out;
+}
+
+/* ゆう基金ができる前（FUND_START_DAY より前の日）に集めた分を、1 回だけ基金に足す
+   ・ゆう税：経済の毎日の記録（economyStats/history の points）に残っている、その日の合計（taxTotal）。
+   ・スリ：一人ひとりの「いちばん最近の 1 回」（users.theft.last）だけ（それより前の回は記録が無いので足せない）。追い払った回は 0。
+   ・基金ができた日（FUND_START_DAY）の分は、基金ができる前か後か区別できないので足さない（二重に入れない）。
+   ・足したら、基金の書類に backfill（内訳）を残す。backfill があれば、もう足さない（更新時刻の条件つきの書き込み）。 */
+export const FUND_START_DAY = "2026-11-04";
+const FUND_BACKFILL_UNTIL = "2026-11-05";   // 自動で足すのは、この日まで（10 分おきに確かめる）
+export async function fundBackfill(deps, { apply = false } = {}) {
+  const fs = deps.firestore;
+  const raw = await fs.getRaw(FUND_DOC);
+  const fund = raw ? decodeFields(raw.fields) : null;
+  if (fund?.backfill) return { status: "already", ...fund.backfill };
+  const hist = await fs.get("economyStats/history");
+  const points = Array.isArray(hist?.points) ? hist.points : [];
+  const taxDays = points.filter((p) => p && typeof p.date === "string" && p.date < FUND_START_DAY && Number(p.taxTotal) > 0);
+  const tax = taxDays.reduce((s, p) => s + Math.max(0, Math.floor(Number(p.taxTotal) || 0)), 0);
+  const users = await fs.query("users", [], { select: ["theft"] });
+  let theft = 0, theftUsers = 0;
+  for (const u of users) {
+    const last = u.data?.theft?.last;
+    if (!last || last.repelled === true || typeof last.date !== "string" || last.date >= FUND_START_DAY) continue;
+    const lost = Math.max(0, Math.floor(Number(last.lost) || 0));
+    if (lost > 0) { theft += lost; theftUsers++; }
+  }
+  const summary = { tax, taxDays: taxDays.length, theft, theftUsers, total: tax + theft };
+  if (!apply) return { status: "preview", ...summary };
+  try {
+    await fs.commit([{
+      update: { name: fs.docName(FUND_DOC), fields: encodeFields({ backfill: { ...summary, atMs: deps.now() } }) },
+      updateMask: { fieldPaths: ["backfill"] },
+      updateTransforms: summary.total > 0 ? [{ fieldPath: "balance", increment: restInt(summary.total) }] : [],
+      currentDocument: raw ? { updateTime: raw.updateTime } : { exists: false }
+    }]);
+  } catch (error) {
+    if (!isRetryableCommitError(error)) throw error;
+    return { status: "busy" };   // 同時に基金が書き換えられた：もう一度
+  }
+  fundInfoCache = null;
+  console.log(JSON.stringify({ fundBackfill: summary }));
+  return { status: "done", ...summary };
+}
+let fundBackfillDone = false;
+export function resetFundBackfillForTest() { fundBackfillDone = false; }
+export async function runFundBackfillTick(env = {}, scheduledTime = Date.now(), deps = null) {
+  if (fundBackfillDone) return { skipped: "done" };
+  const day = jstDateString(scheduledTime);
+  if (day < FUND_START_DAY || day > FUND_BACKFILL_UNTIL) return { skipped: "outside" };
+  const minuteOfDay = Math.floor(((scheduledTime + KAKU_JST) % KAKU_DAY_MS) / KAKU_MIN);
+  if (minuteOfDay % 10 !== 3) return { skipped: "outside" };
+  const d = deps || createDefaultDeps(env);
+  const r = await fundBackfill({ ...d, now: () => scheduledTime }, { apply: true });
+  if (r.status === "done" || r.status === "already") fundBackfillDone = true;
+  return r;
+}
+async function adminFundBackfill(deps, callerUid, body) {
+  const apply = body?.apply === true;
+  const r = await fundBackfill(deps, { apply });
+  if (apply) await writeAuditLog(deps, { type: "fundBackfill", byUid: callerUid, status: r.status, total: r.total || 0 });
+  return { ok: true, ...r };
 }
 
 /* 管理者：いますぐ 1 回配る（配り方は 9:15 と同じ。その日にもう配っていれば配らない＝1 日 1 回）。操作の記録を残す */

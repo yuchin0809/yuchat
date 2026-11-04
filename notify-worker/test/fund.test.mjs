@@ -2,7 +2,7 @@
    実行：node --test "notify-worker/test/*.test.mjs" */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fundPlan, runFundDistribute, runFundTick, resetFundForTest, handleAdminAction } from "../worker.js";
+import { fundPlan, runFundDistribute, runFundTick, resetFundForTest, handleAdminAction, fundBackfill, runFundBackfillTick, resetFundBackfillForTest } from "../worker.js";
 
 console.log = () => {};
 console.warn = () => {};
@@ -156,4 +156,47 @@ test("管理者：今すぐ 1 回配る（9:15 の前でも・時刻に関係な
   const early = world(1000, [["a", 0], ["b", 100]]);
   const r2 = await handleAdminAction({ firestore: early.fs, now: () => JST(2026, 11, 4, 7, 0), adminUid: ADMIN }, ADMIN, { action: "fundDistribute" });
   assert.equal(r2.status, "done", "9:15 より前でも、管理者は配れる");
+});
+
+const backfillWorld = (fund) => makeFs({
+  ...(fund ? { "economyStats/fund": fund } : {}),
+  "economyStats/history": { points: [{ date: "2026-11-01", taxTotal: 300 }, { date: "2026-11-02", taxTotal: 0 }, { date: "2026-11-03", taxTotal: 450 }, { date: "2026-11-04", taxTotal: 999 }] },
+  "users/a": { uid: "ua", coins: 1, theft: { day: "2026-11-02", last: { date: "2026-11-02", repelled: false, lost: 2000 } } },
+  "users/b": { uid: "ub", coins: 1, theft: { day: "2026-11-03", last: { date: "2026-11-03", repelled: true, lost: 0 } } },
+  "users/c": { uid: "uc", coins: 1, theft: { day: "2026-11-04", last: { date: "2026-11-04", repelled: false, lost: 700 } } },
+  "users/d": { uid: "ud", coins: 1 }
+});
+
+test("これまでの分：基金ができる前のゆう税（毎日の記録）と、スリ（一人ひとりの最近の 1 回）を足す。基金ができた日の分・追い払った回は足さない", async () => {
+  const w = backfillWorld({ balance: 120 });
+  const pre = await fundBackfill({ firestore: w.fs, now: () => NOW });
+  assert.deepEqual(pre, { status: "preview", tax: 750, taxDays: 2, theft: 2000, theftUsers: 1, total: 2750 });
+  assert.equal(w.get("economyStats/fund").balance, 120, "見るだけでは足さない");
+  const r = await fundBackfill({ firestore: w.fs, now: () => NOW }, { apply: true });
+  assert.equal(r.status, "done"); assert.equal(r.total, 2750);
+  assert.equal(w.get("economyStats/fund").balance, 120 + 2750, "いまたまっている分に足す");
+  assert.equal(w.get("economyStats/fund").backfill.total, 2750);
+  const again = await fundBackfill({ firestore: w.fs, now: () => NOW }, { apply: true });
+  assert.equal(again.status, "already"); assert.equal(w.get("economyStats/fund").balance, 2870, "2 回目は足さない");
+});
+
+test("これまでの分：基金の書類がまだ無くても足せる。自動で足すのは 11/4〜11/5 の 10 分おき（3 分）だけ。済んだら何もしない", async () => {
+  resetFundBackfillForTest();
+  const w = backfillWorld(null);
+  assert.equal((await runFundBackfillTick({}, JST(2026, 11, 4, 11, 5), { firestore: w.fs })).skipped, "outside");
+  assert.equal((await runFundBackfillTick({}, JST(2026, 11, 6, 11, 3), { firestore: w.fs })).skipped, "outside", "11/6 からは動かない");
+  assert.equal(w.log.reads + w.log.queries, 0);
+  const r = await runFundBackfillTick({}, JST(2026, 11, 4, 11, 13), { firestore: w.fs });
+  assert.equal(r.status, "done"); assert.equal(w.get("economyStats/fund").balance, 2750);
+  assert.equal((await runFundBackfillTick({}, JST(2026, 11, 4, 11, 23), { firestore: w.fs })).skipped, "done");
+});
+
+test("管理者：これまでの分の内訳を見て、足す（管理者だけ・操作の記録）", async () => {
+  const ADMIN = "admin-uid";
+  const w = backfillWorld({ balance: 0 });
+  const deps = { firestore: w.fs, now: () => NOW, adminUid: ADMIN };
+  assert.equal((await handleAdminAction(deps, "x", { action: "fundBackfill" })).error, "not_admin");
+  assert.equal((await handleAdminAction(deps, ADMIN, { action: "fundBackfill" })).status, "preview");
+  const r = await handleAdminAction(deps, ADMIN, { action: "fundBackfill", apply: true });
+  assert.equal(r.status, "done"); assert.equal(w.log.audit.at(-1).data.type, "fundBackfill");
 });

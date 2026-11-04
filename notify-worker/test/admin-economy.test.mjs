@@ -112,7 +112,7 @@ test("報告：現在の分布・上位5人・日ごとの推移・宝くじの�
   assert.ok(r.notes.length >= 1);
   assert.equal(r.daily.done, false, "見守りの状態も返す（今日の分が未完了のとき）");
   assert.ok(fs.counts.get + fs.counts.batchGet <= 6, "読み取りは少ない回数（ランキング・推移・見守りの記録・ゆう基金・番くじ・宝くじのまとめ読み）");
-  assert.deepEqual(r.fund, { balance: 0, date: null, status: null, count: 0, total: 0 }, "ゆう基金の残り（まだ無ければ 0）");
+  assert.deepEqual(r.fund, { balance: 0, date: null, status: null, count: 0, total: 0, backfill: null }, "ゆう基金の残り（まだ無ければ 0）");
 });
 
 test("データが何も無くても落ちない（最初の13:00の前など）", async () => {
