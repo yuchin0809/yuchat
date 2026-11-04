@@ -2,7 +2,7 @@
    実行：node --test "notify-worker/test/*.test.mjs" */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { fundPlan, runFundDistribute, runFundTick, resetFundForTest } from "../worker.js";
+import { fundPlan, runFundDistribute, runFundTick, resetFundForTest, handleAdminAction } from "../worker.js";
 
 console.log = () => {};
 console.warn = () => {};
@@ -26,6 +26,7 @@ function makeFs(seed = {}, { failOnce = [] } = {}) {
     docName: (p) => ROOT + p,
     async getRaw(path) { log.reads++; const d = docs.get(path); return d ? { fields: structuredClone(d.fields), updateTime: d.updateTime } : null; },
     async get(path) { log.reads++; const d = docs.get(path); return d ? decF(d.fields) : null; },
+    async add(collection, data) { log.audit = (log.audit || []).concat({ collection, data }); },
     async query(collection) { log.queries++; return [...docs.entries()].filter(([p]) => p.startsWith(collection + "/") && p.split("/").length === 2).map(([p, d]) => ({ id: p.split("/")[1], path: p, updateTime: d.updateTime, data: decF(d.fields) })); },
     async commit(writes) {
       for (const w of writes) {
@@ -138,4 +139,21 @@ test("配る直前に別の書き込みが入った人は、読み直して配�
   const out = await runFundDistribute({ firestore: w.fs }, NOW);
   assert.equal(out.status, "done"); assert.equal(out.count, 1, "対象は 2 人の半分（1 人）");
   assert.equal(w.get("users/a").coins, 300); assert.equal(w.get("users/a").fundGrant.amount, 300);
+});
+
+test("管理者：今すぐ 1 回配る（9:15 の前でも・時刻に関係なく）。1 日 1 回。管理者だけ。操作の記録を残す", async () => {
+  const ADMIN = "admin-uid";
+  const w = world(1000, [["a", 0], ["b", 100]]);
+  const deps = { firestore: w.fs, now: () => JST(2026, 11, 4, 14, 0), adminUid: ADMIN };
+  assert.equal((await handleAdminAction(deps, "someone", { action: "fundDistribute" })).error, "not_admin");
+  const r = await handleAdminAction(deps, ADMIN, { action: "fundDistribute" });
+  assert.equal(r.ok, true); assert.equal(r.status, "done"); assert.equal(r.count, 1); assert.equal(r.total, 300);
+  assert.equal(w.get("users/a").fundGrant.amount, 300); assert.equal(w.get("economyStats/fund").date, "2026-11-04");
+  assert.equal(w.log.audit.at(-1).data.type, "fundDistribute");
+  const again = await handleAdminAction(deps, ADMIN, { action: "fundDistribute" });
+  assert.equal(again.status, "skipped"); assert.equal(again.reason, "done", "同じ日に 2 回目は配らない");
+  assert.equal(w.get("users/a").coins, 300);
+  const early = world(1000, [["a", 0], ["b", 100]]);
+  const r2 = await handleAdminAction({ firestore: early.fs, now: () => JST(2026, 11, 4, 7, 0), adminUid: ADMIN }, ADMIN, { action: "fundDistribute" });
+  assert.equal(r2.status, "done", "9:15 より前でも、管理者は配れる");
 });

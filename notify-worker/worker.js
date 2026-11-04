@@ -535,7 +535,7 @@ export async function handleAdminAction(deps, callerUid, body) {
 
   const action = typeof body?.action === "string" ? body.action : "";
   const uid = typeof body?.uid === "string" ? body.uid : "";
-  const noUidActions = ["listUsers", "notifyAnnouncement", "renameUserRefs", "transferList", "transferApprove", "transferReject", "kakuWinners", "keshiLeagueEnroll", "economyReport", "grantKakuTicket", "bankujiPrize", "bankujiResetLimit"];
+  const noUidActions = ["listUsers", "notifyAnnouncement", "renameUserRefs", "transferList", "transferApprove", "transferReject", "kakuWinners", "keshiLeagueEnroll", "economyReport", "grantKakuTicket", "bankujiPrize", "bankujiResetLimit", "fundDistribute"];
   if (!noUidActions.includes(action) && !UID_PATTERN.test(uid)) return { status: 400, error: "invalid_uid" };
 
   try {
@@ -559,6 +559,7 @@ export async function handleAdminAction(deps, callerUid, body) {
       case "grantKakuTicket": return await adminGrantKakuTicket(deps, callerUid, uid, body);
       case "bankujiPrize": return await adminBankujiPrize(deps, callerUid, body);
       case "bankujiResetLimit": return await adminBankujiResetLimit(deps, callerUid);
+      case "fundDistribute": return await adminFundDistribute(deps, callerUid);
       case "transferList": return await adminTransferList(deps);
       case "transferApprove": return await adminTransferApprove(deps, callerUid, body);
       case "transferReject": return await adminTransferReject(deps, callerUid, body);
@@ -8028,10 +8029,10 @@ async function fundPayPlan(fs, plan, day, known) {
 }
 
 /* 今日の分を配る（計画を作る → 配る → 終わりの印）。途中まで進んでいれば続きから。戻り値：{ status: "done" | "skipped" | "busy", ... } */
-export async function runFundDistribute(deps, nowMs = Date.now()) {
+export async function runFundDistribute(deps, nowMs = Date.now(), { anyTime = false } = {}) {
   const fs = deps.firestore;
   const day = jstDateString(nowMs);
-  if (((nowMs + KAKU_JST) % KAKU_DAY_MS) < FUND_CHECK_MINUTES[0] * KAKU_MIN) return { status: "skipped", reason: "before_time" };
+  if (!anyTime && ((nowMs + KAKU_JST) % KAKU_DAY_MS) < FUND_CHECK_MINUTES[0] * KAKU_MIN) return { status: "skipped", reason: "before_time" };
   let raw = await fs.getRaw(FUND_DOC);
   let fund = raw ? decodeFields(raw.fields) : null;
   if (fund && fund.date === day && fund.status === "done") return { status: "skipped", reason: "done" };
@@ -8082,6 +8083,14 @@ export async function runFundTick(env = {}, scheduledTime = Date.now(), deps = n
   const out = await runFundDistribute(d, scheduledTime);
   if (out.status === "done" || out.reason === "done" || out.reason === "small_pool" || out.reason === "no_one") fundDoneDays.add(day);
   return out;
+}
+
+/* 管理者：いますぐ 1 回配る（配り方は 9:15 と同じ。その日にもう配っていれば配らない＝1 日 1 回）。操作の記録を残す */
+async function adminFundDistribute(deps, callerUid) {
+  const r = await runFundDistribute(deps, deps.now(), { anyTime: true });
+  fundInfoCache = null;
+  await writeAuditLog(deps, { type: "fundDistribute", byUid: callerUid, status: r.status, reason: r.reason || null, count: r.count || 0, total: r.total || 0 });
+  return { ok: true, ...r };
 }
 
 /* 画面用：基金の残り・前回の結果・自分が前回もらった額（本人の users には fundGrant が入る）。基金の書類は 30 秒だけメモリに置く（読み取りを減らす） */
