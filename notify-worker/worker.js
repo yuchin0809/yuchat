@@ -70,6 +70,8 @@ export default {
     ctx.waitUntil(runDailyWatchdogTick(env, event.scheduledTime).catch((error) => console.error("daily watchdog error", String(error?.message || error).slice(0, 300))));
     /* 🛠 ゆう経済の1日1回の処理（株価・利息・ゆう税・総資産ランキング）と、総資産ランキングの1時間おきの更新。決まった分以外は Firestore に触れずにすぐ戻る */
     ctx.waitUntil(runEconomyTick(env, event.scheduledTime).catch((error) => console.error("economy tick error", String(error?.message || error).slice(0, 300))));
+    /* 🏦 ゆう基金：毎日 9:15（日本時間）に、スリ・ゆう税でたまったコインを、総資産の少ない人から順に配る。それ以外の分は Firestore に触れずにすぐ戻る */
+    ctx.waitUntil(runFundTick(env, event.scheduledTime).catch((error) => console.error("fund tick error", String(error?.message || error).slice(0, 300))));
     /* 🎫 先着ゲームの週間ランキング：毎週金曜 15:10（日本時間）に結果発表（1位500・2位250・3位100コイン）。それ以外の分は Firestore に触れずにすぐ戻る */
     ctx.waitUntil(runBattleWeekTick(env, event.scheduledTime).catch((error) => console.error("battle week error", String(error?.message || error).slice(0, 300))));
     /* 🎲 ヨットの週間ランキング：毎週金曜 15:10（日本時間）に結果発表（1位500・2位300・3位100コイン。お知らせ・通知は出さない）。それ以外の分は Firestore に触れずにすぐ戻る */
@@ -1502,8 +1504,8 @@ const DERBY_SERVER_GENERATORS = ["github-actions", "worker"];
    null のあいだは確かめない（Firestore Rules でブラウザからの書き込みを止めるときに日付を入れる） */
 const DERBY_SERVER_RESULTS_FROM = null;
 
-const ECONOMY_ACTIONS = ["bankDeposit", "bankWithdraw", "bankBorrow", "bankRepay", "stockTrade", "loginBonus", "bonus500", "placeBet", "ensureRaceResult", "settleMyBets", "startingCoins", "renameCarry", "syncNameClaim", "transferRequest", "transferCancel", "transferMine", "guardBuy", "theftPush"];
-const ECON_CARRY_FIELDS = ["coins", "bonus500Granted", "bonus500GrantedAt", "totalBetAmount", "bank", "stocks", "lastLoginBonusDate", "lastAnnouncementReadAt", "slotSpins", "slotWagered", "slotKakuSpins", "slotKakuWagered", "guards", "theft", "theftPush", "slotKakuSeat"];
+const ECONOMY_ACTIONS = ["bankDeposit", "bankWithdraw", "bankBorrow", "bankRepay", "stockTrade", "loginBonus", "bonus500", "placeBet", "ensureRaceResult", "settleMyBets", "startingCoins", "renameCarry", "syncNameClaim", "transferRequest", "transferCancel", "transferMine", "guardBuy", "theftPush", "fundInfo"];
+const ECON_CARRY_FIELDS = ["coins", "bonus500Granted", "bonus500GrantedAt", "totalBetAmount", "bank", "stocks", "lastLoginBonusDate", "lastAnnouncementReadAt", "slotSpins", "slotWagered", "slotKakuSpins", "slotKakuWagered", "guards", "theft", "theftPush", "slotKakuSeat", "fundGrant"];
 
 export function jstDateString(ms) {
   return new Date(ms + JST_OFFSET_MS).toISOString().slice(0, 10);
@@ -1898,6 +1900,7 @@ export async function handleEconomyAction(deps, uid, body) {
       case "transferMine": return await transferMine(deps, uid);
       case "guardBuy": return await econGuardBuy(deps, uid, name, body);
       case "theftPush": return await econTheftPush(deps, uid, name, body);
+      case "fundInfo": return await fundInfo(deps, uid, name);
       default: return econError(400, "unknown_action");
     }
   } catch (error) {
@@ -2101,7 +2104,9 @@ async function theftApply(deps, name, day, prices, random) {
       result = { repelled: false, lost: took.taken, lv, kind };
     }
     try {
-      await fs.commit([{ update: { name: fs.docName(`users/${name}`), fields }, updateMask: { fieldPaths: Object.keys(fields) }, currentDocument: { updateTime: raw.updateTime } }]);
+      const writes = [{ update: { name: fs.docName(`users/${name}`), fields }, updateMask: { fieldPaths: Object.keys(fields) }, currentDocument: { updateTime: raw.updateTime } }];
+      if (!result.repelled && result.lost > 0) writes.push(fundDepositWrite(fs, result.lost));   // 盗まれた分は、ゆう基金にたまる（同じ commit なので、盗まれたのに基金に入らない、は起きない）
+      await fs.commit(writes);
     } catch (error) {
       if (!isRetryableCommitError(error)) throw error;
       continue;
@@ -3977,7 +3982,7 @@ export function economyTrend(points) {
 
 async function adminEconomyReport(deps) {
   const fs = deps.firestore, now = deps.now();
-  const [ranking, history, watch] = await Promise.all([fs.get("rankings/assets"), fs.get("economyStats/history"), fs.get("economyStats/dailyWatch")]);
+  const [ranking, history, watch, fund] = await Promise.all([fs.get("rankings/assets"), fs.get("economyStats/history"), fs.get("economyStats/dailyWatch"), fs.get(FUND_DOC)]);
   const users = Array.isArray(ranking?.users) ? ranking.users : [];
   const current = economySummary(users);
   const top = users.slice(0, 5).map((u) => ({ name: String(u.name || ""), total: Number(u.total) || 0 }));
@@ -4007,6 +4012,7 @@ async function adminEconomyReport(deps) {
     ok: true, serverNowMs: now,
     current: { ...current, date: ranking?.date || null, updatedAt: ranking?.liveUpdatedAt || ranking?.updatedAt || null },
     top, history: points, trend: economyTrend(points), lotteries, bankuji,
+    fund: { balance: Math.max(0, Math.floor(Number(fund?.balance) || 0)), date: fund?.date || null, status: fund?.status || null, count: Math.max(0, Math.floor(Number(fund?.count) || 0)), total: Math.max(0, Math.floor(Number(fund?.total) || 0)) },
     daily: { today: kakuDayId(now), done: ranking?.date === kakuDayId(now) && ranking?.complete === true, watch: watch && watch.date === kakuDayId(now) ? { result: String(watch.result || ""), status: watch.status ?? null, atMs: Number(watch.atMs) || 0 } : null },
     notes: ["ダービー・ゆうスロ・ヨットの収支は、まだ計測していません（コインの総量の増え方には入っています）。", "ログインボーナスは1日50コイン×ログインした人数です。預金の利息は毎日13:00に付き、日ごとの合計が「推移」に出ます。"]
   };
@@ -7830,7 +7836,9 @@ export async function runEconomyDaily(deps, env = {}, nowMs = Date.now()) {
       const change = djApplyDailyUserUpdate(data, today, nowMs, prices);
       if (!change) break;
       try {
-        await fs.commit([djUserWrite(fs, u.id, updateTime, change)]);
+        const writes = [djUserWrite(fs, u.id, updateTime, change)];
+        if (change.tax > 0) writes.push(fundDepositWrite(fs, change.tax));   // ゆう税は、ゆう基金にたまる
+        await fs.commit(writes);
         finalData.set(u.id, merged(data, change));
         tally(change);
         break;
@@ -7920,6 +7928,171 @@ export async function runEconomyTick(env = {}, scheduledTime = Date.now(), deps 
     djDailyRunning = false;
   }
   return out;
+}
+
+/* =========================================================
+   🏦 ゆう基金：スリで盗まれたコインと、ゆう税で集めたコインを、総資産の少ない人から順に配る
+   ・たまる：スリの被害（盗まれた額）と、毎日13:00のゆう税（取った額）が、economyStats/fund の balance にたまる
+     （どちらも、その人の users を書き換える commit と同じ commit に足すので、取られたのに基金に入らない・二重に入る、は起きない）。
+   ・配る：毎日 9:15（日本時間）に、たまっている分（balance）を、次のように配る。基金にある分を超えては配らない。余った分は次の日に回る。
+       対象：直近 3 日以内にログインした人（users.updatedAt）で、作って 3 日以上たったアカウントのうち、総資産（手持ち＋預金＋株−借入）が少ない下位半分（最低 1 人）。
+             持ちもの（景品・パーツ・マートの商品）は総資産に入れない（ランキングと同じ）。借入がある人は、いちばん貧しい扱いで受け取る（借入は減らさず、手持ちに入る）。
+       額：順位の低い人ほど多い（対象が K 人なら、最下位の重み K、その次 K−1、…、K 位が 1。同額は同じ順位・同じ額）。基金 × 重み ÷ 重みの合計。
+           1 人あたりは基金の 30% まで。基金が 10 コイン未満の日は配らない（次の日に回る）。1 コイン未満になる人には配らない（少ない人から順に配ることになる）。
+   ・書くもの：economyStats/fund（balance・date・status・plan・total・count）と、受け取る人の users（coins・fundGrant）。
+       配る前に「計画」（誰にいくら）を基金の書類に書いて、その分を balance から引いておく。配るのは計画の通り・1 人 1 日 1 回（users.fundGrant.date が今日なら配らない）なので、
+       途中で止まっても、次の分に続きから配れる（二重に配らない）。配れなかった分（アカウントが消えたなど）は、最後に balance に戻す。
+   ・読み取り：確かめる分に economyStats/fund 1 件。配る日だけ users 全件 1 回。書き込み：配る人ぶん（100 人ずつまとめて）＋ economyStats/fund 2〜3 回。
+========================================================= */
+const FUND_DOC = "economyStats/fund";
+const FUND_CHECK_MINUTES = [555, 556, 557, 560, 570, 600, 660, 720];   // 9:15（配る）と、取りこぼしたときのやり直し（日本時間の「0:00 からの分」）
+const FUND_MIN_POOL = 10, FUND_CAP_RATE = 0.3, FUND_ACTIVE_MS = 3 * 86400000, FUND_NEW_ACCOUNT_MS = 3 * 86400000, FUND_CHUNK = 100;
+
+/* たまる：users を書き換える commit に足す 1 件（balance を増やすだけ。書類が無ければ作る） */
+function fundDepositWrite(fs, amount) {
+  return { update: { name: fs.docName(FUND_DOC), fields: {} }, updateMask: { fieldPaths: [] }, updateTransforms: [{ fieldPath: "balance", increment: restInt(Math.max(0, Math.floor(amount))) }] };
+}
+
+/* 配る計画（純粋な関数）。rows＝[{ name, total }]（対象の人）。戻り値：[{ n: 名前, a: 額, r: 順位（1＝いちばん少ない）}]（額の合計は pool 以下） */
+export function fundPlan(rows, pool) {
+  pool = Math.max(0, Math.floor(Number(pool) || 0));
+  if (pool < FUND_MIN_POOL || !rows.length) return [];
+  const sorted = [...rows].sort((a, b) => (a.total - b.total) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  const k = Math.max(1, Math.floor(sorted.length / 2));
+  let first = 0;
+  const picked = sorted.map((row, i) => { if (i === 0 || row.total !== sorted[i - 1].total) first = i; return { name: row.name, idx: first }; }).filter((x) => x.idx < k);
+  const weight = (x) => k - x.idx;
+  const sum = picked.reduce((s, x) => s + weight(x), 0);
+  const cap = Math.floor(pool * FUND_CAP_RATE);
+  return picked.map((x) => ({ n: x.name, a: Math.min(cap, Math.floor((pool * weight(x)) / sum)), r: x.idx + 1 })).filter((e) => e.a >= 1);
+}
+
+/* 配る対象の人（直近 3 日以内にログイン・作って 3 日以上）と、その人の総資産 */
+function fundEligible(users, prices, nowMs) {
+  const rows = [];
+  for (const u of users) {
+    const d = u.data || {};
+    if (typeof d.coins !== "number" || typeof d.uid !== "string" || !d.uid || String(u.id).includes("/")) continue;
+    const seen = Date.parse(d.updatedAt);
+    if (!Number.isFinite(seen) || nowMs - seen > FUND_ACTIVE_MS) continue;
+    const created = Date.parse(d.createdAt);
+    if (Number.isFinite(created) && nowMs - created < FUND_NEW_ACCOUNT_MS) continue;
+    rows.push({ name: u.id, total: djAssets(d, prices).total });
+  }
+  return rows;
+}
+
+/* 1 人に配る書き込み（更新時刻の条件つき） */
+function fundPayWrite(fs, name, updateTime, coins, entry, day, of) {
+  return { update: { name: fs.docName(`users/${name}`), fields: { coins: restInt(coins + entry.a), fundGrant: encodeFields({ g: { date: day, amount: entry.a, rank: entry.r, of } }).g } }, updateMask: { fieldPaths: ["coins", "fundGrant"] }, currentDocument: { updateTime } };
+}
+
+/* 1 人に配る（まだ配っていなければ）。戻り値："paid" | "already" | "skip"（アカウントが無い・コインが無い）。ぶつかったら、読み直してやり直す */
+async function fundPayOne(fs, entry, day, of) {
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    const raw = await fs.getRaw(`users/${entry.n}`);
+    if (!raw) return "skip";
+    const data = decodeFields(raw.fields);
+    if (data.fundGrant?.date === day) return "already";
+    if (typeof data.coins !== "number" || !Number.isSafeInteger(data.coins)) return "skip";
+    try { await fs.commit([fundPayWrite(fs, entry.n, raw.updateTime, data.coins, entry, day, of)]); return "paid"; }
+    catch (error) { if (!isRetryableCommitError(error)) throw error; }
+  }
+  throw new Error("fund pay busy");
+}
+
+/* 計画の通りに配る。known＝計画を作ったときに読んだ users（そのまま使えるものは、読み直さずにまとめて書く） */
+async function fundPayPlan(fs, plan, day, known) {
+  const of = plan.length;   // 画面に出す「何人に配ったか」
+  let paid = 0, paidTotal = 0, unpaidTotal = 0;
+  const single = async (entry) => {
+    const r = await fundPayOne(fs, entry, day, of);
+    if (r === "paid" || r === "already") { paid++; paidTotal += entry.a; } else unpaidTotal += entry.a;
+  };
+  for (let i = 0; i < plan.length; i += FUND_CHUNK) {
+    const chunk = plan.slice(i, i + FUND_CHUNK);
+    const batch = known ? chunk.filter((e) => known.has(e.n)) : [];
+    const rest = chunk.filter((e) => !batch.includes(e));
+    if (batch.length) {
+      try {
+        await fs.commit(batch.map((e) => { const u = known.get(e.n); return fundPayWrite(fs, e.n, u.updateTime, u.data.coins, e, day, of); }));
+        paid += batch.length; paidTotal += batch.reduce((s, e) => s + e.a, 0);
+      } catch (error) {
+        if (!isRetryableCommitError(error)) throw error;
+        rest.push(...batch);   // 途中で書き換えられた人がいた：1 人ずつ、読み直して配る
+      }
+    }
+    for (const entry of rest) await single(entry);
+  }
+  return { paid, paidTotal, unpaidTotal };
+}
+
+/* 今日の分を配る（計画を作る → 配る → 終わりの印）。途中まで進んでいれば続きから。戻り値：{ status: "done" | "skipped" | "busy", ... } */
+export async function runFundDistribute(deps, nowMs = Date.now()) {
+  const fs = deps.firestore;
+  const day = jstDateString(nowMs);
+  if (((nowMs + KAKU_JST) % KAKU_DAY_MS) < FUND_CHECK_MINUTES[0] * KAKU_MIN) return { status: "skipped", reason: "before_time" };
+  let raw = await fs.getRaw(FUND_DOC);
+  let fund = raw ? decodeFields(raw.fields) : null;
+  if (fund && fund.date === day && fund.status === "done") return { status: "skipped", reason: "done" };
+  let plan, known = null;
+  if (fund && fund.date === day && fund.status === "paying" && Array.isArray(fund.plan)) {
+    plan = fund.plan;   // 途中で止まっていた：同じ計画の続きから
+  } else {
+    const pool = Math.max(0, Math.floor(Number(fund?.balance) || 0));
+    if (pool < FUND_MIN_POOL) return { status: "skipped", reason: "small_pool", pool };
+    const prices = marketPricesOf(await fs.get("market/current"));
+    const users = await fs.query("users", [], { select: ["uid", "coins", "bank", "stocks", "updatedAt", "createdAt"] });
+    plan = fundPlan(fundEligible(users, prices, nowMs), pool);
+    if (!plan.length) return { status: "skipped", reason: "no_one", pool };
+    const total = plan.reduce((s, e) => s + e.a, 0);
+    try {
+      /* 計画を書き、配る分を balance から引く（ほかの人が同時に balance を増やしても、増やした分は消えない。同時に別の計画を作らないよう、更新時刻の条件つき） */
+      await fs.commit([{
+        update: { name: fs.docName(FUND_DOC), fields: encodeFields({ date: day, status: "paying", plan, total, count: plan.length }) },
+        updateMask: { fieldPaths: ["date", "status", "plan", "total", "count"] },
+        updateTransforms: [{ fieldPath: "balance", increment: restInt(-total) }],
+        currentDocument: { updateTime: raw.updateTime }
+      }]);
+    } catch (error) {
+      if (!isRetryableCommitError(error)) throw error;
+      return { status: "busy" };   // 次の分に、もう一度
+    }
+    known = new Map(users.map((u) => [u.id, u]));
+  }
+  const r = await fundPayPlan(fs, plan, day, known);
+  /* 終わりの印。配れなかった分（アカウントが消えたなど）は、balance に戻す */
+  await fs.commit([{
+    update: { name: fs.docName(FUND_DOC), fields: encodeFields({ status: "done", paid: r.paidTotal, count: r.paid }) },
+    updateMask: { fieldPaths: ["status", "paid", "count"] },
+    updateTransforms: r.unpaidTotal > 0 ? [{ fieldPath: "balance", increment: restInt(r.unpaidTotal) }] : []
+  }]);
+  console.log(JSON.stringify({ fundDistribute: { day, count: r.paid, total: r.paidTotal, unpaid: r.unpaidTotal } }));
+  return { status: "done", count: r.paid, total: r.paidTotal, unpaid: r.unpaidTotal };
+}
+
+const fundDoneDays = new Set();
+export function resetFundForTest() { fundDoneDays.clear(); fundInfoCache = null; }
+export async function runFundTick(env = {}, scheduledTime = Date.now(), deps = null) {
+  const minuteOfDay = Math.floor(((scheduledTime + KAKU_JST) % KAKU_DAY_MS) / KAKU_MIN);
+  if (!FUND_CHECK_MINUTES.includes(minuteOfDay)) return { skipped: "outside" };
+  const day = jstDateString(scheduledTime);
+  if (fundDoneDays.has(day)) return { skipped: "done" };
+  const d = deps || createDefaultDeps(env);
+  const out = await runFundDistribute(d, scheduledTime);
+  if (out.status === "done" || out.reason === "done" || out.reason === "small_pool" || out.reason === "no_one") fundDoneDays.add(day);
+  return out;
+}
+
+/* 画面用：基金の残り・前回の結果・自分が前回もらった額（本人の users には fundGrant が入る）。基金の書類は 30 秒だけメモリに置く（読み取りを減らす） */
+let fundInfoCache = null;
+async function fundInfo(deps, uid, name) {
+  const now = deps.now();
+  if (!fundInfoCache || now - fundInfoCache.at > 30000) fundInfoCache = { at: now, doc: await deps.firestore.get(FUND_DOC) };
+  const f = fundInfoCache.doc;
+  const day = jstDateString(now);
+  const last = f && f.date && f.status === "done" ? { date: f.date, count: Math.max(0, Math.floor(Number(f.count) || 0)), total: Math.max(0, Math.floor(Number(f.paid) || 0)) } : null;
+  return { ok: true, balance: Math.max(0, Math.floor(Number(f?.balance) || 0)), last, today: day };
 }
 
 /* =========================================================

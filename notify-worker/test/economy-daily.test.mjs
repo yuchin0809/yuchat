@@ -51,7 +51,7 @@ function makeFs(seed = {}, { failCommits = [] } = {}) {
             else { fields[parts[0]] ||= { mapValue: { fields: {} } }; fields[parts[0]].mapValue.fields ||= {}; fields[parts[0]].mapValue.fields[parts[1]] = w.update.fields[parts[0]].mapValue.fields[parts[1]]; }
           }
         } else fields = { ...w.update.fields };
-        for (const t of w.updateTransforms || []) fields[t.fieldPath] = { timestampValue: "2026-10-29T04:00:00.000000Z" };
+        for (const t of w.updateTransforms || []) fields[t.fieldPath] = t.increment ? { integerValue: String((Number(fields[t.fieldPath]?.integerValue) || 0) + Number(t.increment.integerValue)) } : { timestampValue: "2026-10-29T04:00:00.000000Z" };
         docs.set(path, { fields, updateTime: stamp() });
       }
     }
@@ -126,6 +126,8 @@ test("13:00 の処理：株価・利息・返済・ボーナス・ランキン�
   assert.equal(ranking.users.find((u) => u.name === "あ").stockValue, 1830);
   const hist = w.get("economyStats/history");
   assert.equal(hist.points.length, 1); assert.equal(hist.points[0].date, "2026-10-29"); assert.equal(hist.points[0].users, 4);
+  assert.ok(hist.points[0].taxTotal > 0);
+  assert.equal(w.get("economyStats/fund").balance, hist.points[0].taxTotal, "ゆう税で取った分は、ゆう基金にたまる（人ごとの commit に足す）");
   assert.deepEqual(w.log.sets.map((s) => [s.path, s.data.result]), [["economyStats/dailyWatch", "worker_ok"]]);
 
   const before = w.log.commits.length;

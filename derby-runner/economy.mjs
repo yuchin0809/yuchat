@@ -3,7 +3,7 @@
    derby-runner（GitHub Actions）から、日本時間 13:00 以降に1日1回だけ実行する。
 
    1. 株価の更新・ニュースの決定（market/current）
-   2. 預金の利息（users/{名前}.bank）
+   2. 預金の利息（users/{名前}.bank）・ゆう税（取った分は economyStats/fund にたまり、毎日 9:15 に総資産の少ない人へ配る）
    3. 返済期限を過ぎた借入の自動返済
    4. 追加ボーナス500コイン（まだ受け取っていない人だけ。以前は毎回の実行で行っていた）
    5. 総資産ランキングのまとめ（rankings/assets）
@@ -393,6 +393,8 @@ export async function runDailyJobs({ db, now = new Date(), log = console.log, st
         const freshData = fresh.data();
         const change = applyDailyUserUpdate(freshData, today, now, prices);
         if (change) transaction.update(userDoc.ref, change.fields);
+        /* ゆう税は、ゆう基金（economyStats/fund の balance）にたまる（毎日 9:15 に、総資産の少ない人から順に配る。配る処理は notify-worker/worker.js の runFundTick） */
+        if (change && change.tax > 0) transaction.set(db.collection("economyStats").doc("fund"), { balance: FieldValue.increment(change.tax) }, { merge: true });
         return { change, data: { ...freshData, ...(change ? change.fields : {}) } };
       });
       if (!outcome) { finalData.delete(userDoc.id); continue; }
