@@ -7,7 +7,7 @@ const S = { data: null, busy: false, msg: "", loaded: false, prize: { id: "A", d
 let stylesDone = false;
 
 export function economyAdminInit(config) { cfg = config; }
-export function economyAdminReset() { S.data = null; S.busy = false; S.msg = ""; S.loaded = false; const el = document.getElementById("userManageEconomy"); if (el) el.innerHTML = ""; }
+export function economyAdminReset() { FUND.busy = false; FUND.msg = ""; S.data = null; S.busy = false; S.msg = ""; S.loaded = false; const el = document.getElementById("userManageEconomy"); if (el) el.innerHTML = ""; }
 export function economyAdminOpen() { if (!cfg || !cfg.isAdmin()) return; ensureStyles(); render(); if (!S.loaded && !S.busy) load(); }
 
 const fmt = (n) => Number(n || 0).toLocaleString("ja-JP");
@@ -91,7 +91,23 @@ function dailyLine(x, esc) {
 function fundLine(f, esc) {
   if (!f) return "";
   const last = f.date && f.status === "done" ? `／前回（${esc(f.date)}）：${fmt(f.count)}人に合計 ${fmt(f.total)} コイン` : f.status === "paying" ? "／配っている途中です" : "";
-  return `<p class="yec-note">🏦 ゆう基金：いまの残り <b>${fmt(f.balance)}</b> コイン${last}</p>`;
+  return `<p class="yec-note">🏦 ゆう基金：いまの残り <b>${fmt(f.balance)}</b> コイン${last}</p>
+    <div class="yec-row"><button type="button" class="yec-btn" data-ec="fund-now" data-balance="${fmt(f.balance)}" ${FUND.busy ? "disabled" : ""}>${FUND.busy ? "配っています…" : "ゆう基金を今すぐ配る"}</button></div>
+    ${FUND.msg ? `<p class="${FUND.error ? "yec-err" : "yec-ok"}">${esc(FUND.msg)}</p>` : ""}`;
+}
+const FUND = { busy: false, msg: "", error: false };
+const FUND_SKIP = { done: "今日はもう配りました（1日1回）。", small_pool: "基金が10コイン未満なので、配れません。", no_one: "対象の人（直近3日以内にログインした人）がいないので、配れません。" };
+async function fundNow(t) {
+  if (!confirm(`ゆう基金（いまの残り ${t.dataset.balance} コイン）を、総資産の少ない人から順に、今すぐ配ります（配り方は毎日 9:15 と同じ・1日1回）。よろしいですか？`)) return;
+  FUND.busy = true; FUND.msg = ""; FUND.error = false; render();
+  try {
+    const r = await cfg.callAdmin("fundDistribute", {});
+    if (r.status === "done") FUND.msg = `✅ ${fmt(r.count)}人に、合計 ${fmt(r.total)} コインを配りました。`;
+    else if (r.status === "busy") { FUND.msg = "ほかの処理とぶつかりました。もう一度押してください。"; FUND.error = true; }
+    else { FUND.msg = FUND_SKIP[r.reason] || "配れませんでした。"; FUND.error = true; }
+  } catch (error) { console.error("ゆう基金の配布エラー:", error); FUND.msg = "うまくいきませんでした。もう一度お試しください。"; FUND.error = true; }
+  FUND.busy = false;
+  await load();
 }
 function spark(points) {
   const ys = points.map((p) => Number(p.avg) || 0);
@@ -150,6 +166,7 @@ document.addEventListener("click", (event) => {
   else if (t.dataset.ec === "prize-find") prizeFind();
   else if (t.dataset.ec === "prize-revoke") prizeRevoke(t);
   else if (t.dataset.ec === "limit-reset") limitReset();
+  else if (t.dataset.ec === "fund-now") fundNow(t);
 });
 
 function ensureStyles() {
