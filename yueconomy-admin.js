@@ -92,11 +92,29 @@ function fundLine(f, esc) {
   if (!f) return "";
   const last = f.date && f.status === "done" ? `／前回（${esc(f.date)}）：${fmt(f.count)}人に合計 ${fmt(f.total)} コイン` : f.status === "paying" ? "／配っている途中です" : "";
   return `<p class="yec-note">🏦 ゆう基金：いまの残り <b>${fmt(f.balance)}</b> コイン${last}</p>
-    <div class="yec-row"><button type="button" class="yec-btn" data-ec="fund-now" data-balance="${fmt(f.balance)}" ${FUND.busy ? "disabled" : ""}>${FUND.busy ? "配っています…" : "ゆう基金を今すぐ配る"}</button></div>
+    ${f.backfill ? `<p class="yec-note">これまでの分（基金ができる前のゆう税 ${fmt(f.backfill.tax)}・スリ ${fmt(f.backfill.theft)}）：足しずみ（合計 ${fmt(f.backfill.total)} コイン）</p>` : ""}
+    <div class="yec-row"><button type="button" class="yec-btn" data-ec="fund-now" data-balance="${fmt(f.balance)}" ${FUND.busy ? "disabled" : ""}>${FUND.busy ? "配っています…" : "ゆう基金を今すぐ配る"}</button>
+      ${f.backfill ? "" : `<button type="button" class="yec-btn" data-ec="fund-backfill" ${FUND.busy ? "disabled" : ""}>これまでの分を基金に足す</button>`}</div>
     ${FUND.msg ? `<p class="${FUND.error ? "yec-err" : "yec-ok"}">${esc(FUND.msg)}</p>` : ""}`;
 }
 const FUND = { busy: false, msg: "", error: false };
 const FUND_SKIP = { done: "今日はもう配りました（1日1回）。", small_pool: "基金が10コイン未満なので、配れません。", no_one: "対象の人（直近3日以内にログインした人）がいないので、配れません。" };
+/* 基金ができる前に集めた分（ゆう税・スリ）を、1 回だけ基金に足す。先に内訳を見せる */
+async function fundBackfill() {
+  FUND.busy = true; FUND.msg = ""; FUND.error = false; render();
+  try {
+    const p = await cfg.callAdmin("fundBackfill", {});
+    if (p.status === "already") { FUND.msg = "これまでの分は、もう足してあります。"; }
+    else if (confirm(`基金ができる前に集めた分を、ゆう基金に足します（1回だけ）。\n・ゆう税：${fmt(p.tax)} コイン（${fmt(p.taxDays)}日分）\n・スリ：${fmt(p.theft)} コイン（${fmt(p.theftUsers)}人の、いちばん最近の1回）\n合計 ${fmt(p.total)} コイン。よろしいですか？`)) {
+      const r = await cfg.callAdmin("fundBackfill", { apply: true });
+      if (r.status === "done") FUND.msg = `✅ これまでの分 ${fmt(r.total)} コインを、ゆう基金に足しました。`;
+      else if (r.status === "already") FUND.msg = "これまでの分は、もう足してあります。";
+      else { FUND.msg = "ほかの処理とぶつかりました。もう一度押してください。"; FUND.error = true; }
+    }
+  } catch (error) { console.error("これまでの分の反映エラー:", error); FUND.msg = "うまくいきませんでした。もう一度お試しください。"; FUND.error = true; }
+  FUND.busy = false;
+  await load();
+}
 async function fundNow(t) {
   if (!confirm(`ゆう基金（いまの残り ${t.dataset.balance} コイン）を、総資産の少ない人から順に、今すぐ配ります（配り方は毎日 9:15 と同じ・1日1回）。よろしいですか？`)) return;
   FUND.busy = true; FUND.msg = ""; FUND.error = false; render();
@@ -167,6 +185,7 @@ document.addEventListener("click", (event) => {
   else if (t.dataset.ec === "prize-revoke") prizeRevoke(t);
   else if (t.dataset.ec === "limit-reset") limitReset();
   else if (t.dataset.ec === "fund-now") fundNow(t);
+  else if (t.dataset.ec === "fund-backfill") fundBackfill();
 });
 
 function ensureStyles() {
