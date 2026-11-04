@@ -195,6 +195,7 @@ test("泥棒が動いたら、総資産ランキングの対象（15,000以上�
   assert.deepEqual([r.raid, r.targets, r.hit, r.repelled, r.lost], [true, 1, 1, 0, 2000], "ランキングで15,000以上は1人だけ");
   const u = t.user();
   assert.equal(u.coins, 18000);
+  assert.equal(t.fs.plain("economyStats/fund").balance, 2000, "盗まれた分は、ゆう基金にたまる（同じ commit）");
   assert.deepEqual([u.theft.day, u.theft.week, u.theft.n, u.theft.last.lost, u.theft.last.kind, u.theft.last.fromCoins, u.theft.last.repelled], ["2026-10-27", "2026-10-26", 1, 2000, "pickpocket", 2000, false]);
   const again = await runTheftTick({}, JST(2026, 10, 27, 17, 0), t.deps, seqRandom(0, 0, 0.5));
   assert.equal(again.hit, 0, "同じ日には、もう来ない"); assert.equal(t.user().coins, 18000);
@@ -208,7 +209,7 @@ test("防犯グッズ：追い払えたら被害なし（来た回として数�
   // 動く(0)→来る(0)→追い払う（0.5 < 0.9）
   const r = await theftRaid(a.deps, "2026-10-27", seqRandom(0, 0.5));
   assert.deepEqual([r.hit, r.repelled, r.lost], [0, 1, 0]);
-  assert.equal(a.user().coins, 20000); assert.deepEqual([a.user().theft.day, a.user().theft.n, a.user().theft.last.repelled, a.user().theft.last.lv], ["2026-10-27", 1, true, 5]);
+  assert.equal(a.user().coins, 20000); assert.equal(a.fs.plain("economyStats/fund"), null, "追い払ったときは、基金に入らない"); assert.deepEqual([a.user().theft.day, a.user().theft.n, a.user().theft.last.repelled, a.user().theft.last.lv], ["2026-10-27", 1, true, 5]);
   // 追い払えなかった（0.95 ≥ 0.9）：割合 5+floor(0.5×11)＝10% → 2,000 の 30% 引き（レベル5は 70% 減）＝ 600
   const b = raidSetup({ extra: { guards: { [week]: { lv: 5, paid: 2000 } } } });
   const r2 = await theftRaid(b.deps, "2026-10-27", seqRandom(0, 0.95, 0.5));

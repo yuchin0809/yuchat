@@ -87,6 +87,12 @@ function dailyLine(x, esc) {
     : `見守りが自動実行を頼めませんでした（GitHub の応答 ${esc(String(w.status))}）`;
   return `<p class="yec-note" style="color:#c0392b;font-weight:bold">⚠ 今日（${esc(x.today)}）の株価・利息の更新は、まだ済んでいません。${why}。</p>`;
 }
+/* 🏦 ゆう基金（スリ・ゆう税でたまったコインを、毎日 9:15 に、総資産の少ない人から順に配る） */
+function fundLine(f, esc) {
+  if (!f) return "";
+  const last = f.date && f.status === "done" ? `／前回（${esc(f.date)}）：${fmt(f.count)}人に合計 ${fmt(f.total)} コイン` : f.status === "paying" ? "／配っている途中です" : "";
+  return `<p class="yec-note">🏦 ゆう基金：いまの残り <b>${fmt(f.balance)}</b> コイン${last}</p>`;
+}
 function spark(points) {
   const ys = points.map((p) => Number(p.avg) || 0);
   if (ys.length < 2) return "";
@@ -115,6 +121,7 @@ function render() {
   el.innerHTML = `${head}
     <div class="yec-verdict yec-${v.cls}">${esc(v.text)}</div>
     ${dailyLine(d.daily, esc)}
+    ${fundLine(d.fund, esc)}
     <p class="yec-note">コイン総量の更新：${c.date ? esc(c.date) : "－"}（${c.updatedAt ? esc(String(c.updatedAt).replace("T", " ").slice(0, 16)) + " UTC" : "－"}）</p>
     <div class="yec-grid">
       <div><small>総資産（合計）</small><b>${fmt(c.total)}</b></div><div><small>手持ちコイン</small><b>${fmt(c.coins)}</b></div>

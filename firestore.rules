@@ -195,7 +195,9 @@ service cloud.firestore {
           // 🎰 ゆうスロの記録（有料の回転数・使ったコイン。会員ランクに使う）。Worker だけが足す
           'slotSpins', 'slotWagered', 'slotKakuSpins', 'slotKakuWagered',
           // 🥷 スリ対策：防犯グッズ（guards）・スリの被害の記録（theft）・スリの通知の設定（theftPush）は Worker・毎日の処理だけが書く
-          'guards', 'theft', 'theftPush'];
+          'guards', 'theft', 'theftPush',
+          // 🏦 ゆう基金：毎日 9:15 に配られた額の記録（fundGrant）は Worker だけが書く
+          'fundGrant'];
       }
       function hasEconomyFields(data) {
         return data.keys().hasAny(economyFields());

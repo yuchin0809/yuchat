@@ -3780,7 +3780,7 @@ const kakuWinnersReset = lazyCaller(lazyKakuWinners, "kakuWinnersReset");
 const lazyKeshiEnroll = lazyModule("./yukeshi-admin.js?v=20261026-ltd10", (m) => m.keshiEnrollInit(adminCfg()));
 const keshiEnrollOpen = lazyOpener(lazyKeshiEnroll, "keshiEnrollOpen", () => currentViewName === "usermanage");
 const keshiEnrollReset = lazyCaller(lazyKeshiEnroll, "keshiEnrollReset");
-const lazyEconomyAdmin = lazyModule("./yueconomy-admin.js?v=20261029-econ1", (m) => m.economyAdminInit(adminCfg()));
+const lazyEconomyAdmin = lazyModule("./yueconomy-admin.js?v=20261104-fund1", (m) => m.economyAdminInit(adminCfg()));
 const economyAdminOpen = lazyOpener(lazyEconomyAdmin, "economyAdminOpen", () => currentViewName === "usermanage");
 const economyAdminReset = lazyCaller(lazyEconomyAdmin, "economyAdminReset");
 
@@ -4281,6 +4281,7 @@ function listenMyCoins() {
       if (data.bonus500Granted !== true) grantBonusCoinsIfNeeded();
       else grantLoginBonusIfNeeded(data);
       notifyTheftIfNew(data);
+      notifyFundIfNew(data);
       if (isEconomyViewActive()) renderEconomyView();
       updateAnnouncementUnreadMark();
     },
@@ -9909,7 +9910,7 @@ async function openEconomyView() {
   renderEconomyView();
   const session = appSessionSeq;
   try {
-    await Promise.all([loadMarket(), loadAssetRanking()]);
+    await Promise.all([loadMarket(), loadAssetRanking(), loadFundInfo()]);
   } catch (error) {
     if (isInterruptedBySignOut(session)) return;
     console.error("ゆう経済の読み込みエラー:", error);
@@ -10094,7 +10095,7 @@ function renderEconomyView() {
     </section>`;
 
   /* 🥷 スリ対策（毎週買い直しの防犯グッズ） */
-  const guardHtml = renderGuardCard(data, assets, now);
+  const guardHtml = renderGuardCard(data, assets, now) + renderFundCard(data);
 
   /* 入力中の値・フォーカス・スクロール位置を、描き直しても保つ
      （中身を丸ごと入れ替えるので、Safari などでは新しい入力欄への focus やスクロール領域の作り直しで位置が動くことがある） */
@@ -10153,7 +10154,7 @@ function renderGuardCard(data, assets, now) {
   return `
     <section class="econ-card econ-guard" aria-label="スリ対策">
       <h3>🥷 スリ対策 <small>（毎週買い直し）</small></h3>
-      <p class="econ-note">総資産が ${formatCoins(THEFT_MIN_TOTAL)} コイン以上の人のところに、平日（月〜金）はほぼ毎日、スリ・銀行強盗・株券泥棒が来ます（来る時間はランダム。土日は来ません）。盗まれるのは、手持ち → 預金 → 株の順で、盗まれたものは戻りません。防犯グッズを買うと、泥棒を追い払いやすくなり、盗まれる額も減ります。</p>
+      <p class="econ-note">総資産が ${formatCoins(THEFT_MIN_TOTAL)} コイン以上の人のところに、平日（月〜金）はほぼ毎日、スリ・銀行強盗・株券泥棒が来ます（来る時間はランダム。土日は来ません）。盗まれるのは、手持ち → 預金 → 株の順で、盗まれたものは戻りませんが、ゆう基金にたまり、総資産の少ない人に配られます。防犯グッズを買うと、泥棒を追い払いやすくなり、盗まれる額も減ります。</p>
       ${assets.total >= THEFT_MIN_TOTAL ? `<p class="econ-note"><b>あなたの総資産は対象です。</b></p>` : `<p class="econ-note">いまの総資産は ${formatCoins(assets.total)} コインなので、まだ対象ではありません。</p>`}
       ${beforeSale ? `<p class="econ-note guard-soon"><b>🛒 防犯グッズは、${mdLabel(new Date(THEFT_GUARD_SALE_START_MS + 9 * 3600000).toISOString().slice(0, 10))}（月）から買えます。</b></p>` : ""}
       <div class="guard-status">
@@ -10170,6 +10171,56 @@ function renderGuardCard(data, assets, now) {
       <button type="button" class="econ-button ${pushOn ? "primary" : ""}" data-theft-push="${pushOn ? "off" : "on"}" ${disabled}>${pushOn ? "🔔 スリのプッシュ通知：入（押すと切）" : "🔕 スリのプッシュ通知：切（押すと入）"}</button>
       <p class="econ-note">プッシュ通知は、アプリの通知を許可している端末に届きます。画面での知らせは、通知が切でも出ます。</p>
     </section>`;
+}
+
+/* ----- 🏦 ゆう基金（スリ・ゆう税でたまったコインを、毎日 9:15 に、総資産の少ない人から順に配る。配るのは Worker。ここは見せるだけ） ----- */
+
+let fundInfoCache = null;   // { at, data }（基金の残りと前回の結果。60 秒だけ使い回す）
+async function loadFundInfo() {
+  if (fundInfoCache && Date.now() - fundInfoCache.at < 60000) return;
+  try { fundInfoCache = { at: Date.now(), data: await callEconomyApi("fundInfo") }; }
+  catch (error) { console.error("ゆう基金の読み込みエラー:", error); }
+}
+
+function renderFundCard(data) {
+  const info = fundInfoCache?.data;
+  const g = data.fundGrant;
+  const age = g?.date ? (Date.parse(`${getTodayRaceId()}T00:00:00Z`) - Date.parse(`${g.date}T00:00:00Z`)) / 86400000 : null;
+  const recent = g && Number(g.amount) > 0 && age !== null && age >= 0 && age <= 7 ? g : null;
+  return `
+    <section class="econ-card econ-fund" aria-label="ゆう基金">
+      <h3>🏦 ゆう基金 <small>（毎日 9:15 に配ります）</small></h3>
+      <p class="econ-note">スリで盗まれたコインと、ゆう税で集めたコインは、ゆう基金にたまります。毎日 9:15 に、直近3日以内にログインした人のうち、総資産が少ない下位半分の人へ、少ない人ほど多く、自動で配ります（手持ちコインに入ります）。</p>
+      ${info ? `<div class="guard-status"><div>いまの基金：<b>🪙 ${formatCoins(info.balance)}</b></div>${info.last ? `<div>前回（${mdLabel(info.last.date)}）：<b>${formatCoins(info.last.count)}人</b>に、合計 <b>${formatCoins(info.last.total)}</b> コイン</div>` : ""}</div>` : ""}
+      ${recent ? `<div class="guard-last">🎁 ${mdLabel(recent.date)} に、ゆう基金から <b>${formatCoins(recent.amount)}</b> コインを受け取りました（総資産の少ない方から ${formatCoins(recent.rank)} 番目）</div>` : `<p class="econ-note">最近は、ゆう基金を受け取っていません。</p>`}
+    </section>`;
+}
+
+/* 新しく基金から受け取っていたら、ログインしたとき（開いたとき）に知らせる（端末ごとに、見た日付を覚える） */
+let fundModalShown = false;
+function notifyFundIfNew(data) {
+  const g = data?.fundGrant;
+  if (!g?.date || !(Number(g.amount) > 0) || !username) return;
+  const key = `fundSeen:${username}`;
+  let seen = "";
+  try { seen = localStorage.getItem(key) || ""; } catch { /* 覚えられなくても動く */ }
+  if (seen === g.date) return;
+  try { localStorage.setItem(key, g.date); } catch { /* 同上 */ }
+  const age = (Date.parse(`${getTodayRaceId()}T00:00:00Z`) - Date.parse(`${g.date}T00:00:00Z`)) / 86400000;
+  if (age > 2 || fundModalShown) return;
+  fundModalShown = true;
+  const overlay = document.createElement("div");
+  overlay.className = "theft-modal";
+  overlay.innerHTML = `<div class="theft-card safe">
+      <div class="theft-emoji">🎁</div>
+      <div class="theft-title">ゆう基金から届きました</div>
+      <div class="theft-body"><b>${formatCoins(g.amount)}</b> コインが、手持ちに入りました。<br>（総資産の少ない人から順に、毎日 9:15 に配っています）</div>
+      <button type="button" class="econ-button primary">OK</button>
+    </div>`;
+  overlay.addEventListener("click", () => { overlay.remove(); fundModalShown = false; });
+  document.body.appendChild(overlay);
+  fundInfoCache = null;
+  if (isEconomyViewActive()) { renderEconomyView(); loadFundInfo().then(() => { if (isEconomyViewActive()) renderEconomyView(); }); }
 }
 
 /* 新しい被害・撃退があったら、ログインしたとき（開いたとき）に大きく知らせる（端末ごとに、見た日付を覚える） */
