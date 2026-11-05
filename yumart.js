@@ -214,7 +214,7 @@ function buy(id) {
   const it = itemOf(x);
   const pay = x.au && x.deal ? x.deal.q : x.price;
   if (!confirm(`「${it.name}」${it.used ? "（中古）" : ""}を 🪙${fmt(pay)} で買いますか？\n買ったあとのキャンセルはできません。${x.k === "kaku" ? "\n（買った枠は、また売ることはできません）" : ""}`)) return;
-  run(async () => { await api("martBuy", { id }); return x.k === "kaku" ? "買いました！ゆうスロの確変台で、その時間に遊べます" : x.k === "prize" ? "買いました！ゆう番くじの「もちもの」に入ります" : `買いました！「${it.name}（中古）」は、消しバトのパーツから付けられます`; });
+  run(async () => { await api("martBuy", { id }); return x.k === "kaku" ? "買いました！ゆうスロの確変台で、その時間に遊べます" : x.k === "prize" ? (x.pid === "E" || x.pid === "F" ? "買いました！消しバトで使うには、ゆうワールド →「ゆう番くじ」の「もちもの」で「消しバトで使う」を押してください" : "買いました！ゆう番くじの「もちもの」に入ります") : `買いました！「${it.name}（中古）」は、消しバトのパーツから付けられます`; });
 }
 /* 商品カードのボタン：どの商品にも、値下げ交渉（NPC）・値下げ依頼（人）が出る。オークションは、入札がないあいだだけ（即決の値段の交渉） */
 function actionsOf(x, my, bidInfo) {
