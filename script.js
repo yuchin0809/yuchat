@@ -3750,7 +3750,7 @@ const openYuWorldView = () => { showLazyPlaceholder("yuworldRoot"); return lazyO
 const stopYuWorldView = lazyCaller(lazyYuWorld, "stopYuWorldView");
 
 /* 🏪 ゆうマート */
-const lazyYuMart = lazyModule("./yumart.js?v=20261027-cm1", (m) => m.initYuMart({
+const lazyYuMart = lazyModule("./yumart.js?v=20261105-ef1", (m) => m.initYuMart({
   endpoint: NOTIFY_ENDPOINT.replace(/\/notify$/, "/yuslot"),
   getToken: () => currentUser.getIdToken(),
   getUsername: () => username
