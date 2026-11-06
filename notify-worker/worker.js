@@ -78,7 +78,7 @@ export default {
     ctx.waitUntil(runBattleWeekTick(env, event.scheduledTime).catch((error) => console.error("battle week error", String(error?.message || error).slice(0, 300))));
     /* 🎲 ヨットの週間ランキング：毎週金曜 15:10（日本時間）に結果発表（1位500・2位300・3位100コイン。お知らせ・通知は出さない）。それ以外の分は Firestore に触れずにすぐ戻る */
     ctx.waitUntil(runYachtWeekTick(env, event.scheduledTime).catch((error) => console.error("yacht week error", String(error?.message || error).slice(0, 300))));
-    /* 🧽 消しバトのリーグ戦：月〜金の 10:30・12:40・15:00 に5試合ずつ自動で行い、金曜 15:10 に結果発表（1位3000・2位2000・3位600コイン。お知らせは流さない）。それ以外の分は Firestore に触れずにすぐ戻る */
+    /* 🧽 消しバトのリーグ戦：月〜金の 10:30・12:40・15:00 に5試合ずつ自動で行い、金曜 15:10 に結果発表（1位6000・2位4000・3位2500・4位1500・5位800コイン。お知らせは流さない）。それ以外の分は Firestore に触れずにすぐ戻る */
     ctx.waitUntil(runKeshiLeagueTick(env, event.scheduledTime).catch((error) => console.error("keshi league error", String(error?.message || error).slice(0, 300))));
     /* 💸 コイン送金：3日たっても承認されない申請を、1日1回（日本時間 3:07）自動で却下して返金する。それ以外の分は Firestore に触れずにすぐ戻る */
     /* 🗓 予約公開：決まった時刻に、ヨット・消しバトの公開スイッチを入れる（1回だけ）。それ以外の分は Firestore に触れずにすぐ戻る */
@@ -6720,10 +6720,10 @@ async function martAdmin(deps, uid, body) {
 /* ----- リーグ戦（最強決定戦） -----
    ・毎週：月曜〜金曜（金曜 15:10 の結果発表まで）。毎日 10:30・12:40・15:00 に5試合ずつ（1日15試合）、自動で行う。第1回は 2026-10-26（月）から。
    ・エントリー：一度エントリーすると、毎週自動で参加扱い。やめるまで続く。1人1件（yuslotKeshi/{uid} の league）。参加者の人数は yuslotKeshi/_league の count。
-   ・上位3名への賞金：1位3000・2位2000・3位600コイン（金曜 15:10・お知らせは流さない）。
+   ・上位5名への賞金：1位6000・2位4000・3位2500・4位1500・5位800コイン（金曜 15:10・お知らせは流さない）。
    ・Firestore：週の書類 yuslotKeshiLeague/{月曜の日付} に、全員の戦績をまとめて持つ（1セットにつき書き込み1回）。エントリー中の人は yuslotKeshi の league で探す。 */
 const KESHI_LEAGUE_FIRST_MS = Date.UTC(2026, 9, 26, 0, 0) - 9 * 3600000;   // 第1回の週の始まり：2026-10-26（月）0:00 JST
-const KESHI_LEAGUE_PRIZES = [3000, 2000, 600];
+const KESHI_LEAGUE_PRIZES = [6000, 4000, 2500, 1500, 800];
 const KESHI_LEAGUE_SETS = [[10, 30], [12, 40], [15, 0]];
 const KESHI_LEAGUE_ROUNDS = 5;                                    // 1セット＝5試合
 const KESHI_DAY = 86400000, KESHI_LEAGUE_FRI_END = 4 * KESHI_DAY + 15 * 3600000 + 10 * 60000;
@@ -6740,8 +6740,8 @@ export function keshiLeagueWeek(now) {
   return keshiLeagueWeekFrom(mon);
 }
 /* ----- 試合の計算（強さから確率で決める。強い消しゴムが有利だが、毎回勝つとは限らない） ----- */
-/* 1本：A が勝つ確率は、総合力の差が大きいほど高い（差12で約73%・差30で約92%） */
-export const keshiBoutWinProb = (ra, rb) => 1 / (1 + Math.exp(-(ra - rb) / 12));
+/* 1本：A が勝つ確率は、総合力の差が大きいほど高い（差12で約66%・差30で約84%。接戦になりやすいように、ゆるやかにした） */
+export const keshiBoutWinProb = (ra, rb) => 1 / (1 + Math.exp(-(ra - rb) / 18));
 /* 1試合＝3本勝負（2本先取）。{ a: Aの取った本数, b: Bの取った本数 } */
 export function keshiMatchSim(rnd, ra, rb) {
   let a = 0, b = 0;
@@ -7032,11 +7032,13 @@ const keshiStartPos = () => [[-KESHI_DESK.startX, KESHI_DESK.startZ], [KESHI_DES
 export function keshiPhys(st) {
   const clamp = (x, lo, hi) => (x < lo ? lo : x > hi ? hi : x);
   /* 2人対戦では、パーツの差がはっきり出るようにしてある（リーグ戦の勝ち負けは、総合力から別の計算なので、これとは関係しない）：
-     重さは「重さの数字の2乗」（重いと、当たり負けせず、相手を大きくふっとばす）、反発は数字が上がるほど大きく変わる */
+     重いと、当たり負けせず、相手をふっとばす。反発は数字が上がるほど変わる（効き方は下の式） */
   /* お金をかけたら必ず強くなるように、2人対戦では、重さ・すべり・反発の「下がる分」は使わない（初期装備より弱くはならない）。
      すべりは、弾いたときの速さが上がる（k）。摩擦（a）は、みんな同じ */
   const w = Math.max(st.m, 50) / 50, sl = clamp((Math.max(st.s, 50) - 50) / 60, 0, 1), bo = Math.max(st.b, 50);
-  return { m: r4(w * w), a: 9, e: r4(clamp(0.45 + (bo - 50) / 60, 0.3, 0.85)), r: r4(0.7 * (1 + (st.z - 50) / 300)), k: r4(1 + 0.2 * sl) };
+  /* 一発で決まりにくく、接戦になるように：重さの効きは「重さの数字の1.25乗」（平方根を2回で作る。どの端末でも同じ答えになる）、反発の幅はせまく、すべりの速さの上乗せは小さくした。
+     初期装備どうし・近い強さどうしでは一発で落ちず、よっぽど強さがちがう（最強装備 対 初期装備など）ときだけ、一発で落ちることがある */
+  return { m: r4(w * Math.sqrt(Math.sqrt(w))), a: 9, e: r4(clamp(0.45 + (bo - 50) / 100, 0.4, 0.7)), r: r4(0.7 * (1 + (st.z - 50) / 300)), k: r4(1 + 0.1 * sl) };
 }
 export const keshiLaunchSpeed = (P, power) => KESHI_VMAX * power * (P.k || 1);
 /* 机の上の動き。pos：[[x,z],[x,z]]、who：弾いた人（0/1）、(vx,vz)：弾いた速さ。

@@ -101,7 +101,7 @@ const r4 = (x) => Math.round(x * 10000) / 10000;
 export function keshiPhysView(st) {
   const clamp = (x, lo, hi) => (x < lo ? lo : x > hi ? hi : x);
   const w = Math.max(st.m, 50) / 50, sl = clamp((Math.max(st.s, 50) - 50) / 60, 0, 1), bo = Math.max(st.b, 50);
-  return { m: r4(w * w), a: 9, e: r4(clamp(0.45 + (bo - 50) / 60, 0.3, 0.85)), r: r4(0.7 * (1 + (st.z - 50) / 300)), k: r4(1 + 0.2 * sl) };
+  return { m: r4(w * Math.sqrt(Math.sqrt(w))), a: 9, e: r4(clamp(0.45 + (bo - 50) / 100, 0.4, 0.7)), r: r4(0.7 * (1 + (st.z - 50) / 300)), k: r4(1 + 0.1 * sl) };
 }
 export const keshiLaunchSpeedView = (P, power) => 12.5 * power * (P.k || 1);
 

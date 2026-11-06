@@ -80,15 +80,22 @@ const START = [[-KESHI_DESK.startX, KESHI_DESK.startZ], [KESHI_DESK.startX, -KES
 /* 弾いている人から相手へ、まっすぐ弾く */
 const aimAt = (y) => ({ gid: y.gid, dx: y.pos[1 - y.cur][0] - y.pos[y.cur][0], dz: y.pos[1 - y.cur][1] - y.pos[y.cur][1] });
 const who = (y) => (y.order[y.cur] === "id1" ? 1 : 2);
+/* 一発で落ちにくい（近い強さどうしでは落ちない）ので、1人目に最強の装備・2人目は初期装備にして、強い人が当てれば落ちる場面を作る。1本が終わるまで（落ちるか、10回弾くまで）弾き続ける */
+const STRONG = { owned: ["body:titan", "edge:crystal", "sole:air", "weight:gold"], eq: { body: "titan", edge: "crystal", sole: "air", weight: "gold" }, color: 0 };
+async function playBout(ctx, y0, p = 1) {
+  let y = y0; const bout = y.bout;
+  for (let i = 0; i < 12 && !y.done && y.bout === bout; i++) { const r = await ctx.r(who(y), "keshiRoomFlick", { ...aimAt(y), p }); assert.equal(r.ok, true, JSON.stringify(r)); y = r.keshi; }
+  return y;
+}
 
 test("動きの計算：強さの数字は、足し算・かけ算で作った決まった値。初期の消しゴムどうしは同じ", () => {
   assert.deepEqual(keshiPhys(BASE), { m: 1, a: 9, e: 0.45, r: 0.7, k: 1 });
   const heavy = keshiPhys(keshiStats({ ...KESHI_DEFAULT_EQ, body: "titan", weight: "lead" }));
   assert.ok(heavy.m > 1.5, "重い消しゴムは重い");
   const slick = keshiPhys(keshiStats({ ...KESHI_DEFAULT_EQ, sole: "air" }));
-  assert.ok(slick.a === 9 && slick.k > 1.05, "すべる底は、弾いたときの速さが上がる（摩擦は、みんな同じ）");
+  assert.ok(slick.a === 9 && slick.k > 1.02, "すべる底は、弾いたときの速さが上がる（摩擦は、みんな同じ）");
   const top = keshiPhys(keshiStats({ body: "titan", edge: "crystal", sole: "air", weight: "gold" }));
-  assert.ok(top.e <= 0.85 && top.a > 1 && top.m < 4);
+  assert.ok(top.e <= 0.7 && top.a > 1 && top.m < 3);
   /* お金をかけたら必ず強くなる：どのパーツを付けても、重さ・反発・弾く速さは、初期装備より下がらない */
   for (const slot of KESHI_SLOTS) for (const part of KESHI_PARTS[slot]) {
     const P = keshiPhys(keshiStats({ ...KESHI_DEFAULT_EQ, [slot]: part.id }));
@@ -141,8 +148,9 @@ test("画面用の動きの計算（yukeshi-core.js）は、サーバーの計�
   for (let i = 0; i < 400; i++) {
     const mk = () => keshiPhys(keshiStats({ body: bodies[Math.floor(rnd() * 5)], edge: edges[Math.floor(rnd() * 5)], sole: sols[Math.floor(rnd() * 5)], weight: wts[Math.floor(rnd() * 5)] }));
     const P = [mk(), mk()], who0 = i % 2, pos = who0 === 0 ? START : [START[0], START[1]];
-    if (i % 3 === 0) P[who0] = keshiPhys(keshiStats({ body: "titan", edge: "crystal", sole: "air", weight: "gold" }));   // 強い消しゴムが思いきり当てる場面（落ちる場面）も入れる
-    const a = (rnd() - .5) * 0.2 + (who0 === 0 ? Math.PI : 0), v = keshiLaunchSpeed(P[who0], i % 3 === 0 ? 1 : 0.5 + rnd() * 0.5);
+    if (i % 3 === 0) { P[who0] = keshiPhys(keshiStats({ body: "titan", edge: "crystal", sole: "air", weight: "gold" })); P[1 - who0] = keshiPhys(BASE); }   // 最強の消しゴムが、初期装備に思いきり当てる場面（落ちる場面）も入れる
+    const toward = Math.atan2(pos[1 - who0][0] - pos[who0][0], pos[1 - who0][1] - pos[who0][1]);   // 相手の向き（最強が初期装備を狙う場面は、相手をねらって当てる）
+    const a = (rnd() - .5) * 0.2 + (i % 3 === 0 ? toward : who0 === 0 ? Math.PI : 0), v = keshiLaunchSpeed(P[who0], i % 3 === 0 ? 1 : 0.5 + rnd() * 0.5);
     const vx = Math.round(Math.sin(a) * v * 1000) / 1000, vz = Math.round(Math.cos(a) * v * 1000) / 1000;
     const server = keshiSim(P, pos, who0, vx, vz);
     const s = keshiSimStepper(P, pos, who0, vx, vz);
@@ -228,20 +236,16 @@ test("先に弾く人は、ルームを作った人に関係なくランダム�
   const first = await b.r(2, "keshiRoomFlick", { ...aimAt(yb), p: 0.5 });
   assert.equal(first.ok, true);
   // 1本ごとに交互：2人目から始まったら、次の1本は1人目から
-  const strong = { owned: ["body:titan", "edge:crystal", "sole:air", "weight:gold"], eq: { body: "titan", edge: "crystal", sole: "air", weight: "gold" }, color: 0 };
-  const c = mk(0.75); c.fs.put("yuslotKeshi/id1", encF(strong)); c.fs.put("yuslotKeshi/id2", encF(strong));
+  const c = mk(0.75); c.fs.put("yuslotKeshi/id1", encF(STRONG));
   let y = (await c.r(1, "keshiRoomStart")).keshi;
   const order = [y.starter];
-  for (let i = 0; i < 2 && !y.done; i++) {
-    const r = await c.r(y.cur === 0 ? 1 : 2, "keshiRoomFlick", { ...aimAt(y), p: 1 }); assert.equal(r.ok, true, JSON.stringify(r)); y = r.keshi;
-    if (!y.done) order.push(y.starter);
-  }
-  assert.deepEqual(order.slice(0, 2), [1, 0], "1本目は2人目から、2本目は1人目から");
+  y = await playBout(c, y); order.push(y.starter);
+  assert.deepEqual(order, [1, 0], "1本目は2人目から、2本目は1人目から");
   // もう一度：決め直す（前の先手とは関係ない）
   const d = mk(0.25);
-  d.fs.put("yuslotKeshi/id1", encF(strong)); d.fs.put("yuslotKeshi/id2", encF(strong));
+  d.fs.put("yuslotKeshi/id1", encF(STRONG));
   let z = (await d.r(1, "keshiRoomStart")).keshi;
-  while (!z.done) { const r = await d.r(z.cur === 0 ? 1 : 2, "keshiRoomFlick", { ...aimAt(z), p: 1 }); z = r.keshi; }
+  while (!z.done) z = await playBout(d, z);
   d.deps.random = () => 0.75;
   const again = (await d.r(1, "keshiRoomStart", { rematch: true })).keshi;
   assert.notEqual(again.gid, z.gid); assert.deepEqual([again.starter, again.cur], [1, 1]);
@@ -260,23 +264,31 @@ test("先に弾く人の決め方：本物の乱数で、およそ半々にな�
 
 test("2人対戦：3本勝負。相手を落とすと1本。先に2本取った人の勝ち。2本目は後ろの人から弾く", async () => {
   const ctx = setup();
-  const strong = { owned: ["body:titan", "edge:crystal", "sole:air", "weight:gold"], eq: { body: "titan", edge: "crystal", sole: "air", weight: "gold" }, color: 0 };
-  ctx.fs.put("yuslotKeshi/id1", encF(strong)); ctx.fs.put("yuslotKeshi/id2", encF(strong));
+  ctx.fs.put("yuslotKeshi/id1", encF(STRONG));   // 1人目だけ最強の装備（強い人が当てると、一発で落ちることがある）
   let y = (await ctx.r(1, "keshiRoomStart")).keshi;
-  const flick = async (p) => { const r = await ctx.r(who(y), "keshiRoomFlick", { ...aimAt(y), p }); assert.equal(r.ok, true, JSON.stringify(r)); y = r.keshi; return y; };
-  y = await flick(1);
-  assert.deepEqual([y.wins, y.bout, y.starter, y.cur, y.flicks], [[1, 0], 2, 1, 1, 0], "1本目は先手の勝ち。2本目は後手から");
-  assert.deepEqual(y.hist, [{ w: 0, how: "ko" }]); assert.deepEqual(y.pos, START, "机の上の位置が元に戻る");
-  assert.equal(y.last.first, 1); assert.ok(Math.abs(y.last.to[1][1]) >= KESHI_DESK.hd || Math.abs(y.last.to[1][0]) >= KESHI_DESK.hw, "落ちた消しゴムの最後の位置は、机の外");
-  y = await flick(1);
-  assert.deepEqual([y.wins, y.bout, y.starter, y.done], [[1, 1], 3, 0, false], "2本目は後手の勝ち");
-  y = await flick(1);
-  assert.deepEqual([y.wins, y.done, y.winner, y.reason], [[2, 1], true, 0, "finished"]);
-  assert.deepEqual(y.hist.map((h) => h.w), [0, 1, 0]);
+  y = await playBout(ctx, y);
+  assert.deepEqual([y.wins, y.bout, y.starter, y.cur, y.flicks], [[1, 0], 2, 1, 1, 0], "1本目は強い1人目の勝ち。2本目は後手から");
+  assert.equal(y.hist[0].w, 0); assert.deepEqual(y.pos, START, "机の上の位置が元に戻る");
+  assert.ok(y.last.first >= 0 || y.hist[0].how === "edge", "落とした（または10回弾いてふちから遠かった）");
+  y = await playBout(ctx, y);
+  assert.deepEqual([y.wins, y.done, y.winner, y.reason], [[2, 0], true, 0, "finished"], "2本目も強い1人目の勝ち");
   assert.equal((await ctx.r(1, "keshiRoomFlick", { gid: y.gid, dx: 0, dz: -1, p: 0.5 })).error, "no_game");
   assert.equal((await ctx.r(2, "keshiRoomStart")).keshi.done, true, "終わったあとは、そのまま結果を返す");
   const again = (await ctx.r(2, "keshiRoomStart", { rematch: true })).keshi;
   assert.notEqual(again.gid, y.gid); assert.deepEqual([again.wins, again.bout, again.done], [[0, 0], 1, false]);
+});
+
+test("2人対戦：近い強さどうし（初期装備どうし・最強どうし）なら、まっすぐ当てても一発では落ちない（よっぽど強さがちがうときだけ落ちる。それは上の3本勝負のテスト）", async () => {
+  for (const eq of [null, STRONG]) {
+    const ctx = setup();
+    if (eq) { ctx.fs.put("yuslotKeshi/id1", encF(eq)); ctx.fs.put("yuslotKeshi/id2", encF(eq)); }
+    let y = (await ctx.r(1, "keshiRoomStart")).keshi;
+    for (let k = 0; k < 6; k++) {
+      const r = await ctx.r(who(y), "keshiRoomFlick", { ...aimAt(y), p: 1 }); assert.equal(r.ok, true, JSON.stringify(r));
+      assert.ok(r.keshi.last.first < 0 || r.keshi.last.first === r.keshi.last.by, `${eq ? "最強どうし" : "初期装備どうし"}：相手を一発で落とさない（${k + 1}回目）`);
+      y = r.keshi; if (y.done) break;
+    }
+  }
 });
 
 test("2人対戦：自分で机から落ちたら、相手の1本（自滅）", async () => {
@@ -369,5 +381,5 @@ test("ショップの「攻撃力・守り」：初期装備が ×1.0。どの�
   const heavy = keshiPunchView(table, { ...KESHI_DEFAULT_EQ, weight: "gold" }), light = keshiPunchView(table, { ...KESHI_DEFAULT_EQ, weight: "coin" });
   assert.ok(heavy.atk > light.atk && heavy.def > light.def, "重いおもりほど強い");
   const mid = keshiPunchView(table, { ...KESHI_DEFAULT_EQ, body: "pro", edge: "band", sole: "wax" }), top = keshiPunchView(table, { body: "titan", edge: "crystal", sole: "air", weight: "gold" });
-  assert.ok(mid.atk >= 1.5 && top.atk >= 3 && top.def >= 3, "お金をかけるほど、はっきり強い");
+  assert.ok(mid.atk >= 1.5 && top.atk >= 3 && top.def >= 2, "お金をかけるほど、はっきり強い");
 });
