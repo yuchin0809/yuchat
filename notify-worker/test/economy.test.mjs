@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import {
   handleEconomyAction, handleRequest, nextAutoRaceId, autoRaceTimeMs, jstDateString, validBetShape, betRejectReason, isTrustedRaceResult,
   derbyOddsTable, derbyRaceOddsRecord, derbyRaceOrder, derbyTicketOddsTenths, derbyFixedPayout, derbyBetWins,
-  derbySettleAll, runDerbySettleTick, resetDerbySettleForTest
+  derbySettleAll, runDerbySettleTick, resetDerbySettleForTest, handleAdminAction
 } from "../worker.js";
 import * as odds from "../../derby-odds.js";
 
@@ -533,4 +533,21 @@ test("自動の精算：発走から決まった分（2・3・5…分後）だ�
   reads = 0;
   assert.deepEqual(await runDerbySettleTick({}, raceMs + 3 * 60000, deps), { skipped: "outside" }, "終わった回は、もう読まない");
   assert.equal(reads, 0);
+});
+
+test("管理者：未精算の馬券を今すぐ精算する（管理者だけ・直近3日の回・精算済みは触らない）", async () => {
+  resetDerbySettleForTest();
+  const raceId = "2026-10-20-1130", raceMs = Date.parse("2026-10-20T02:30:00Z");
+  const created = new Date(raceMs - 3600000);
+  const { firestore, deps } = setup({ coins: 0, now: raceMs + 5 * 3600000, docs: {
+    "raceBets/a1": { raceId, uid: "uT", username: "たろう", settled: false, win: null, payout: null, createdAt: created, placedBy: "worker", type: "win", horses: [1], amount: 100 }
+  } });
+  const d = { ...deps, adminUid: "admin-uid" };
+  assert.equal((await handleAdminAction(d, "someone", { action: "derbySettle" })).error, "not_admin");
+  const r = await handleAdminAction(d, "admin-uid", { action: "derbySettle" });
+  assert.equal(r.ok, true);
+  const x = r.results.find((y) => y.raceId === raceId);
+  assert.equal(x.status, "done"); assert.equal(x.settled, 1);
+  const again = await handleAdminAction(d, "admin-uid", { action: "derbySettle" });
+  assert.equal(again.results.find((y) => y.raceId === raceId).settled, 0, "二重に払わない");
 });

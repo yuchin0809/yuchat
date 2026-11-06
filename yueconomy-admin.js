@@ -95,7 +95,20 @@ function fundLine(f, esc) {
     ${f.backfill ? `<p class="yec-note">これまでの分（基金ができる前のゆう税 ${fmt(f.backfill.tax)}・スリ ${fmt(f.backfill.theft)}）：足しずみ（合計 ${fmt(f.backfill.total)} コイン）</p>` : ""}
     <div class="yec-row"><button type="button" class="yec-btn" data-ec="fund-now" data-balance="${fmt(f.balance)}" ${FUND.busy ? "disabled" : ""}>${FUND.busy ? "配っています…" : "ゆう基金を今すぐ配る"}</button>
       ${f.backfill ? "" : `<button type="button" class="yec-btn" data-ec="fund-backfill" ${FUND.busy ? "disabled" : ""}>これまでの分を基金に足す</button>`}</div>
-    ${FUND.msg ? `<p class="${FUND.error ? "yec-err" : "yec-ok"}">${esc(FUND.msg)}</p>` : ""}`;
+    ${FUND.msg ? `<p class="${FUND.error ? "yec-err" : "yec-ok"}">${esc(FUND.msg)}</p>` : ""}
+    <div class="yec-row"><button type="button" class="yec-btn" data-ec="derby-settle" ${FUND.busy ? "disabled" : ""}>ゆうダービー：未精算の馬券を今すぐ精算する</button></div>
+    ${FUND.derby ? `<p class="${FUND.derbyError ? "yec-err" : "yec-ok"}" style="white-space:pre-line">${esc(FUND.derby)}</p>` : ""}`;
+}
+async function derbySettleNow() {
+  if (!confirm("直近3日の自動開催のレースで、まだ精算されていない馬券を、今すぐ精算します（当たりのコインが入ります。精算済みは触りません）。よろしいですか？")) return;
+  FUND.busy = true; FUND.derby = ""; FUND.derbyError = false; render();
+  try {
+    const r = await cfg.callAdmin("derbySettle", {});
+    const why = { no_result: "結果なし", no_schedule: "開催情報なし", not_ready: "まだ" };
+    FUND.derby = (r.results || []).map((x) => `${x.raceId}：${x.status === "done" ? `${fmt(x.settled)}件を精算（合計 ${fmt(x.payoutTotal)} コイン）${x.skipped ? `・退会などで ${fmt(x.skipped)}件は飛ばした` : ""}` : x.status === "error" ? `失敗（${x.reason}）` : `飛ばした（${why[x.reason] || x.reason || ""}）`}`).join("\n") || "対象のレースがありません。";
+  } catch (error) { console.error("ダービー精算エラー:", error); FUND.derby = "うまくいきませんでした。もう一度お試しください。"; FUND.derbyError = true; }
+  FUND.busy = false;
+  render();
 }
 const FUND = { busy: false, msg: "", error: false };
 const FUND_SKIP = { done: "今日はもう配りました（1日1回）。", small_pool: "基金が10コイン未満なので、配れません。", no_one: "対象の人（直近3日以内にログインした人）がいないので、配れません。" };
@@ -185,6 +198,7 @@ document.addEventListener("click", (event) => {
   else if (t.dataset.ec === "prize-revoke") prizeRevoke(t);
   else if (t.dataset.ec === "limit-reset") limitReset();
   else if (t.dataset.ec === "fund-now") fundNow(t);
+  else if (t.dataset.ec === "derby-settle") derbySettleNow();
   else if (t.dataset.ec === "fund-backfill") fundBackfill();
 });
 
