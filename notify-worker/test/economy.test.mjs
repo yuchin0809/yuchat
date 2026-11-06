@@ -520,12 +520,12 @@ test("自動の精算：発走のあと、全員の未精算の馬券を精算�
   assert.equal(again.settled, 0); assert.equal(me(firestore).coins, taro, "二重に払わない");
 });
 
-test("自動の精算：発走から決まった分（2・3・5…分後）だけ動き、それ以外は何も読まない。演出が終わる前（80秒以内）は払わない。未精算が無い回は終わり", async () => {
+test("自動の精算：発走から決まった分（2〜10分後は毎分…）だけ動き、それ以外は何も読まない。演出が終わる前（80秒以内）は払わない。未精算が無い回は終わり", async () => {
   resetDerbySettleForTest();
   const raceMs = Date.parse("2026-10-20T02:30:00Z");
   const { firestore, deps } = setup({ now: raceMs + 4 * 60000, docs: {} });
   let reads = 0; const q = firestore.query; firestore.query = async (...a) => { reads++; return q.apply(firestore, a); };
-  assert.deepEqual(await runDerbySettleTick({}, raceMs + 4 * 60000, deps), { skipped: "outside" });
+  assert.deepEqual(await runDerbySettleTick({}, raceMs + 11 * 60000, deps), { skipped: "outside" });
   assert.equal(reads, 0, "決まった分以外は読まない");
   assert.deepEqual((await derbySettleAll({ ...deps, now: () => raceMs + 79000 }, "2026-10-20-1130")).reason, "not_ready");
   const t = await runDerbySettleTick({}, raceMs + 2 * 60000, deps);

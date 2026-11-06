@@ -2493,11 +2493,11 @@ async function derbySettleBet(fs, bet, userName, { fixed, schedule, table, race,
 /* =========================================================
    🏇 ゆうダービーの精算を、この Worker が自動で行う（毎分の cron）
    ・これまでは、GitHub Actions の derby-runner か、その人がアプリを開いたときに精算していた。GitHub の定期実行が来ない日や、アプリを開かない人は、当たってもコインが入らないままになる。
-   ・自動開催の回（11:30・15:02）の発走から、少し遅れた決まった分（2・3・5・10・20・45・90・180分後と、12時間後・24時間後）に、その回の「未精算の馬券」を探して、
+   ・自動開催の回（11:30・15:02）の発走から、少し遅れた決まった分（2〜10分後は毎分、そのあと15・20・30・45・60・90・120・180・360分後と、12時間後・24時間後・48時間後。済んだ回はメモリに覚えて、もう読まない）に、その回の「未精算の馬券」を探して、
      結果が無ければ作り（econEnsureRaceResult）、全員ぶんを精算する（1枚ずつ、馬券の更新と払い戻しを1回の commit。二重には払わない）。未精算が無ければ、その回は終わり。
    ・読み取り：確かめる分に、その回の未精算の馬券だけ。それ以外の分は Firestore に触れない。手動レース（管理者が作る特別レース）は、これまでどおり。
 ========================================================= */
-const DERBY_SETTLE_CHECK_MIN = [2, 3, 5, 10, 20, 45, 90, 180, 720, 1440];
+const DERBY_SETTLE_CHECK_MIN = [2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 30, 45, 60, 90, 120, 180, 360, 720, 1440, 2880];
 const derbySettleDone = new Set();
 export function resetDerbySettleForTest() { derbySettleDone.clear(); }
 
@@ -3511,7 +3511,14 @@ export async function lotteryRunDraw(deps, drawMs) {
   const names = [...new Set(winners.map((w) => w.name))];
   const userDocs = names.length ? await fs.batchGet(names.map((n) => `users/${n}`)) : [];
   const valid = new Set(names.filter((n, i) => userDocs[i] && userDocs[i].uid === uidOf.get(n)));
-  winners = winners.filter((w) => valid.has(w.name));
+  /* 買ったときの名前の書類が無い（名前を変えた など）人は、uid から今の書類を探して、そちらに払う（黙って払わないことはしない） */
+  const renamed = new Map();
+  for (const n of names) {
+    if (valid.has(n)) continue;
+    const f = await transferFindUser(fs, uidOf.get(n), n);
+    if (f) renamed.set(n, f.name);
+  }
+  winners = winners.filter((w) => valid.has(w.name) || renamed.has(w.name)).map((w) => (renamed.has(w.name) ? { ...w, name: renamed.get(w.name) } : w));
 
   const paid = winners.reduce((s, w) => s + w.amount, 0);
   const byName = new Map();
