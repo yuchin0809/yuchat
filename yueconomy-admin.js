@@ -97,7 +97,23 @@ function fundLine(f, esc) {
       ${f.backfill ? "" : `<button type="button" class="yec-btn" data-ec="fund-backfill" ${FUND.busy ? "disabled" : ""}>これまでの分を基金に足す</button>`}</div>
     ${FUND.msg ? `<p class="${FUND.error ? "yec-err" : "yec-ok"}">${esc(FUND.msg)}</p>` : ""}
     <div class="yec-row"><button type="button" class="yec-btn" data-ec="derby-settle" ${FUND.busy ? "disabled" : ""}>ゆうダービー：未精算の馬券を今すぐ精算する</button></div>
+    <div class="yec-row"><button type="button" class="yec-btn" data-ec="lottery-repay" ${FUND.busy ? "disabled" : ""}>宝くじ：払われていない賞金を調べて払う（直近の回）</button></div>
     ${FUND.derby ? `<p class="${FUND.derbyError ? "yec-err" : "yec-ok"}" style="white-space:pre-line">${esc(FUND.derby)}</p>` : ""}`;
+}
+async function lotteryRepayNow() {
+  FUND.busy = true; FUND.derby = ""; FUND.derbyError = false; render();
+  try {
+    const p = await cfg.callAdmin("lotteryRepay", {});
+    const who = (p.people || []).map((x) => `${x.name || `${x.entryName}（書類が見つからない）`}：${fmt(x.amount)} コイン（${fmt(x.count)}口）`).join("\n");
+    if (!p.missing) FUND.derby = `${p.round} の回：払われていない賞金はありません（当選 ${fmt(p.expectedWinners)}口・払い済み ${fmt(p.paidWinners)}口）。`;
+    else if (confirm(`${p.round} の回で、払われていない賞金が ${fmt(p.missing)}口あります。\n${who}\n払える分の合計 ${fmt(p.total)} コインを、今すぐ払います。よろしいですか？`)) {
+      const r = await cfg.callAdmin("lotteryRepay", { round: p.round, apply: true });
+      FUND.derby = r.applied ? `✅ ${p.round} の回：合計 ${fmt(r.total)} コインを払いました。${r.unfound ? `\n（書類が見つからず払えなかった人：${fmt(r.unfound)}人）` : ""}` : "払えませんでした（もう一度お試しください）。";
+      FUND.derbyError = !r.applied;
+    } else FUND.derby = "やめました。";
+  } catch (error) { console.error("宝くじの払い直しエラー:", error); FUND.derby = "うまくいきませんでした。もう一度お試しください。"; FUND.derbyError = true; }
+  FUND.busy = false;
+  render();
 }
 async function derbySettleNow() {
   if (!confirm("直近3日の自動開催のレースで、まだ精算されていない馬券を、今すぐ精算します（当たりのコインが入ります。精算済みは触りません）。よろしいですか？")) return;
@@ -199,6 +215,7 @@ document.addEventListener("click", (event) => {
   else if (t.dataset.ec === "limit-reset") limitReset();
   else if (t.dataset.ec === "fund-now") fundNow(t);
   else if (t.dataset.ec === "derby-settle") derbySettleNow();
+  else if (t.dataset.ec === "lottery-repay") lotteryRepayNow();
   else if (t.dataset.ec === "fund-backfill") fundBackfill();
 });
 
