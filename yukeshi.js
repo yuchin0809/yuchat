@@ -4,7 +4,7 @@
      このファイルは、画面（3Dの消しゴム・強さ・パーツの一覧）を描いて、「買う」「付ける」を頼むだけ。
    ・ゆうワールド（yuworld.js）から renderKeshi({ root, api, esc, openRooms, leagueFirst, onBack }) で開く。
 ========================================================= */
-import { keshiStatsView, keshiPunchView, keshiLeaguePhase, eraserIcon } from "./yukeshi-core.js?v=20261026-ltd10";
+import { keshiStatsView, keshiPunchView, keshiLeaguePhase, eraserIcon } from "./yukeshi-core.js?v=20261106-fair1";
 import { createEraserStage, SLEEVE_COLORS, sleeveCss } from "./yukeshi3d.js?v=20261026-ltd10";
 
 const SLOT_NAMES = { body: "本体", edge: "ふち", sole: "そこ", weight: "おもり" };
@@ -44,7 +44,7 @@ function fail(code) {
 
 /* 🏆 最強決定戦の大きなバナー（開催の状態・賞金・エントリー済みかが、ひと目で分かる）。状態は、日付と、ショップを開いたときに受け取った情報だけで作る（追加の通信なし） */
 function leagueBanner() {
-  const lg = st.league || { entered: false, prizes: [0, 0, 0], sets: [[10, 30], [12, 40], [15, 0]], firstMs: 0 };
+  const lg = st.league || { entered: false, prizes: [0, 0, 0, 0, 0], sets: [[10, 30], [12, 40], [15, 0]], firstMs: 0 };
   const now = Date.now(), p = keshiLeaguePhase(now, lg.firstMs || 0);
   const md = (ms) => { const d = new Date(ms + 9 * 3600000); return `${d.getUTCMonth() + 1}/${d.getUTCDate()}`; };
   const times = lg.sets.map(([h, m]) => `${h}:${String(m).padStart(2, "0")}`).join("・");
@@ -52,7 +52,7 @@ function leagueBanner() {
   const line = p.phase === "live" ? `金曜 15:10 まで、毎日 ${times} に5試合ずつ自動で対戦`
     : p.phase === "before" ? `開幕まで あと${p.days}日。いまエントリーすると、第1回の最初から参加できます`
     : `次の週は ${md(p.startMs)}（月）から。エントリーしておくと、毎週自動で参加できます`;
-  const pr = (lg.prizes || []).map((v, i) => `<span><i>${["🥇", "🥈", "🥉"][i]}</i>${Number(v).toLocaleString("ja-JP")}<small>コイン</small></span>`).join("");
+  const pr = (lg.prizes || []).map((v, i) => `<span><i>${["🥇", "🥈", "🥉", "4位", "5位"][i]}</i>${Number(v).toLocaleString("ja-JP")}<small>コイン</small></span>`).join("");
   return `<button type="button" class="kl-banner${p.phase === "live" ? " live" : ""}" id="ykLeague">
     <span class="kl-shine" aria-hidden="true"></span>
     <span class="kl-ribbon">🏆 ${ribbon}</span>
@@ -98,7 +98,7 @@ async function openPractice() {
   if (busy) return;
   const pl = plan(), eq = previewEq(), color = st.color, my = token;
   stopKeshi();
-  try { practice = practice || await import("./yukeshi-practice.js?v=20261026-ltd10"); }
+  try { practice = practice || await import("./yukeshi-practice.js?v=20261106-fair1"); }
   catch (_) { alert("試し打ちを開けませんでした。通信環境をご確認のうえ、もう一度お試しください。"); drawShell(); return; }
   if (token !== my + 1) return;
   practice.renderPractice({ root: ctx.root, esc: ctx.esc, table, eq, color, title: pl.slots.length ? `選んでいるパーツ：${pl.slots.map((slot) => pl.part(slot).name).join("・")}（まだ買っていないものも試せます）` : "いま付けているパーツ", onBack: () => drawShell() });
@@ -243,7 +243,7 @@ function drawLeague() {
     ? `第${w.no}回 開催中！毎日 ${first} に5試合ずつ、自動で対戦します。${lastSet ? `最新の試合：<b>${lastSet}</b>` : ""}${me ? "" : "<br>まだ試合をしていません（エントリーすると、次のセットから参加します）。"}`
     : `第${w.no}回は <b>${mdJa(w.setsMs[0])}（月）${hmJa(...L.sets[0])}</b> からスタート！試合は自動で行われ、勝敗だけが表示されます。`;
   const lastCard = L.last
-    ? `<div class="yl2-last"><b>先週（第${Math.max(1, w.no - 1)}回）の結果発表</b>${L.last.top.map((t) => `<div class="${t.mine ? "mine" : ""}"><span>${["🥇", "🥈", "🥉"][t.rank - 1]} ${ctx.esc(t.name)}</span><span>${t.w}勝${t.l}敗</span><em>${t.prize.toLocaleString("ja-JP")}コイン</em></div>`).join("")}${L.last.me ? `<p>あなたは <b>${L.last.me.rank}位</b>（${L.last.me.w}勝${L.last.me.l}敗）でした。</p>` : ""}</div>`
+    ? `<div class="yl2-last"><b>先週（第${Math.max(1, w.no - 1)}回）の結果発表</b>${L.last.top.map((t) => `<div class="${t.mine ? "mine" : ""}"><span>${["🥇", "🥈", "🥉", "4位", "5位"][t.rank - 1]} ${ctx.esc(t.name)}</span><span>${t.w}勝${t.l}敗</span><em>${t.prize.toLocaleString("ja-JP")}コイン</em></div>`).join("")}${L.last.me ? `<p>あなたは <b>${L.last.me.rank}位</b>（${L.last.me.w}勝${L.last.me.l}敗）でした。</p>` : ""}</div>`
     : "";
   const entry = L.entered
     ? `<div class="yl2-entry on"><div class="st">✅ エントリー済み</div><p>毎週、自動で参加扱いになります。参加者：${L.count}人</p><button type="button" class="yl2-quit" id="ylQuit">エントリーをやめる</button></div>`
@@ -266,7 +266,7 @@ function drawLeague() {
     <li>1試合は3本勝負（2本先取）。結果だけが表示されます。強い消しゴムが有利ですが、毎回勝てるとは限りません。</li>
     <li>対戦相手は、前のセットが終わると、次のセットの5試合ぶんが「次の試合」に発表されます（勝ち負けの数が近い人。週の最初のセットはランダム）。「戦力比較」で、相手の消しゴムも見られます。</li>
     <li>月〜金の勝ち数でランキングが決まり、金曜 15:10 に結果発表。</li></ol>`);
-  const prize = () => sheet("報酬", `<p>金曜 15:10 の結果発表で、ランキングの上位3名にゆうコインをお渡しします。</p><div class="yl2-prizes"><div>🥇 1位<b>${pr[0].toLocaleString("ja-JP")}</b>コイン</div><div>🥈 2位<b>${pr[1].toLocaleString("ja-JP")}</b>コイン</div><div>🥉 3位<b>${pr[2].toLocaleString("ja-JP")}</b>コイン</div></div>`);
+  const prize = () => sheet("報酬", `<p>金曜 15:10 の結果発表で、ランキングの上位5名にゆうコインをお渡しします。</p><div class="yl2-prizes">${["🥇 1位", "🥈 2位", "🥉 3位", "4位", "5位"].map((label, i) => `<div>${label}<b>${Number(pr[i] || 0).toLocaleString("ja-JP")}</b>コイン</div>`).join("")}</div>`);
   const ranking = (all = false) => { const el = sheet("ランキング", L.top.length
     ? `<p>今週の勝ち数の順位です（参加 ${L.total} 人）。</p><div class="yl2-rk">${(all ? L.top : L.top.slice(0, 20)).map((t) => `<div class="${t.mine ? "mine" : ""}"><span>${t.rank <= 3 ? ["🥇", "🥈", "🥉"][t.rank - 1] : t.rank + "位"}</span><span class="n">${ctx.esc(t.name)}</span><b>${t.w}勝${t.l}敗</b></div>`).join("")}</div>${!all && L.top.length > 20 ? `${(() => { const m = L.top.find((t) => t.mine); return m && m.rank > 20 ? `<p>あなたは <b>${m.rank}位</b>（${m.w}勝${m.l}敗）です。</p>` : ""; })()}<button type="button" class="yw-btn yk2-go" data-more style="margin-bottom:8px">もっと見る（全${L.top.length}人）</button>` : ""}`
     : `<p>ランキングは、試合が始まってから表示されます。${L.started ? "" : `（第${w.no}回：${mdJa(w.setsMs[0])}（月）から）`}</p><p>いまのエントリー：${L.count}人</p>`);

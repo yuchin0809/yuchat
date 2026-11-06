@@ -3733,7 +3733,7 @@ function lazyCaller(mod, name) {
 const adminCfg = () => ({ callAdmin: (action, payload) => callAdminApi(action, payload), isAdmin: () => isAdminUser(), esc: (v) => escapeHTML(v) });
 
 /* 🎡 ゆうワールド（ゆうスロ）。トークン・ユーザー名・最上位管理者かどうかは呼ばれた時点の状態を使う */
-const lazyYuWorld = lazyModule("./yuworld.js?v=20261026-yuworld54", (m) => m.initYuWorld({
+const lazyYuWorld = lazyModule("./yuworld.js?v=20261106-fair1", (m) => m.initYuWorld({
   openGame: (type) => openGameFromWorld(type),
   pendingInviteTypes: () => pendingGameInvites.map((invite) => invite.gameType),
   endpoint: NOTIFY_ENDPOINT.replace(/\/notify$/, "/yuslot"),
@@ -3786,7 +3786,7 @@ const economyAdminReset = lazyCaller(lazyEconomyAdmin, "economyAdminReset");
 
 /* 🎲 ヨット / 🥊 消しバトの部屋の描画：読み込み前は準備中の表示を出し、読み込めたらもう一度描く */
 const lazyYachtRoom = lazyModule("./yuyacht.js?v=20261026-yacht6");
-const lazyKeshiRoom = lazyModule("./yukeshi-room.js?v=20261026-ltd10");
+const lazyKeshiRoom = lazyModule("./yukeshi-room.js?v=20261106-fair1");
 function lazyRoomRenderer(mod, name) {
   return (boardEl, room, c) => {
     const m = mod.get();

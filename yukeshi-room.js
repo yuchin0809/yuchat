@@ -7,7 +7,7 @@
 ========================================================= */
 import { load3D, three } from "./yuyacht3d.js?v=20261023-3d1";
 import { eraserKit } from "./yukeshi3d.js?v=20261026-ltd10";
-import { keshiSimStepper, KESHI_DESK, KESHI_DT, eraserIcon } from "./yukeshi-core.js?v=20261026-ltd10";
+import { keshiSimStepper, KESHI_DESK, KESHI_DT, eraserIcon } from "./yukeshi-core.js?v=20261106-fair1";
 
 const TOP_Y = -0.4;   // 机の上の面の高さ
 const ERASER_SCALE = 0.57;   // 机の上の消しゴムの大きさ（1人用の改造の画面の消しゴムを、この倍率に小さくする）

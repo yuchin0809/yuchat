@@ -17,8 +17,8 @@ import { renderLottery, stopLottery } from "./yulottery.js?v=20261027-draw1";
 /* 🎊 ゆう番くじ（発売前のお知らせの画面） */
 import { renderBankuji, stopBankuji, BANKUJI_SALE_MS } from "./yubankuji.js?v=20261027-pass1";
 import { renderYacht, stopYacht } from "./yuyacht.js?v=20261026-yacht6";
-import { renderKeshi, stopKeshi } from "./yukeshi.js?v=20261027-next1";
-import { eraserIcon, keshiLeagueTag } from "./yukeshi-core.js?v=20261026-ltd10";
+import { renderKeshi, stopKeshi } from "./yukeshi.js?v=20261106-fair1";
+import { eraserIcon, keshiLeagueTag } from "./yukeshi-core.js?v=20261106-fair1";
 /* 🌈 確変台のパネル（台の一覧の上）。抽選・先着・通知設定。Worker の kaku* アクションを呼んで表示するだけ */
 import { kakuInit, kakuPanelHtml, kakuBind, kakuMachineInfo, startKaku, stopKaku, refreshKaku } from "./yukaku.js?v=20261027-move2";
 /* 🏅 会員ランクのカード（台の一覧の上）。ランクの判定・進みは Worker の rankStatus が返す */
@@ -184,7 +184,7 @@ const GAME_SHOPS = [
 /* ゆうワールドの一番上に出す、最強決定戦（消しバトのリーグ戦）の目立つ札。押すと、消しバトの最強決定戦の画面を開く */
 function leagueTop() {
   if (!state.keshiPublished) return "";
-  return `<button type="button" class="yw-league-top" id="ywLeagueTop"><span class="yw-lt-shine" aria-hidden="true"></span><span class="yw-lt-ico">🏆</span><span class="yw-lt-body"><b>最強決定戦（消しバト）</b><small>${keshiLeagueTag(Date.now())}　上位3名にコイン！</small></span><span class="yw-lt-go">見る ▶</span></button>`;
+  return `<button type="button" class="yw-league-top" id="ywLeagueTop"><span class="yw-lt-shine" aria-hidden="true"></span><span class="yw-lt-ico">🏆</span><span class="yw-lt-body"><b>最強決定戦（消しバト）</b><small>${keshiLeagueTag(Date.now())}　上位5名にコイン！</small></span><span class="yw-lt-go">見る ▶</span></button>`;
 }
 function renderShop() {
   const blocked = !state.published && !state.isTopAdmin;

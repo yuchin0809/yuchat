@@ -85,14 +85,14 @@ const matchesOf = (p) => Object.values(p).map((v) => v.m.filter((x) => x !== "-"
 
 test("1本の勝つ確率と3本勝負：総合力が同じなら五分五分、差が大きいほど強い側が勝つ。でも毎回は勝てない", () => {
   assert.equal(keshiBoutWinProb(50, 50), 0.5);
-  assert.ok(Math.abs(keshiBoutWinProb(62, 50) - 0.73) < 0.01 && Math.abs(keshiBoutWinProb(80, 50) - 0.924) < 0.01);
-  assert.ok(keshiBoutWinProb(50, 62) < 0.3);
+  assert.ok(Math.abs(keshiBoutWinProb(62, 50) - 0.661) < 0.01 && Math.abs(keshiBoutWinProb(80, 50) - 0.841) < 0.01);
+  assert.ok(keshiBoutWinProb(50, 62) < 0.35);
   const rnd = rngOf(11); let even = 0, strong = 0, mid = 0;
   const N = 6000;
   for (let i = 0; i < N; i++) { const a = keshiMatchSim(rnd, 50, 50); assert.ok((a.a === 2) !== (a.b === 2) && a.a <= 2 && a.b <= 2); if (a.a > a.b) even++; if (keshiMatchSim(rnd, 80, 50).a === 2) strong++; if (keshiMatchSim(rnd, 60, 50).a === 2) mid++; }
   assert.ok(Math.abs(even / N - 0.5) < 0.03, "同じ強さ");
-  assert.ok(strong / N > 0.95 && strong / N < 0.995, `差30：${strong / N}`);
-  assert.ok(mid / N > 0.6 && mid / N < 0.8, `差10：${mid / N}`);
+  assert.ok(strong / N > 0.9 && strong / N < 0.96, `差30：${strong / N}`);
+  assert.ok(mid / N > 0.58 && mid / N < 0.75, `差10：${mid / N}`);
 });
 
 test("1セット：全員が5試合。勝ち数の合計＝負け数の合計。同じ週・同じセットなら、何回やっても同じ結果", () => {
@@ -213,7 +213,7 @@ test("画面用のデータ：自分の順位・日ごとの勝敗と順位・�
   assert.equal(out.me, null); assert.equal(out.total, 0);
 });
 
-test("金曜 15:10 の結果発表：上位3名に 3000・2000・600 コイン。二重には払わない。お知らせ・通知は出さない。次の週の画面に先週の結果が出る", async () => {
+test("金曜 15:10 の結果発表：上位5名に 6000・4000・2500・1500・800 コイン。二重には払わない。お知らせ・通知は出さない。次の週の画面に先週の結果が出る", async () => {
   const ctx = setup({ users: 6 });
   for (const t of [[26], [27], [28], [29], [30]].flatMap(([d]) => [[d, 10, 30], [d, 12, 40], [d, 15, 0]])) await ctx.tick(JST(2026, 10, ...t));
   assert.equal(ctx.wk().setsDone, 15);
@@ -221,33 +221,33 @@ test("金曜 15:10 の結果発表：上位3名に 3000・2000・600 コイン�
   const before = [0, 1, 2, 3, 4, 5].map((i) => ctx.coinsOf(i));
   await ctx.tick(JST(2026, 10, 30, 15, 10));
   const wk = ctx.wk();
-  assert.equal(wk.settled, true); assert.equal(wk.top.length, 3);
-  assert.deepEqual(wk.top.map((t) => [t.rank, t.prize, t.paid]), [[1, 3000, true], [2, 2000, true], [3, 600, true]]);
+  assert.equal(wk.settled, true); assert.equal(wk.top.length, 5);
+  assert.deepEqual(wk.top.map((t) => [t.rank, t.prize, t.paid]), [[1, 6000, true], [2, 4000, true], [3, 2500, true], [4, 1500, true], [5, 800, true]]);
   const gained = [0, 1, 2, 3, 4, 5].map((i) => ctx.coinsOf(i) - before[i]);
   wk.top.forEach((t) => assert.equal(gained[Number(t.uid.slice(2))], t.prize));
-  assert.equal(gained.reduce((a, b) => a + b, 0), 5600, "4位以下には渡さない");
+  assert.equal(gained.reduce((a, b) => a + b, 0), 14800, "6位以下には渡さない");
   const rows = Object.entries(wk.p).map(([uid, v]) => ({ uid, ...v })).sort((a, b) => b.w - a.w || a.l - b.l || b.r - a.r || (a.n < b.n ? -1 : 1));
-  assert.deepEqual(wk.top.map((t) => t.uid), rows.slice(0, 3).map((r) => r.uid), "勝ち数の多い順");
+  assert.deepEqual(wk.top.map((t) => t.uid), rows.slice(0, 5).map((r) => r.uid), "勝ち数の多い順");
   assert.ok(wk.top[0].w >= wk.top[1].w && wk.top[1].w >= wk.top[2].w);
   // 二重払いなし
   resetKeshiLeagueTickForTest();
   await ctx.tick(JST(2026, 10, 30, 15, 12)); await ctx.act(0, { action: "keshiLeagueState" });
-  assert.equal([0, 1, 2, 3, 4, 5].map((i) => ctx.coinsOf(i) - before[i]).reduce((a, b) => a + b, 0), 5600);
+  assert.equal([0, 1, 2, 3, 4, 5].map((i) => ctx.coinsOf(i) - before[i]).reduce((a, b) => a + b, 0), 14800);
   assert.ok([...ctx.fs.docs.keys()].every((p) => !p.startsWith("announcements/") && !p.startsWith("notificationLogs/")), "お知らせ・通知は出さない");
   // 次の週の画面に、先週の結果（自分が入賞したかも）
   const winnerIdx = Number(wk.top[0].uid.slice(2));
   ctx.state.now = JST(2026, 10, 31, 12);
   const st = await ctx.act(winnerIdx, { action: "keshiLeagueState" });
   assert.equal(st.week.startMs, JST(2026, 11, 2, 0)); assert.equal(st.week.no, 2); assert.equal(st.started, false); assert.equal(st.me, null, "新しい週は、まだ戦績なし");
-  assert.equal(st.last.top.length, 3); assert.equal(st.last.top[0].mine, true); assert.equal(st.last.me.rank, 1);
+  assert.equal(st.last.top.length, 5); assert.equal(st.last.top[0].mine, true); assert.equal(st.last.me.rank, 1);
 });
 
 test("金曜の cron が動かなくても、あとで画面を開いた人が、残りのセットも発表も追いつかせる", async () => {
   const ctx = setup({ users: 4 });
   ctx.state.now = JST(2026, 10, 31, 9, 0);
   await ctx.act(0, { action: "keshiLeagueState" });
-  assert.equal(ctx.wk().setsDone, 15); assert.equal(ctx.wk().settled, true); assert.equal(ctx.wk().top.length, 3);
-  assert.equal([0, 1, 2, 3].map((i) => ctx.coinsOf(i) - 1000).reduce((a, b) => a + b, 0), 5600);
+  assert.equal(ctx.wk().setsDone, 15); assert.equal(ctx.wk().settled, true); assert.equal(ctx.wk().top.length, 4, "4人しかいなければ、4位まで");
+  assert.equal([0, 1, 2, 3].map((i) => ctx.coinsOf(i) - 1000).reduce((a, b) => a + b, 0), 14000, "6000+4000+2500+1500");
 });
 
 test("エントリー：対戦表は前のセットが終わったときに決まる。そのあとに入った人は、その次のセットから参加。やめた人も、決まったセットまでは出る（戦績は残る）", async () => {
