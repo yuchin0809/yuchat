@@ -539,7 +539,7 @@ export async function handleAdminAction(deps, callerUid, body) {
 
   const action = typeof body?.action === "string" ? body.action : "";
   const uid = typeof body?.uid === "string" ? body.uid : "";
-  const noUidActions = ["listUsers", "notifyAnnouncement", "renameUserRefs", "transferList", "transferApprove", "transferReject", "kakuWinners", "keshiLeagueEnroll", "economyReport", "grantKakuTicket", "bankujiPrize", "bankujiResetLimit", "fundDistribute", "fundBackfill", "derbySettle"];
+  const noUidActions = ["listUsers", "notifyAnnouncement", "renameUserRefs", "transferList", "transferApprove", "transferReject", "kakuWinners", "keshiLeagueEnroll", "economyReport", "grantKakuTicket", "bankujiPrize", "bankujiResetLimit", "fundDistribute", "fundBackfill", "derbySettle", "lotteryRepay"];
   if (!noUidActions.includes(action) && !UID_PATTERN.test(uid)) return { status: 400, error: "invalid_uid" };
 
   try {
@@ -565,6 +565,7 @@ export async function handleAdminAction(deps, callerUid, body) {
       case "bankujiResetLimit": return await adminBankujiResetLimit(deps, callerUid);
       case "fundDistribute": return await adminFundDistribute(deps, callerUid);
       case "derbySettle": return await adminDerbySettle(deps, callerUid);
+      case "lotteryRepay": return await adminLotteryRepay(deps, callerUid, body);
       case "fundBackfill": return await adminFundBackfill(deps, callerUid, body);
       case "transferList": return await adminTransferList(deps);
       case "transferApprove": return await adminTransferApprove(deps, callerUid, body);
@@ -3542,6 +3543,51 @@ export async function lotteryRunDraw(deps, drawMs) {
   lotteryDocCache.delete(roundPath);
   await lotteryAnnounce(deps, ev.id, done);
   return { status: "drawn", id: ev.id, paid, tickets, winners: winners.length };
+}
+
+/* 管理者：宝くじの、払われていない賞金を調べて払う。当選番号（round.prizeNumbers）と買った番号から当たりを数え直し、結果に載っていない（＝払われなかった）分だけを払う。
+   apply が true でなければ、調べるだけ（書き込まない）。払った番号は round.repaidNumbers に残し、二重には払わない */
+async function adminLotteryRepay(deps, callerUid, body) {
+  const fs = deps.firestore, now = deps.now();
+  const id = typeof body?.round === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.round) ? body.round : lotteryRoundId(lotteryPrevOf(lotteryNextDrawMs(now)));
+  const raw = await fs.getRaw(`lotteryRounds/${id}`);
+  if (!raw) return { status: 404, error: "no_round" };
+  const round = decodeFields(raw.fields);
+  if (round.status !== "done" || !Array.isArray(round.prizeNumbers)) return { status: 409, error: "not_drawn" };
+  const ev = lotteryEventFor(Number(round.drawMs) || lotteryIdToMs(id));
+  const docs = await fs.query("lotteryEntries", [["round", "EQUAL", id]]);
+  const entries = docs.map((d) => ({ uid: d.data.uid, name: d.data.name, numbers: Array.isArray(d.data.numbers) ? d.data.numbers.filter((n) => Number.isInteger(n) && n >= 0 && n < ev.poolSize) : [] })).filter((e) => e.numbers.length > 0 && e.uid);
+  const expected = lotteryDrawWinners(entries.map((e) => ({ ...e, name: e.name || "?" })), Number(round.scale) || ev.scale, round.prizeNumbers, ev);
+  const paidNumbers = new Set((Array.isArray(round.winners) ? round.winners : []).map((w) => w.number));
+  const repaid = new Set(Array.isArray(round.repaidNumbers) ? round.repaidNumbers : []);
+  const missing = expected.filter((w) => !paidNumbers.has(w.number) && !repaid.has(w.number));
+  const byUid = new Map();
+  for (const w of missing) {
+    const g = byUid.get(w.uid) || { uid: w.uid, hint: w.name, amount: 0, numbers: [] };
+    g.amount += w.amount; g.numbers.push(w.number); byUid.set(w.uid, g);
+  }
+  const people = [];
+  for (const g of byUid.values()) {
+    const f = await transferFindUser(fs, g.uid, g.hint);
+    people.push({ uid: g.uid, name: f ? f.name : null, entryName: g.hint, amount: g.amount, count: g.numbers.length, numbers: g.numbers });
+  }
+  const payable = people.filter((x) => x.name);
+  const result = { ok: true, round: id, entries: entries.length, expectedWinners: expected.length, paidWinners: paidNumbers.size, missing: missing.length, people: people.map(({ numbers, ...x }) => x), total: payable.reduce((a, x) => a + x.amount, 0), unfound: people.length - payable.length };
+  if (body?.apply !== true || !payable.length) return { ...result, applied: false };
+  const writes = payable.map((x) => ({
+    update: { name: fs.docName(`users/${x.name}`), fields: {} },
+    updateMask: { fieldPaths: [] },
+    updateTransforms: [{ fieldPath: "coins", increment: restInt(x.amount) }],
+    currentDocument: { exists: true }
+  }));
+  const newRepaid = [...repaid, ...payable.flatMap((x) => x.numbers)];
+  const fields = { repaidNumbers: newRepaid, repaidAtMs: now };
+  writes.push({ update: { name: fs.docName(`lotteryRounds/${id}`), fields: encodeFields(fields) }, updateMask: { fieldPaths: Object.keys(fields) }, currentDocument: { updateTime: raw.updateTime } });
+  try { await fs.commit(writes); }
+  catch (error) { if (isRetryableCommitError(error)) return { status: 409, error: "busy" }; throw error; }
+  lotteryDocCache.delete(`lotteryRounds/${id}`);
+  await writeAuditLog(deps, { type: "lotteryRepay", byUid: callerUid, round: id, count: payable.length, total: result.total });
+  return { ...result, applied: true };
 }
 
 /* 毎分の cron から呼ぶ。直近の抽選時刻の直後（最初の10分は毎分、そのあと24時間は15分ごと）だけ動く。

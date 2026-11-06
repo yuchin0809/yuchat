@@ -746,3 +746,28 @@ test("抽選：買ったときの名前の書類が無くても（名前を変�
   assert.equal(coins(fs, "あたらしい名前"), 100 + r.paid, "今の書類に払う");
   assert.equal(fs.plain("lotteryRounds/2026-10-23").winners.every((w) => w.name === "あたらしい名前"), true);
 });
+
+test("管理者：宝くじの払われなかった賞金を調べて払う（調べるだけ→払う。二重に払わない。管理者だけ）", async () => {
+  const { fs, deps, state } = setup({ random: rngOf(5), users: { "A": { uid: "uA", name: "A", coins: 100 }, "B": { uid: "uB", name: "B", coins: 100 } } });
+  fs.put("lotteryRounds/2026-10-23", encF({ round: "2026-10-23", name: "x", tickets: 1500, sales: 15000, soldBits: "1".repeat(1500) }));
+  fs.put("lotteryEntries/2026-10-23_uA", encF({ uid: "uA", name: "A", round: "2026-10-23", numbers: Array.from({ length: 750 }, (_, i) => i) }));
+  fs.put("lotteryEntries/2026-10-23_uB", encF({ uid: "uB", name: "B", round: "2026-10-23", numbers: Array.from({ length: 750 }, (_, i) => i + 750) }));
+  state.now = T;
+  const d = await lotteryRunDraw(deps, T);
+  assert.equal(d.status, "drawn");
+  const before = { A: coins(fs, "A"), B: coins(fs, "B") };
+  // 払われなかったことにする：結果から A の当選を消す
+  const doc = fs.plain("lotteryRounds/2026-10-23");
+  const aWins = doc.winners.filter((w) => w.uid === "uA");
+  assert.ok(aWins.length > 0);
+  const amountA = aWins.reduce((s, w) => s + w.amount, 0);
+  fs.put("lotteryRounds/2026-10-23", encF({ ...doc, winners: doc.winners.filter((w) => w.uid !== "uA") }));
+  const dd = { ...deps, adminUid: ADMIN };
+  assert.equal((await handleAdminAction(dd, "someone", { action: "lotteryRepay", round: "2026-10-23" })).error, "not_admin");
+  const dry = await handleAdminAction(dd, ADMIN, { action: "lotteryRepay", round: "2026-10-23" });
+  assert.equal(dry.applied, false); assert.equal(dry.total, amountA); assert.equal(coins(fs, "A"), before.A, "調べるだけでは払わない");
+  const go = await handleAdminAction(dd, ADMIN, { action: "lotteryRepay", round: "2026-10-23", apply: true });
+  assert.equal(go.applied, true); assert.equal(coins(fs, "A"), before.A + amountA); assert.equal(coins(fs, "B"), before.B, "払われていた人は変わらない");
+  const again = await handleAdminAction(dd, ADMIN, { action: "lotteryRepay", round: "2026-10-23", apply: true });
+  assert.equal(again.missing, 0); assert.equal(coins(fs, "A"), before.A + amountA, "二重に払わない");
+});
