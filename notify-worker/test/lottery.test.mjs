@@ -733,3 +733,16 @@ test("抽選の前倒し：cron は 12:10 から 10/30 の回を抽選する（�
   assert.equal((await runLotteryTick({}, SHIFT + MIN, deps)).skipped, "done");
   assert.equal((await runLotteryTick({}, T + WEEK, deps)).skipped, "outside", "金曜 14:30 には、もう何もしない（前の回の24時間をすぎている）");
 });
+
+test("抽選：買ったときの名前の書類が無くても（名前を変えた など）、uid から今の書類を探して賞金を払う", async () => {
+  const { fs, deps, state } = setup({ random: rngOf(5), users: { "あたらしい名前": { uid: "uR", name: "あたらしい名前", coins: 100 } } });
+  const all = Array.from({ length: 1500 }, (_, i) => i);
+  fs.put("lotteryRounds/2026-10-23", encF({ round: "2026-10-23", name: "x", tickets: 1500, sales: 15000, soldBits: "1".repeat(1500) }));
+  fs.put("lotteryEntries/2026-10-23_uR", encF({ uid: "uR", name: "ふるい名前", round: "2026-10-23", numbers: all }));
+  state.now = T;
+  const r = await lotteryRunDraw(deps, T);
+  assert.equal(r.status, "drawn");
+  assert.ok(r.paid > 0, "全部買った人に、全部の賞金が入る");
+  assert.equal(coins(fs, "あたらしい名前"), 100 + r.paid, "今の書類に払う");
+  assert.equal(fs.plain("lotteryRounds/2026-10-23").winners.every((w) => w.name === "あたらしい名前"), true);
+});
