@@ -539,7 +539,7 @@ export async function handleAdminAction(deps, callerUid, body) {
 
   const action = typeof body?.action === "string" ? body.action : "";
   const uid = typeof body?.uid === "string" ? body.uid : "";
-  const noUidActions = ["listUsers", "notifyAnnouncement", "renameUserRefs", "transferList", "transferApprove", "transferReject", "kakuWinners", "keshiLeagueEnroll", "economyReport", "grantKakuTicket", "bankujiPrize", "bankujiResetLimit", "fundDistribute", "fundBackfill"];
+  const noUidActions = ["listUsers", "notifyAnnouncement", "renameUserRefs", "transferList", "transferApprove", "transferReject", "kakuWinners", "keshiLeagueEnroll", "economyReport", "grantKakuTicket", "bankujiPrize", "bankujiResetLimit", "fundDistribute", "fundBackfill", "derbySettle"];
   if (!noUidActions.includes(action) && !UID_PATTERN.test(uid)) return { status: 400, error: "invalid_uid" };
 
   try {
@@ -564,6 +564,7 @@ export async function handleAdminAction(deps, callerUid, body) {
       case "bankujiPrize": return await adminBankujiPrize(deps, callerUid, body);
       case "bankujiResetLimit": return await adminBankujiResetLimit(deps, callerUid);
       case "fundDistribute": return await adminFundDistribute(deps, callerUid);
+      case "derbySettle": return await adminDerbySettle(deps, callerUid);
       case "fundBackfill": return await adminFundBackfill(deps, callerUid, body);
       case "transferList": return await adminTransferList(deps);
       case "transferApprove": return await adminTransferApprove(deps, callerUid, body);
@@ -2530,6 +2531,27 @@ export async function derbySettleAll(deps, raceId) {
   }
   console.log(JSON.stringify({ derbySettle: { raceId, settled: count, payoutTotal: total, skipped } }));
   return { status: "done", settled: count, payoutTotal: total, skipped };
+}
+
+/* 管理者：いますぐ、直近3日の自動開催の回の未精算の馬券を精算する（発走から少し経った回だけ。精算済みは触らない）。回ごとの結果を返す */
+async function adminDerbySettle(deps, callerUid) {
+  const now = deps.now();
+  const races = [];
+  for (let i = 0; i < 3; i++) for (const r of dailyDerbyRaces(jstDateText(now - i * 86400000))) races.push(r);
+  races.sort((a, b) => a.raceAt - b.raceAt);
+  const results = [];
+  for (const r of races) {
+    if (now < r.raceAt) continue;
+    try {
+      const out = await derbySettleAll(deps, r.raceId);
+      if (out.status === "done") derbySettleDone.add(r.raceId);
+      results.push({ raceId: r.raceId, status: out.status, reason: out.reason || null, settled: out.settled || 0, payoutTotal: out.payoutTotal || 0, skipped: out.skipped || 0 });
+    } catch (error) {
+      results.push({ raceId: r.raceId, status: "error", reason: String(error?.message || error).slice(0, 80), settled: 0, payoutTotal: 0, skipped: 0 });
+    }
+  }
+  await writeAuditLog(deps, { type: "derbySettle", byUid: callerUid, count: results.reduce((s, x) => s + x.settled, 0), total: results.reduce((s, x) => s + x.payoutTotal, 0) });
+  return { ok: true, results };
 }
 
 export async function runDerbySettleTick(env = {}, scheduledTime = Date.now(), deps = null) {
