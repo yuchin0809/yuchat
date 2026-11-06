@@ -70,6 +70,8 @@ export default {
     ctx.waitUntil(runDailyWatchdogTick(env, event.scheduledTime).catch((error) => console.error("daily watchdog error", String(error?.message || error).slice(0, 300))));
     /* 🛠 ゆう経済の1日1回の処理（株価・利息・ゆう税・総資産ランキング）と、総資産ランキングの1時間おきの更新。決まった分以外は Firestore に触れずにすぐ戻る */
     ctx.waitUntil(runEconomyTick(env, event.scheduledTime).catch((error) => console.error("economy tick error", String(error?.message || error).slice(0, 300))));
+    /* 🏇 ゆうダービーの精算：自動開催の回（11:30・15:02）のあと、決まった数回の分に、未精算の馬券を全員ぶん精算する（GitHub の定期実行・アプリを開くことに頼らない）。それ以外の分は Firestore に触れずにすぐ戻る */
+    ctx.waitUntil(runDerbySettleTick(env, event.scheduledTime).catch((error) => console.error("derby settle error", String(error?.message || error).slice(0, 300))));
     /* 🏦 ゆう基金：毎日 9:15（日本時間）に、スリ・ゆう税でたまったコインを、総資産の少ない人から順に配る。それ以外の分は Firestore に触れずにすぐ戻る */
     ctx.waitUntil(runFundTick(env, event.scheduledTime).catch((error) => console.error("fund tick error", String(error?.message || error).slice(0, 300))));
     /* 🏦 ゆう基金ができる前に集めた分（ゆう税・スリ）を、1回だけ基金に足す（11/4〜11/5 の 10 分おき。済んだら何もしない） */
@@ -2444,40 +2446,110 @@ async function econSettleMyBets(deps, uid, name, raceId) {
   const poolPayouts = fixed ? null : derbyPoolPayouts((await fs.query("raceBets", [["raceId", "EQUAL", raceId]])).map((b) => ({ id: b.id, ...b.data })), race.resultOrder);
   const settled = [];
   for (const bet of bets) {
-    const data = bet.data;
-    let fields;
-    if (fixed) {
-      const reject = betRejectReason(data, schedule.closeMs);
-      const oddsTenths = derbyTicketOddsTenths(table, data.type, data.horses);
-      const win = !reject && oddsTenths !== null && derbyBetWins(data, race.resultOrder);
-      const payout = win ? derbyFixedPayout(data.amount, oddsTenths) : 0;
-      fields = { settled: true, win, payout, payoutRule: DERBY_FIXED_PAYOUT_RULE, settledOddsTenths: oddsTenths, settledBy: "worker", ...(reject ? { rejectedReason: reject } : {}) };
-    } else {
-      const { win, payout } = poolPayouts[bet.id] || { win: false, payout: 0 };
-      fields = { settled: true, win, payout, settledBy: "worker" };
-    }
-    const payout = fields.payout;
-    const writes = [{
-      update: { name: fs.docName(`raceBets/${bet.id}`), fields: encodeFields(fields) },
-      updateMask: { fieldPaths: Object.keys(fields) },
-      currentDocument: { updateTime: bet.updateTime }
-    }];
-    if (payout > 0) {
-      writes.push({
-        update: { name: fs.docName(`users/${me.name}`), fields: {} },
-        updateMask: { fieldPaths: [] },
-        updateTransforms: [{ fieldPath: "coins", increment: restInt(payout) }],
-        currentDocument: { exists: true }
-      });
-    }
-    try {
-      await fs.commit(writes);
-      settled.push({ betId: bet.id, type: data.type, horses: data.horses, amount: data.amount, win: fields.win, payout, rejected: fields.rejectedReason || null });
-    } catch (error) {
-      if (!isRetryableCommitError(error)) throw error; /* ほかの処理（derby-runner など）が先に精算した */
-    }
+    const out = await derbySettleBet(fs, bet, me.name, { fixed, schedule, table, race, poolPayouts });
+    if (out) settled.push(out);
   }
   return { ok: true, raceId, settled, payoutTotal: settled.reduce((s, b) => s + b.payout, 0) };
+}
+
+/* 1枚の馬券を精算する（払い戻しの計算・馬券の更新・コインの加算は1回の commit）。ほかの処理が先に精算していたら null */
+async function derbySettleBet(fs, bet, userName, { fixed, schedule, table, race, poolPayouts }) {
+  const data = bet.data;
+  let fields;
+  if (fixed) {
+    const reject = betRejectReason(data, schedule.closeMs);
+    const oddsTenths = derbyTicketOddsTenths(table, data.type, data.horses);
+    const win = !reject && oddsTenths !== null && derbyBetWins(data, race.resultOrder);
+    const payout = win ? derbyFixedPayout(data.amount, oddsTenths) : 0;
+    fields = { settled: true, win, payout, payoutRule: DERBY_FIXED_PAYOUT_RULE, settledOddsTenths: oddsTenths, settledBy: "worker", ...(reject ? { rejectedReason: reject } : {}) };
+  } else {
+    const { win, payout } = poolPayouts[bet.id] || { win: false, payout: 0 };
+    fields = { settled: true, win, payout, settledBy: "worker" };
+  }
+  const payout = fields.payout;
+  const writes = [{
+    update: { name: fs.docName(`raceBets/${bet.id}`), fields: encodeFields(fields) },
+    updateMask: { fieldPaths: Object.keys(fields) },
+    currentDocument: { updateTime: bet.updateTime }
+  }];
+  if (payout > 0) {
+    writes.push({
+      update: { name: fs.docName(`users/${userName}`), fields: {} },
+      updateMask: { fieldPaths: [] },
+      updateTransforms: [{ fieldPath: "coins", increment: restInt(payout) }],
+      currentDocument: { exists: true }
+    });
+  }
+  try {
+    await fs.commit(writes);
+    return { betId: bet.id, type: data.type, horses: data.horses, amount: data.amount, win: fields.win, payout, rejected: fields.rejectedReason || null };
+  } catch (error) {
+    if (!isRetryableCommitError(error)) throw error; /* ほかの処理（derby-runner など）が先に精算した */
+    return null;
+  }
+}
+
+/* =========================================================
+   🏇 ゆうダービーの精算を、この Worker が自動で行う（毎分の cron）
+   ・これまでは、GitHub Actions の derby-runner か、その人がアプリを開いたときに精算していた。GitHub の定期実行が来ない日や、アプリを開かない人は、当たってもコインが入らないままになる。
+   ・自動開催の回（11:30・15:02）の発走から、少し遅れた決まった分（2・3・5・10・20・45・90・180分後と、12時間後・24時間後）に、その回の「未精算の馬券」を探して、
+     結果が無ければ作り（econEnsureRaceResult）、全員ぶんを精算する（1枚ずつ、馬券の更新と払い戻しを1回の commit。二重には払わない）。未精算が無ければ、その回は終わり。
+   ・読み取り：確かめる分に、その回の未精算の馬券だけ。それ以外の分は Firestore に触れない。手動レース（管理者が作る特別レース）は、これまでどおり。
+========================================================= */
+const DERBY_SETTLE_CHECK_MIN = [2, 3, 5, 10, 20, 45, 90, 180, 720, 1440];
+const derbySettleDone = new Set();
+export function resetDerbySettleForTest() { derbySettleDone.clear(); }
+
+/* その回の未精算の馬券を、全員ぶん精算する。戻り値：{ status: "done" | "skipped", ... } */
+export async function derbySettleAll(deps, raceId) {
+  const fs = deps.firestore, now = deps.now();
+  const schedule = await loadRaceSchedule(fs, raceId);
+  if (!schedule || schedule.cancelled) return { status: "skipped", reason: "no_schedule" };
+  if (now < schedule.raceMs + DERBY_SETTLE_DELAY_MS) return { status: "skipped", reason: "not_ready" };
+  const bets = await fs.query("raceBets", [["raceId", "EQUAL", raceId], ["settled", "EQUAL", false]]);
+  if (!bets.length) return { status: "done", settled: 0, payoutTotal: 0 };
+  const fixed = isFixedOddsRaceId(raceId);
+  if (fixed && !schedule) return { status: "skipped", reason: "invalid_race" };
+  let race = await fs.get(`races/${raceId}`);
+  if (!race || !isTrustedRaceResult(raceId, race)) {
+    if (fixed) { await econEnsureRaceResult(deps, raceId); race = await fs.get(`races/${raceId}`); }
+    if (!race || !isTrustedRaceResult(raceId, race)) return { status: "skipped", reason: "no_result" };
+  }
+  const table = fixed ? derbyOddsTable(raceId) : null;
+  const poolPayouts = fixed ? null : derbyPoolPayouts((await fs.query("raceBets", [["raceId", "EQUAL", raceId]])).map((b) => ({ id: b.id, ...b.data })), race.resultOrder);
+  const owners = new Map();   // uid → users の名前（なければ null）
+  let count = 0, total = 0, skipped = 0;
+  for (const bet of bets) {
+    const uid = bet.data.uid;
+    if (typeof uid !== "string" || !uid) { skipped++; continue; }
+    if (!owners.has(uid)) { const f = await transferFindUser(fs, uid, bet.data.username); owners.set(uid, f ? f.name : null); }
+    const name = owners.get(uid);
+    if (!name) { skipped++; continue; }   // もう居ない人（退会など）
+    const out = await derbySettleBet(fs, bet, name, { fixed, schedule, table, race, poolPayouts });
+    if (out) { count++; total += out.payout; }
+  }
+  console.log(JSON.stringify({ derbySettle: { raceId, settled: count, payoutTotal: total, skipped } }));
+  return { status: "done", settled: count, payoutTotal: total, skipped };
+}
+
+export async function runDerbySettleTick(env = {}, scheduledTime = Date.now(), deps = null) {
+  const today = jstDateText(scheduledTime), yesterday = jstDateText(scheduledTime - 86400000);
+  const due = [];
+  for (const day of [today, yesterday]) {
+    for (const r of dailyDerbyRaces(day)) {
+      if (derbySettleDone.has(r.raceId)) continue;
+      const afterMin = Math.round((scheduledTime - r.raceAt) / 60000);
+      if (DERBY_SETTLE_CHECK_MIN.includes(afterMin)) due.push(r.raceId);
+    }
+  }
+  if (!due.length) return { skipped: "outside" };
+  const d = { ...(deps || createDefaultDeps(env)), now: () => scheduledTime };
+  const out = {};
+  for (const raceId of due) {
+    out[raceId] = await derbySettleAll(d, raceId);
+    if (out[raceId].status === "done") derbySettleDone.add(raceId);
+  }
+  return out;
 }
 
 /* Firestore にデータが1件もない Authentication のユーザー（名前を決める前にやめたゲストなど）だけを消す */

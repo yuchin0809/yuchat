@@ -6,7 +6,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   handleEconomyAction, handleRequest, nextAutoRaceId, autoRaceTimeMs, jstDateString, validBetShape, betRejectReason, isTrustedRaceResult,
-  derbyOddsTable, derbyRaceOddsRecord, derbyRaceOrder, derbyTicketOddsTenths, derbyFixedPayout, derbyBetWins
+  derbyOddsTable, derbyRaceOddsRecord, derbyRaceOrder, derbyTicketOddsTenths, derbyFixedPayout, derbyBetWins,
+  derbySettleAll, runDerbySettleTick, resetDerbySettleForTest
 } from "../worker.js";
 import * as odds from "../../derby-odds.js";
 
@@ -488,4 +489,48 @@ test("名前変更の引き継ぎ：防犯グッズ・スリの記録・スリ�
   const to = decF(firestore.docs.get("users/たろう2").fields);
   assert.deepEqual(to.guards, { "2026-10-26": { lv: 3, paid: 800 } });
   assert.equal(to.theft.n, 1); assert.equal(to.theftPush, true);
+});
+
+/* ===== 🏇 ゆうダービーの精算を、Worker が自動で行う（アプリを開かなくても、当たりのコインが入る） ===== */
+
+test("自動の精算：発走のあと、全員の未精算の馬券を精算する（結果が無ければ作る）。当たった人のコインだけが増える。二重には払わない", async () => {
+  resetDerbySettleForTest();
+  const raceId = "2026-10-20-1130", raceMs = Date.parse("2026-10-20T02:30:00Z");
+  const created = new Date(raceMs - 30 * 60000);
+  const bet = (id, uid, username, o) => ({ [`raceBets/${id}`]: { raceId, uid, username, settled: false, win: null, payout: null, createdAt: created, placedBy: "worker", ...o } });
+  const { firestore, deps } = setup({ coins: 0, now: raceMs + 3 * 60000, docs: {
+    ...bet("t1", "uT", "たろう", { type: "win", horses: [1], amount: 100 }),
+    ...bet("t2", "uT", "たろう", { type: "place", horses: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].slice(0, 1), amount: 100 }),
+    ...bet("h1", "uH", "はなこ", { type: "win", horses: [2], amount: 100 }),
+    ...bet("gone", "uX", "きえた", { type: "win", horses: [3], amount: 100 })
+  } });
+  const r = await derbySettleAll(deps, raceId);
+  assert.equal(r.status, "done");
+  assert.equal(decF(firestore.docs.get(`races/${raceId}`).fields).generatedBy, "worker", "結果が無ければ、Worker が作る");
+  const order = decF(firestore.docs.get(`races/${raceId}`).fields).resultOrder;
+  const table = odds.getRaceOddsTable(raceId);
+  const want = (b, name) => (derbyBetWins(b, order) ? odds.computeFixedPayout(b.amount, odds.getTicketOddsTenths(table, b.type, b.horses)) : 0);
+  const byId = Object.fromEntries(bets(firestore).map((b) => [b.id, b]));
+  assert.deepEqual(["t1", "t2", "h1"].map((id) => byId[id].settled), [true, true, true]);
+  assert.equal(byId.gone.settled, false, "もう居ない人の馬券は触らない");
+  const taro = want({ type: "win", horses: [1], amount: 100 }) + want({ type: "place", horses: [1], amount: 100 });
+  assert.equal(me(firestore).coins, taro, "たろうの分");
+  assert.equal(decF(firestore.docs.get("users/はなこ").fields).coins, 777 + want({ type: "win", horses: [2], amount: 100 }), "はなこの分（本人が開いていなくても）");
+  const again = await derbySettleAll(deps, raceId);
+  assert.equal(again.settled, 0); assert.equal(me(firestore).coins, taro, "二重に払わない");
+});
+
+test("自動の精算：発走から決まった分（2・3・5…分後）だけ動き、それ以外は何も読まない。演出が終わる前（80秒以内）は払わない。未精算が無い回は終わり", async () => {
+  resetDerbySettleForTest();
+  const raceMs = Date.parse("2026-10-20T02:30:00Z");
+  const { firestore, deps } = setup({ now: raceMs + 4 * 60000, docs: {} });
+  let reads = 0; const q = firestore.query; firestore.query = async (...a) => { reads++; return q.apply(firestore, a); };
+  assert.deepEqual(await runDerbySettleTick({}, raceMs + 4 * 60000, deps), { skipped: "outside" });
+  assert.equal(reads, 0, "決まった分以外は読まない");
+  assert.deepEqual((await derbySettleAll({ ...deps, now: () => raceMs + 79000 }, "2026-10-20-1130")).reason, "not_ready");
+  const t = await runDerbySettleTick({}, raceMs + 2 * 60000, deps);
+  assert.equal(t["2026-10-20-1130"].status, "done");
+  reads = 0;
+  assert.deepEqual(await runDerbySettleTick({}, raceMs + 3 * 60000, deps), { skipped: "outside" }, "終わった回は、もう読まない");
+  assert.equal(reads, 0);
 });
