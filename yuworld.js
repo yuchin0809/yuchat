@@ -21,6 +21,8 @@ import { renderKeshi, stopKeshi } from "./yukeshi.js?v=20261106-fair1";
 import { eraserIcon, keshiLeagueTag } from "./yukeshi-core.js?v=20261106-fair1";
 /* 🌈 確変台のパネル（台の一覧の上）。抽選・先着・通知設定。Worker の kaku* アクションを呼んで表示するだけ */
 import { kakuInit, kakuPanelHtml, kakuBind, kakuMachineInfo, startKaku, stopKaku, refreshKaku } from "./yukaku.js?v=20261027-move2";
+/* ⭐ サポーター：確変台の見た目と当たり演出（自分の画面だけ。当たりやすさ・結果には関わらない） */
+import { applyKakuTheme, playKakuEffect } from "./yusupporter-core.js?v=20261110-sup1";
 /* 🏅 会員ランクのカード（台の一覧の上）。ランクの判定・進みは Worker の rankStatus が返す */
 import { rankInit, rankPanelHtml, rankRefresh } from "./yurank.js?v=20261023-rank2";
 /* 🎰 演出の判断（前兆・ステップアップ・連チャン）。画面には触れない */
@@ -291,6 +293,7 @@ function renderLobby() {
       <p>台をえらんで着席してください。1台に1人まで、同時に6人まで遊べます。料金が高い台ほど演出が豪華です。</p></div>
     ${closedNote}${rankPanelHtml()}${kakuPanelHtml()}<div class="yw-lobby-grid">${cards}</div>`;
   kakuBind(rootEl);
+  applyKakuTheme(rootEl, true);
   $("#ywBackShop")?.addEventListener("click", () => { stopLobbyTimer(); state.screen = "shop"; render(); });
   rootEl.querySelectorAll("[data-sit]").forEach((b) => b.addEventListener("click", () => { unlockAudio(); seat(b.getAttribute("data-sit")); }));
 }
@@ -336,6 +339,7 @@ async function seat(machineId) {
 function kakuEndLabel() { const d = new Date((state.kakuEnd || 0) + 9 * 3600000); return `${d.getUTCHours()}:${String(d.getUTCMinutes()).padStart(2, "0")}`; }
 function renderGame() {
   const m = state.machine;
+  applyKakuTheme(rootEl, state.kaku);
   rootEl.innerHTML = `${state.kaku ? `<div class="yw-kaku-banner">🌈 確変中！ ${kakuEndLabel()} まで 🌈</div>` : ""}
     <div class="yw-topbar">
       <div class="yw-zoombar">
@@ -798,6 +802,7 @@ function coinRain(n) {
 }
 function celebrate(kind, text) {
   flashWin();
+  if (state.kaku) playKakuEffect();
   if (reduced()) return;
   const reels = $("#ywReels"), g = $("#ywGame"), tier = state.machine.tier;
   const big = kind === "special" || kind === "fever";

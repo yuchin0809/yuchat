@@ -127,6 +127,11 @@ export async function handleRequest(request, env = {}, deps = createDefaultDeps(
       const result = await handleAdminAction(deps, uid, body);
       return jsonResponse(result, result.status || 200, cors);
     }
+    /* ⭐ サポーター（有料プラン）：自分の状態・好みの設定・マイ記録・要望、全員ぶんの目印の一覧 */
+    if (new URL(request.url).pathname.replace(/\/+$/, "") === "/supporter") {
+      const result = await handleSupporterAction(deps, uid, body);
+      return jsonResponse(result, result.status || 200, cors);
+    }
     /* 🎟 招待コード：登録済みの人が自分のコードを作る（create）／新しく登録する人がコードを使う（redeem） */
     if (new URL(request.url).pathname.replace(/\/+$/, "") === "/invite") {
       const result = await handleInviteAction(deps, uid, body);
@@ -549,7 +554,7 @@ export async function handleAdminAction(deps, callerUid, body) {
 
   const action = typeof body?.action === "string" ? body.action : "";
   const uid = typeof body?.uid === "string" ? body.uid : "";
-  const noUidActions = ["listUsers", "notifyAnnouncement", "renameUserRefs", "transferList", "transferApprove", "transferReject", "kakuWinners", "keshiLeagueEnroll", "economyReport", "grantKakuTicket", "bankujiPrize", "bankujiResetLimit", "fundDistribute", "fundBackfill", "derbySettle", "lotteryRepay"];
+  const noUidActions = ["listUsers", "notifyAnnouncement", "renameUserRefs", "transferList", "transferApprove", "transferReject", "kakuWinners", "keshiLeagueEnroll", "economyReport", "grantKakuTicket", "bankujiPrize", "bankujiResetLimit", "fundDistribute", "fundBackfill", "derbySettle", "lotteryRepay", "supporterList", "supporterSet"];
   if (!noUidActions.includes(action) && !UID_PATTERN.test(uid)) return { status: 400, error: "invalid_uid" };
 
   try {
@@ -575,6 +580,8 @@ export async function handleAdminAction(deps, callerUid, body) {
       case "bankujiResetLimit": return await adminBankujiResetLimit(deps, callerUid);
       case "fundDistribute": return await adminFundDistribute(deps, callerUid);
       case "derbySettle": return await adminDerbySettle(deps, callerUid);
+      case "supporterList": return await adminSupporterList(deps);
+      case "supporterSet": return await adminSupporterSet(deps, callerUid, body);
       case "lotteryRepay": return await adminLotteryRepay(deps, callerUid, body);
       case "fundBackfill": return await adminFundBackfill(deps, callerUid, body);
       case "transferList": return await adminTransferList(deps);
@@ -1013,6 +1020,140 @@ async function adminDeleteUser(deps, callerUid, uid, confirmName) {
     await writeAuditLog(deps, { action: "deleteUser", targetUid: uid, targetName: displayName, byUid: callerUid, result: "failed", failedStep: step });
     return { status: 500, error: "delete_failed", step };
   }
+}
+
+/* =========================================================
+   ⭐ ゆうChat サポーター（有料プラン。月額250円・年間2,400円。管理者が、お金なしでサポーターにすることもできる）
+   ・保存：supporters/{uid}（状態・好み）、supporters/_config（最初のサポーターが決まった日）、supporterIndex/all（全員ぶんの目印の一覧）。すべて Worker だけが読み書き（ブラウザからは見えない）
+   ・サポーターかどうかは、ブラウザから書き換えられない（ここだけが決める）。ほかの人に見える目印（名前の横のマーク・名前の色・吹き出しの色）は、一覧（supporterIndex/all）を /supporter の index で配る（Worker のメモリに60秒だけ置く）
+   ・好み（名前の色・吹き出しの色・チャットの背景・確変台の見た目）は、決まった候補の id だけ受け付ける（候補の表は yusupporter.js と同じ。同じであることはテストが確かめる）。ゲームの当たりやすさには関わらない
+   ・最初の1か月（最初のサポーターが決まった日から30日）に加えた人は early（初期サポーター称号）
+   ・App Store の課金の確認は、アプリの公開後に、ここに source "apple" として足す（いまは管理者の操作だけ）
+========================================================= */
+export const SUPPORTER_PRESETS = {
+  nameColor: ["default", "gold", "rose", "red", "orange", "lime", "green", "teal", "sky", "blue", "indigo", "violet", "pink", "brown", "slate", "rainbow"],
+  bubbleColor: ["default", "sky", "mint", "lemon", "peach", "rose", "lavender", "gold", "slate", "night", "sunset", "ocean", "forest"],
+  chatBg: ["default", "cream", "sky", "mint", "rose", "lavender", "night", "dots", "stripes", "grid", "sunset", "ocean", "forest", "aurora", "sakura", "stars"],
+  kakuTheme: ["default", "gold", "neon", "sakura", "ocean", "fire", "forest", "night"],
+  kakuFx: ["default", "confetti", "stars", "coins", "hearts"]
+};
+export const SUPPORTER_EARLY_DAYS = 30;
+const SUPPORTER_DEFAULT_PREFS = Object.fromEntries(Object.keys(SUPPORTER_PRESETS).map((k) => [k, "default"]));
+let supporterIndexCache = null;
+export function resetSupporterCacheForTest() { supporterIndexCache = null; }
+
+/* 好みの入力を確かめる（候補にない id があれば null） */
+export function supporterPrefsClean(input, base = SUPPORTER_DEFAULT_PREFS) {
+  const out = { ...SUPPORTER_DEFAULT_PREFS, ...base };
+  for (const key of Object.keys(SUPPORTER_PRESETS)) {
+    if (input && input[key] !== undefined) {
+      if (typeof input[key] !== "string" || !SUPPORTER_PRESETS[key].includes(input[key])) return null;
+      out[key] = input[key];
+    }
+  }
+  return out;
+}
+const supporterEntry = (doc) => ({ n: String(doc.name || ""), m: 1, nc: doc.prefs?.nameColor || "default", bc: doc.prefs?.bubbleColor || "default", e: doc.early ? 1 : 0 });
+
+/* 一覧（supporterIndex/all）を書き換える。更新時刻の条件つき（同時に別の人が変えていたら、読み直してやり直す） */
+async function supporterIndexMutate(deps, mutate) {
+  const fs = deps.firestore, path = "supporterIndex/all";
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const raw = await fs.getRaw(path);
+    const byUid = { ...((raw ? decodeFields(raw.fields) : {}).byUid || {}) };
+    mutate(byUid);
+    const fields = { byUid, updatedAt: new Date(deps.now()) };
+    try {
+      if (!raw) { if (!(await fs.createIfAbsent(path, fields))) continue; }
+      else await fs.commit([{ update: { name: fs.docName(path), fields: encodeFields(fields) }, updateMask: { fieldPaths: Object.keys(fields) }, currentDocument: { updateTime: raw.updateTime } }]);
+      supporterIndexCache = null;
+      return true;
+    } catch (error) {
+      if (!isRetryableCommitError(error)) throw error;
+    }
+  }
+  return false;
+}
+
+async function supporterLoadIndex(deps) {
+  const now = deps.now();
+  if (supporterIndexCache && now - supporterIndexCache.at < 60000) return supporterIndexCache.byUid;
+  const doc = await deps.firestore.get("supporterIndex/all");
+  const byUid = doc?.byUid && typeof doc.byUid === "object" ? doc.byUid : {};
+  supporterIndexCache = { at: now, byUid };
+  return byUid;
+}
+
+export async function handleSupporterAction(deps, uid, body) {
+  const fs = deps.firestore;
+  const action = body?.action;
+  if (action === "index") return { ok: true, byUid: await supporterLoadIndex(deps) };
+  const mine = await fs.get(`supporters/${uid}`);
+  const active = Boolean(mine && mine.active === true);
+  if (action === "me") {
+    return { ok: true, supporter: active ? { source: mine.source || "admin", since: mine.sinceMs || 0, early: mine.early === true, prefs: { ...SUPPORTER_DEFAULT_PREFS, ...(mine.prefs || {}) } } : null, presets: SUPPORTER_PRESETS };
+  }
+  if (!active) return { status: 403, error: "not_supporter" };
+  if (action === "setPrefs") {
+    const prefs = supporterPrefsClean(body.prefs, mine.prefs || SUPPORTER_DEFAULT_PREFS);
+    if (!prefs) return { status: 400, error: "invalid_prefs" };
+    await fs.set(`supporters/${uid}`, { ...mine, prefs, updatedAt: new Date(deps.now()) });
+    await supporterIndexMutate(deps, (byUid) => { byUid[uid] = supporterEntry({ ...mine, prefs }); });
+    return { ok: true, prefs };
+  }
+  if (action === "request") {
+    const text = String(body.text || "").trim();
+    if (!text || text.length > 500) return { status: 400, error: "invalid_text" };
+    const slot = Math.floor(deps.now() / 60000);
+    const created = await fs.createIfAbsent(`featureRequests/${uid}_${slot}`, { uid, name: mine.name || "", text, priority: true, createdAt: new Date(deps.now()) });
+    return created ? { ok: true } : { status: 429, error: "too_fast" };
+  }
+  if (action === "records") {
+    const me = await transferFindUser(fs, uid, mine.name || "");
+    const user = me ? decodeFields(me.raw.fields) : {};
+    const bets = (await fs.query("raceBets", [["uid", "EQUAL", uid]])).map((b) => b.data).filter((b) => b.settled === true);
+    const wins = bets.filter((b) => b.win === true);
+    return {
+      ok: true,
+      coins: Number(user.coins || 0),
+      slot: { spins: Number(user.slotSpins || 0), wagered: Number(user.slotWagered || 0), kakuSpins: Number(user.slotKakuSpins || 0), kakuWagered: Number(user.slotKakuWagered || 0) },
+      derby: { bets: bets.length, wins: wins.length, wagered: bets.reduce((a, b) => a + Number(b.amount || 0), 0), paid: bets.reduce((a, b) => a + Number(b.payout || 0), 0) }
+    };
+  }
+  return { status: 400, error: "unknown_action" };
+}
+
+/* 管理者：サポーターの一覧 */
+async function adminSupporterList(deps) {
+  const docs = await deps.firestore.query("supporters", [["active", "EQUAL", true]]);
+  return { ok: true, supporters: docs.map((d) => ({ uid: d.data.uid || d.id, name: d.data.name || "", source: d.data.source || "admin", since: d.data.sinceMs || 0, early: d.data.early === true })).sort((a, b) => a.since - b.since) };
+}
+
+/* 管理者：選んだユーザーを、お金なしでサポーターにする／やめさせる */
+async function adminSupporterSet(deps, callerUid, body) {
+  const fs = deps.firestore, targetUid = String(body?.uid || "");
+  if (!targetUid || targetUid.length > 128 || targetUid.includes("/")) return { status: 400, error: "invalid_uid" };
+  const docs = await findUserDocsByUid(fs, targetUid);
+  if (docs.length !== 1) return { status: 404, error: "user_not_found" };
+  const name = docs[0].id, now = deps.now();
+  const cur = await fs.get(`supporters/${targetUid}`);
+  if (body.on === true) {
+    if (cur && cur.active === true) return { ok: true, name, already: true };
+    await fs.createIfAbsent("supporters/_config", { launchAt: now });
+    const cfg = await fs.get("supporters/_config");
+    const early = now < Number(cfg?.launchAt || now) + SUPPORTER_EARLY_DAYS * 86400000;
+    const doc = { uid: targetUid, name, active: true, source: "admin", sinceMs: cur?.sinceMs || now, early: cur ? cur.early === true : early, prefs: { ...SUPPORTER_DEFAULT_PREFS, ...(cur?.prefs || {}) }, grantedBy: callerUid, updatedAt: new Date(now) };
+    await fs.set(`supporters/${targetUid}`, doc);
+    await supporterIndexMutate(deps, (byUid) => { byUid[targetUid] = supporterEntry(doc); });
+    await writeAuditLog(deps, { type: "supporterSet", byUid: callerUid, targetUid, name, on: true });
+    return { ok: true, name, early: doc.early };
+  }
+  if (cur && cur.active === true) {
+    await fs.set(`supporters/${targetUid}`, { ...cur, active: false, endedAtMs: now, updatedAt: new Date(now) });
+    await supporterIndexMutate(deps, (byUid) => { delete byUid[targetUid]; });
+    await writeAuditLog(deps, { type: "supporterSet", byUid: callerUid, targetUid, name, on: false });
+  }
+  return { ok: true, name, off: true };
 }
 
 /* =========================================================

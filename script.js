@@ -40,6 +40,9 @@ import {
 /* 📨 友達に紹介（ヘッダーの赤いボタン。端末の共有画面でリンクを送る） */
 import { inviteInit } from "./yuinvite.js?v=20261110-invite2";
 
+/* ⭐ ゆうChat サポーター（有料プラン）：目印・名前の色・吹き出しの色・チャットの背景を付ける小さい部品。設定の画面は、開くときに読み込む（yusupporter.js） */
+import { setSupporterIndex, setMySupporter, getSupporter, isMeSupporter, buildSupporterMark, applyNameStyle, applyBubbleStyle, applyChatBackground } from "./yusupporter-core.js?v=20261110-sup1";
+
 import {
   getFirestore, initializeFirestore, collection, addDoc, getDocs, getDoc, doc, setDoc,
   updateDoc, deleteDoc, query, where, onSnapshot, orderBy, limit, arrayUnion, arrayRemove, deleteField,
@@ -710,6 +713,7 @@ async function resolveAuthState(user) {
 }
 
 function handleSignedOut() {
+  supporterLoadSeq++; supporterLoadedAt = 0; setMySupporter(null); setSupporterIndex({});
   authResolveSeq++;
   appSessionSeq++;
   currentUser = null;
@@ -747,6 +751,74 @@ authToLoginButton?.addEventListener("click", () => {
 /* =========================================================
    名前画面
 ========================================================= */
+
+/* ⭐ サポーター：Worker（/supporter）を呼ぶ。index＝全員ぶんの目印の一覧／me＝自分の状態／setPrefs・records・request＝サポーターの操作 */
+async function callSupporterApi(action, payload = {}) {
+  if (!currentUser) throw Object.assign(new Error("not_logged_in"), { code: "not_logged_in" });
+  const token = await currentUser.getIdToken();
+  const res = await fetch(NOTIFY_ENDPOINT.replace(/\/notify$/, "/supporter"), { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ action, ...payload }) });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || json.ok === false) throw Object.assign(new Error(json.error || `http_${res.status}`), { code: json.error || `http_${res.status}` });
+  return json;
+}
+let supporterLoadSeq = 0, supporterLoadedAt = 0;
+/* ログイン後と、チャットを開いたとき（10分に1回まで）：全員ぶんの目印の一覧と、自分の状態を読む（Worker が60秒だけメモリに置くので、読み取りはほとんど増えない） */
+async function loadSupporterData(force = false) {
+  if (!currentUser || (!force && Date.now() - supporterLoadedAt < 600000)) return;
+  const seq = ++supporterLoadSeq;
+  supporterLoadedAt = Date.now();
+  try {
+    const [index, me] = await Promise.all([callSupporterApi("index"), callSupporterApi("me")]);
+    if (seq !== supporterLoadSeq || !currentUser) return;
+    setSupporterIndex(index.byUid);
+    setMySupporter(me.supporter);
+    refreshSupporterLook();
+  } catch (error) {
+    supporterLoadedAt = 0;
+    console.warn("サポーターの情報を読み込めませんでした:", error);
+  }
+}
+/* 目印・色・背景を、いまの画面に反映する */
+function refreshSupporterLook() {
+  applyChatBackground(messagesElement);
+  renderSupporterCard();
+  renderFriends();
+  renderGroups();
+  if (selectedChat && chatPaging) renderPagedChat(chatPaging, "keep");
+}
+/* 名前の文字に、サポーターの色と目印を付ける（uid が一覧にある人だけ） */
+function decorateSupporterName(el, uid, size = 14) {
+  const entry = getSupporter(uid);
+  if (!el || !entry) return;
+  const text = el.textContent;
+  el.textContent = "";
+  const span = document.createElement("span");
+  span.textContent = text;
+  applyNameStyle(span, entry);
+  el.append(span, " ", buildSupporterMark(entry, size));
+}
+const lazySupporter = lazyModule("./yusupporter.js?v=20261110-sup1", (m) => m.supporterUiInit({ api: callSupporterApi, esc: escapeHTML, onChange: refreshSupporterLook }));
+function openSupporterScreen() {
+  lazySupporter.load().then((m) => m.openSupporterScreen()).catch((error) => lazyLoadFailed(error));
+}
+/* マイページの上のカード：サポーターでない人には「サポーターになろう」、サポーターの人には設定への入口 */
+function renderSupporterCard() {
+  const card = document.getElementById("supporterCard");
+  if (!card) return;
+  const me = isMeSupporter();
+  card.className = `supporter-card ${me ? "is-member" : ""}`;
+  card.innerHTML = "";
+  const mark = buildSupporterMark({ e: 0 }, 44);
+  const text = document.createElement("div");
+  text.className = "supporter-card-text";
+  text.innerHTML = me ? `<b>ゆうChat サポーター</b><span>見た目の設定・マイ記録・要望はこちら</span>` : `<b>サポーターになろう</b><span>名前の色・チャットの背景・新機能の先行など。月額250円から。</span>`;
+  const go = document.createElement("button");
+  go.type = "button";
+  go.className = "supporter-card-go";
+  go.textContent = me ? "開く" : "くわしく見る";
+  go.addEventListener("click", openSupporterScreen);
+  card.append(mark, text, go);
+}
 
 /* 🎟 招待コード：Worker（/invite）を呼ぶ。create＝自分のコード、redeem＝友達のコードを使う */
 async function callInviteApi(action, payload = {}) {
@@ -1036,6 +1108,7 @@ async function startApp() {
     resetNewMessageWatch();
     listenFriends();
     listenGroups();
+    loadSupporterData(true);
     setTimeout(restoreNotificationsIfGranted, 3000);   /* 通知の再設定は急がない（起動の通信と取り合わないよう、少し待つ） */
     updateNotifyAnnouncement();
     listenMyCoins();
@@ -1299,6 +1372,7 @@ function toFriendEntry(item, meIsUser1) {
     id: item.id,
     friend: data[other],
     friendshipId: item.id,
+    friendUid: data[`${other}Uid`] || "",
     photo: data[`${other}Photo`] || "",
     lastMessageAt: data.lastMessageAt || null,
     lastMessageSenderUid: data.lastMessageSenderUid || "",
@@ -1402,6 +1476,7 @@ function renderFriends() {
     const name = document.createElement("div");
     name.className = "friend-name";
     name.textContent = friend.friend;
+    decorateSupporterName(name, friend.friendUid, 14);
 
     info.append(buildNameWithUnreadMark(name, friend.unread && !isViewingChat("friend", friend.friendshipId)), appChatPreview(friend, false));
     item.append(avatar, info, appChatTime(friend));
@@ -1912,6 +1987,7 @@ function renderChatHeaderForFriend(friend) {
   const name = document.createElement("div");
   name.className = "chat-header-name";
   name.textContent = friend.friend;
+  decorateSupporterName(name, friend.friendUid, 16);
 
   info.append(name);
   wrap.append(avatar, info);
@@ -2352,6 +2428,8 @@ function renderMessage(message, readInfo = getSelectedChatReadInfo()) {
 
   const bubble = document.createElement("div");
   bubble.className = "message-bubble";
+  const supporterEntry = message.deleted ? null : getSupporter(message.senderUid);
+  if (supporterEntry) applyBubbleStyle(bubble, supporterEntry);
 
   if (message.deleted) {
     const deleted = document.createElement("div");
@@ -2363,6 +2441,7 @@ function renderMessage(message, readInfo = getSelectedChatReadInfo()) {
       const sender = document.createElement("div");
       sender.className = "message-user";
       sender.textContent = senderName;
+      if (supporterEntry) decorateSupporterName(sender, message.senderUid, 13);
       bubble.appendChild(sender);
     }
 
@@ -3763,8 +3842,8 @@ function switchView(view) {
   document.body.classList.toggle("chat-open", view === "chat" && !!selectedChat);
   appPlusMenu?.classList.add("hidden");
 
-  if (view === "chat") { markSelectedChatAsRead(); renderFriends(); renderGroups(); }
-  if (view === "mypage") { loadMyPage(); syncAppProfile(); }
+  if (view === "chat") { markSelectedChatAsRead(); renderFriends(); renderGroups(); loadSupporterData(); }
+  if (view === "mypage") { loadMyPage(); syncAppProfile(); renderSupporterCard(); }
   if (view === "derby") { refreshDerbySubscriptionsIfNeeded(); renderRaceInfo(); }
   else stopDerbySubscriptions();
   /* ルーム一覧の監視はゲーム画面を開いている間だけ（戻ったときに最新の一覧を読み直す）。開いているルームの監視は続ける */
@@ -3818,7 +3897,7 @@ function lazyCaller(mod, name) {
 const adminCfg = () => ({ callAdmin: (action, payload) => callAdminApi(action, payload), isAdmin: () => isAdminUser(), esc: (v) => escapeHTML(v) });
 
 /* 🎡 ゆうワールド（ゆうスロ）。トークン・ユーザー名・最上位管理者かどうかは呼ばれた時点の状態を使う */
-const lazyYuWorld = lazyModule("./yuworld.js?v=20261106-fair1", (m) => m.initYuWorld({
+const lazyYuWorld = lazyModule("./yuworld.js?v=20261110-sup1", (m) => m.initYuWorld({
   openGame: (type) => openGameFromWorld(type),
   pendingInviteTypes: () => pendingGameInvites.map((invite) => invite.gameType),
   endpoint: NOTIFY_ENDPOINT.replace(/\/notify$/, "/yuslot"),
@@ -6535,6 +6614,18 @@ async function runUserManageKakuTicket(info) {
       <p id="umKakuTicketError" class="admin-form-error"></p>
     </section>` : "";
 
+  /* ⭐ サポーター：お金なしで、サポーターにする／やめさせる（管理者だけ） */
+  const supporterHtml = hasUserDoc && !deleting ? `
+    <section class="um-coins" aria-label="サポーター">
+      <div class="um-coins-balance">⭐ ゆうChat サポーター <b id="umSupporterState">…</b></div>
+      <div class="um-coins-row">
+        <button type="button" data-um-supporter="on">サポーターにする</button>
+        <button type="button" data-um-supporter="off">サポーターをやめさせる</button>
+      </div>
+      <p class="um-note">課金なしで、この人をサポーターにします（名前の横のマーク・色・背景・先行などの特典がつきます）。最初の1か月に加えた人は「初期サポーター」になります。</p>
+      <p id="umSupporterError" class="admin-form-error"></p>
+    </section>` : "";
+
   /* 総資産の増減（内訳は開いたときに Worker から読む） */
   const assetHtml = hasUserDoc && info.user && !deleting ? `
     <section class="um-coins um-assets" aria-label="総資産の増減" data-um-assets-uid="${escapeHTML(info.uid)}">
@@ -6555,6 +6646,7 @@ async function runUserManageKakuTicket(info) {
     ${coinHtml}
     ${lotteryHtml}
     ${kakuTicketHtml}
+    ${supporterHtml}
     ${assetHtml}
     ${info.isAdmin ? `<p class="um-note">管理者のアカウントは停止・削除できません。</p>` : `<p class="um-note">サブアカウントかどうか確信がないときは、まず「停止」を使ってください（あとで解除できます）。完全削除は取り消せません。</p>`}
     <div class="um-actions">${buttons.join("")}</div>
@@ -6568,8 +6660,34 @@ async function runUserManageKakuTicket(info) {
   modalEl.querySelectorAll("[data-um-coin]").forEach((button) => button.addEventListener("click", () => runUserManageAdjustCoins(info, button.dataset.umCoin)));
   modalEl.querySelector("[data-um-lottery-refund]")?.addEventListener("click", () => runUserManageLotteryRefund(info));
   modalEl.querySelector("[data-um-kaku-ticket]")?.addEventListener("click", () => runUserManageKakuTicket(info));
+  modalEl.querySelectorAll("[data-um-supporter]").forEach((button) => button.addEventListener("click", () => runUserManageSupporter(info, button.dataset.umSupporter === "on")));
+  if (supporterHtml) loadUserManageSupporter(info);
   modalEl.querySelectorAll("[data-um-asset]").forEach((button) => button.addEventListener("click", () => previewUserManageAssets(info, button.dataset.umAsset)));
   if (assetHtml) loadUserManageAssets(info);
+}
+
+/* ⭐ サポーターの状態を読む／切り替える（管理者） */
+async function loadUserManageSupporter(info) {
+  const el = modalEl?.querySelector("#umSupporterState");
+  if (!el) return;
+  try {
+    const r = await callAdminApi("supporterList");
+    const mine = (r.supporters || []).find((x) => x.uid === info.uid);
+    if (el.isConnected) el.textContent = mine ? `サポーター${mine.early ? "（初期）" : ""}・${mine.source === "admin" ? "管理者が付与" : "課金"}` : "なし";
+  } catch (error) { if (el.isConnected) el.textContent = "読み込めませんでした"; }
+}
+async function runUserManageSupporter(info, on) {
+  const errorEl = modalEl?.querySelector("#umSupporterError");
+  if (errorEl) errorEl.textContent = "";
+  if (!confirm(on ? `${info.name} さんを、課金なしでサポーターにします。よろしいですか？` : `${info.name} さんのサポーターをやめさせます。よろしいですか？`)) return;
+  modalEl?.querySelectorAll("[data-um-supporter]").forEach((b) => { b.disabled = true; });
+  try {
+    await callAdminApi("supporterSet", { uid: info.uid, on });
+    await loadUserManageSupporter(info);
+  } catch (error) {
+    if (errorEl) errorEl.textContent = describeAdminError(error);
+  }
+  modalEl?.querySelectorAll("[data-um-supporter]").forEach((b) => { b.disabled = false; });
 }
 
 /* ----- 総資産（手持ちコイン + 預金 + 保有株の評価額 − 借入）の内訳・増減 -----
