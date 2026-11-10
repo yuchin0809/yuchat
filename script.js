@@ -6615,14 +6615,14 @@ async function runUserManageKakuTicket(info) {
     </section>` : "";
 
   /* ⭐ サポーター：お金なしで、サポーターにする／やめさせる（管理者だけ） */
-  const supporterHtml = hasUserDoc && !deleting ? `
+  const supporterHtml = info.userDocNames.length >= 1 && !deleting ? `
     <section class="um-coins" aria-label="サポーター">
       <div class="um-coins-balance">⭐ ゆうChat サポーター <b id="umSupporterState">…</b></div>
       <div class="um-coins-row">
         <button type="button" data-um-supporter="on">サポーターにする</button>
         <button type="button" data-um-supporter="off">サポーターをやめさせる</button>
       </div>
-      <p class="um-note">課金なしで、この人をサポーターにします（名前の横のマーク・色・背景・先行などの特典がつきます）。最初の1か月に加えた人は「初期サポーター」になります。</p>
+      <p class="um-note">課金なしで、この人をサポーターにします（名前の横のマーク・色・背景・先行などの特典がつきます）。最初の1か月に加えた人は「初期サポーター」になります。${info.userDocNames.length > 1 ? "この人は、同じログインで名前が2つ以上あります。サポーターはログインごとなので、どの名前でもサポーターになります。" : ""}</p>
       <p id="umSupporterError" class="admin-form-error"></p>
     </section>` : "";
 
