@@ -6611,6 +6611,7 @@ html:not(.app-mode) .app-only { display: none !important; }
     html.app-mode .app-only { display: none !important; }
 }
 .chat-top { display: contents; }
+.app-chat-preview, .app-chat-time { display: none; }
 .chat-back { display: none; }
 
 @media (max-width: 700px) {
@@ -6842,33 +6843,68 @@ html:not(.app-mode) .app-only { display: none !important; }
     html.app-mode .play-tile b { font-size: 15px; }
     html.app-mode .play-tile span { font-size: 11px; color: #777; }
 
-    /* ---- マイページ：ヘッダーから移した操作 ---- */
+    /* ---- チャットの一覧：アイコン・名前・最後のメッセージ・時刻（LINE型） ---- */
+    html.app-mode .sidebar .chips { gap: 0; background: #fff; border: 1px solid #e7e9ed; border-radius: 16px; overflow: hidden; }
+    html.app-mode .sidebar .chips button {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        min-height: 66px;
+        padding: 10px 14px;
+        border: 0;
+        border-bottom: 1px solid #eef0f3;
+        border-radius: 0;
+        background: #fff;
+    }
+    html.app-mode .sidebar .chips button:last-child { border-bottom: 0; }
+    html.app-mode .sidebar .chips .friend-avatar,
+    html.app-mode .sidebar .chips .group-avatar { width: 46px; height: 46px; min-width: 46px; font-size: 20px; }
+    html.app-mode .sidebar .chips .friend-info,
+    html.app-mode .sidebar .chips .group-info { flex: 1; min-width: 0; }
+    html.app-mode .sidebar .chips .friend-name,
+    html.app-mode .sidebar .chips .group-name { font-size: 15px; font-weight: 700; }
+    html.app-mode .sidebar .chips .group-members { display: none; }
+    html.app-mode .app-chat-preview { display: block; color: #777; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+    html.app-mode .app-chat-time { display: block; align-self: flex-start; color: #999; font-size: 11px; white-space: nowrap; padding-top: 4px; }
+
+    /* ---- マイページ：プロフィール→紹介→設定。ログアウトはいちばん下 ---- */
     html.app-mode .app-account {
         display: flex;
         flex-direction: column;
         gap: 10px;
         margin: 0 0 16px;
     }
-
-    html.app-mode .app-account button {
-        min-height: 50px;
-        border: 1px solid #e1e4e8;
-        border-radius: 14px;
+    html.app-mode .app-account-bottom { margin: 20px 0 4px; }
+    html.app-mode .app-profile {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 14px;
         background: #fff;
-        font-size: 15px;
-        text-align: left;
-        padding: 0 16px;
+        border: 1px solid #e7e9ed;
+        border-radius: 16px;
     }
-
-    html.app-mode .app-account .app-invite {
-        background: #d9423a;
-        border-color: #d9423a;
-        color: #fff;
-        font-weight: 700;
-        text-align: center;
+    html.app-mode .app-profile-avatar {
+        width: 58px; height: 58px; border-radius: 50%; background: #eef0f3;
+        display: flex; align-items: center; justify-content: center; overflow: hidden; font-size: 28px; flex-shrink: 0;
     }
-
-    html.app-mode .app-account .app-logout {
-        color: #d9423a;
+    html.app-mode .app-profile-avatar img { width: 100%; height: 100%; object-fit: cover; }
+    html.app-mode .app-profile-avatar img.hidden, html.app-mode .app-profile-avatar .hidden { display: none; }
+    html.app-mode .app-profile b { display: block; font-size: 18px; }
+    html.app-mode .app-profile div > span { color: #777; font-size: 13px; }
+    html.app-mode .app-section { color: #777; font-size: 12px; font-weight: 700; margin: 6px 4px -4px; }
+    html.app-mode .app-menu { background: #fff; border: 1px solid #e7e9ed; border-radius: 14px; overflow: hidden; }
+    html.app-mode .app-menu button {
+        display: flex; justify-content: space-between; align-items: center;
+        width: 100%; min-height: 50px; padding: 0 16px;
+        border: 0; border-bottom: 1px solid #eef0f3; background: #fff; font-size: 15px; text-align: left;
     }
+    html.app-mode .app-menu button:last-child { border-bottom: 0; }
+    html.app-mode .app-menu button span:last-child { color: #aaa; }
+    html.app-mode .app-invite {
+        min-height: 52px; border: 0; border-radius: 14px;
+        background: #d9423a; color: #fff; font-weight: 700; font-size: 15px;
+    }
+    html.app-mode .app-logout { color: #d9423a; }
+    html.app-mode #mypageView .panel > h2:first-child { display: none; }
 }

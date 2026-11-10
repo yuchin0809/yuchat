@@ -1326,6 +1326,32 @@ function listenFriends() {
   );
 }
 
+/* アプリ版（スマホ）の会話一覧：最後のメッセージの一文と時刻（Web版では CSS で隠す。読み取りは増えない＝一覧の書類にある値を使う） */
+function appChatTimeText(value) {
+  const ms = value?.toMillis ? value.toMillis() : value instanceof Date ? value.getTime() : Number(value) || 0;
+  if (!ms) return "";
+  const d = new Date(ms), now = new Date();
+  const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((day(now) - day(d)) / 86400000);
+  if (diff <= 0) return `${d.getHours()}:${String(d.getMinutes()).padStart(2, "0")}`;
+  if (diff === 1) return "昨日";
+  if (diff < 7) return `${"日月火水木金土"[d.getDay()]}曜`;
+  return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+function appChatPreview(entry, isGroup) {
+  const el = document.createElement("div");
+  el.className = "app-chat-preview";
+  const text = entry.lastMessageHasImage ? "画像を送信しました" : String(entry.lastMessagePreview || "");
+  el.textContent = text ? (isGroup && entry.lastMessageSender ? `${entry.lastMessageSender}：${text}` : text) : "";
+  return el;
+}
+function appChatTime(entry) {
+  const el = document.createElement("div");
+  el.className = "app-chat-time";
+  el.textContent = appChatTimeText(entry.lastMessageAt);
+  return el;
+}
+
 function renderFriends() {
   if (!friendsList) return;
   friendsList.innerHTML = "";
@@ -1358,8 +1384,8 @@ function renderFriends() {
     name.className = "friend-name";
     name.textContent = friend.friend;
 
-    info.append(buildNameWithUnreadMark(name, friend.unread && !isViewingChat("friend", friend.friendshipId)));
-    item.append(avatar, info);
+    info.append(buildNameWithUnreadMark(name, friend.unread && !isViewingChat("friend", friend.friendshipId)), appChatPreview(friend, false));
+    item.append(avatar, info, appChatTime(friend));
 
     /* タップ：その友達との1対1チャットを開く（ほかのタブを表示中でもチャット画面に切り替える）
        長押し（スマホ・iPad）・右クリック（パソコン）：友達の削除 */
@@ -1564,8 +1590,8 @@ function renderGroups() {
     const memberCount = Array.isArray(group.members) ? group.members.length : 0;
     members.textContent = `${memberCount}人`;
 
-    info.append(buildNameWithUnreadMark(name, group.unread && !isViewingChat("group", group.id)), members);
-    item.append(avatar, info);
+    info.append(buildNameWithUnreadMark(name, group.unread && !isViewingChat("group", group.id)), members, appChatPreview(group, true));
+    item.append(avatar, info, appChatTime(group));
     item.addEventListener("click", () => selectGroupChat(group));
     groupsList.appendChild(item);
   });
@@ -3672,12 +3698,29 @@ const APP_VIEW_TITLES = { chat: "チャット", play: "あそぶ", derby: "ゆ�
 const appHeaderTitle = document.getElementById("appHeaderTitle");
 const appPlusMenu = document.getElementById("appPlusMenu");
 document.body.dataset.view = "chat";
-document.querySelectorAll("[data-goto]").forEach((button) => button.addEventListener("click", () => switchView(button.dataset.goto)));
+document.querySelectorAll("[data-goto]").forEach((button) => button.addEventListener("click", () => (button.dataset.gameOpen ? openGameFromWorld(button.dataset.gameOpen) : switchView(button.dataset.goto))));
 document.querySelectorAll("[data-proxy]").forEach((button) => button.addEventListener("click", () => document.getElementById(button.dataset.proxy)?.click()));
 document.getElementById("appPlusButton")?.addEventListener("click", () => appPlusMenu?.classList.toggle("hidden"));
 document.getElementById("appPlusFriend")?.addEventListener("click", () => { appPlusMenu?.classList.add("hidden"); document.getElementById("addFriendButton")?.click(); });
 document.getElementById("appPlusGroup")?.addEventListener("click", () => { appPlusMenu?.classList.add("hidden"); document.getElementById("createGroupButton")?.click(); });
 document.getElementById("chatBackButton")?.addEventListener("click", () => resetChat());
+
+/* アプリ版（スマホ）のマイページ：上のプロフィール（ヘッダーから移した名前・画像・コイン）を写す */
+function syncAppProfile() {
+  const name = document.getElementById("appProfileName");
+  if (!name) return;
+  name.textContent = (document.getElementById("myName")?.textContent || "").trim();
+  const coin = document.getElementById("appProfileCoin");
+  if (coin) coin.textContent = (document.getElementById("coinBalance")?.textContent || "0").trim();
+  const src = document.getElementById("myProfileImage");
+  const img = document.getElementById("appProfileImage");
+  const ph = document.getElementById("appProfilePlaceholder");
+  const has = !!(src && src.getAttribute("src") && !src.classList.contains("hidden"));
+  if (img) { img.classList.toggle("hidden", !has); if (has) img.src = src.src; }
+  if (ph) ph.classList.toggle("hidden", has);
+}
+/* ログアウトは、マイページのいちばん下へ */
+(() => { const bottom = document.getElementById("appAccountBottom"); const panel = mypageView?.querySelector(".panel"); if (bottom && panel) panel.appendChild(bottom); })();
 
 function switchView(view) {
   /* 👤 ユーザー管理は管理者だけ（タブも管理者にだけ表示） */
@@ -3702,7 +3745,7 @@ function switchView(view) {
   appPlusMenu?.classList.add("hidden");
 
   if (view === "chat") { markSelectedChatAsRead(); renderFriends(); renderGroups(); }
-  if (view === "mypage") loadMyPage();
+  if (view === "mypage") { loadMyPage(); syncAppProfile(); }
   if (view === "derby") { refreshDerbySubscriptionsIfNeeded(); renderRaceInfo(); }
   else stopDerbySubscriptions();
   /* ルーム一覧の監視はゲーム画面を開いている間だけ（戻ったときに最新の一覧を読み直す）。開いているルームの監視は続ける */

@@ -31,7 +31,7 @@
 
     <link
         rel="stylesheet"
-        href="./style.css?v=20261110-applayout1"
+        href="./style.css?v=20261110-applayout2"
     >
 
     <!-- 起動を早くするため、アプリ本体の読み込みと並べて Firebase の部品と接続先を先に準備する -->
@@ -917,6 +917,7 @@
                 <div class="play-grid">
                     <button type="button" class="play-tile" data-goto="derby"><i>🏇</i><b>ゆうダービー</b><span>毎日 11:30・15:02</span></button>
                     <button type="button" class="play-tile" data-goto="yuworld"><i>🎡</i><b>ゆうワールド</b><span>スロ・宝くじ・ゲーム</span></button>
+                    <button type="button" class="play-tile" data-goto="yuworld" data-game-open="keshi"><i>🥊</i><b>消しバト</b><span>最強決定戦</span></button>
                     <button type="button" class="play-tile" data-goto="economy"><i>💰</i><b>ゆう経済</b><span>預金・株・送金</span></button>
                 </div>
             </section>
@@ -1532,12 +1533,24 @@
                         👤 マイページ
                     </h2>
 
-                    <!-- アプリ版（スマホ）：ヘッダーから移した操作 -->
+                    <!-- アプリ版（スマホ）：ヘッダーから移したプロフィールと操作 -->
                     <div class="app-only app-account">
+                        <div class="app-profile">
+                            <span class="app-profile-avatar"><img id="appProfileImage" class="hidden" alt="プロフィール画像"><span id="appProfilePlaceholder">👤</span></span>
+                            <div><b id="appProfileName"></b><span>🪙 <span id="appProfileCoin">0</span> コイン</span></div>
+                        </div>
                         <button type="button" class="app-invite" data-proxy="inviteButton">📨 友達にゆうChatを紹介</button>
-                        <button type="button" data-proxy="changeNameButton">✏️ 名前を変える</button>
-                        <button type="button" data-proxy="profileImageInput">🖼️ プロフィール画像を変える</button>
-                        <button type="button" class="app-logout" data-proxy="logoutButton">🚪 ログアウト</button>
+                        <div class="app-section">設定</div>
+                        <div class="app-menu">
+                            <button type="button" data-proxy="changeNameButton"><span>名前を変える</span><span>›</span></button>
+                            <button type="button" data-proxy="profileImageInput"><span>プロフィール画像を変える</span><span>›</span></button>
+                        </div>
+                    </div>
+                    <div id="appAccountBottom" class="app-only app-account app-account-bottom">
+                        <div class="app-section">アカウント</div>
+                        <div class="app-menu">
+                            <button type="button" class="app-logout" data-proxy="logoutButton"><span>ログアウト</span><span>›</span></button>
+                        </div>
                     </div>
 
 
@@ -1683,7 +1696,7 @@
      OFF のとき（とテスト環境）は、data-app-src のアプリ本体を読み込む -->
 <script
     src="./maintenance.js?v=20261009-maint-quota"
-    data-app-src="./script.js?v=20261110-applayout1"
+    data-app-src="./script.js?v=20261110-applayout2"
 ></script>
 
 
