@@ -11,6 +11,9 @@
 
     <title>web</title>
 
+    <!-- アプリ版（Capacitor）か、確認用の ?app=1 のときだけ、アプリ用の見た目の目印を付ける（Web版は何も変わらない） -->
+    <script>try{var q=new URLSearchParams(location.search);if(q.get("app")==="1")sessionStorage.setItem("yuApp","1");if((window.Capacitor&&window.Capacitor.isNativePlatform&&window.Capacitor.isNativePlatform())||sessionStorage.getItem("yuApp")==="1")document.documentElement.classList.add("app-mode");}catch(e){}</script>
+
     <meta
         name="theme-color"
         content="#ffffff"
@@ -28,7 +31,7 @@
 
     <link
         rel="stylesheet"
-        href="./style.css?v=20261026-yacht9"
+        href="./style.css?v=20261110-applayout1"
     >
 
     <!-- 起動を早くするため、アプリ本体の読み込みと並べて Firebase の部品と接続先を先に準備する -->
@@ -41,7 +44,7 @@
 </head>
 
 
-<body>
+<body data-view="chat">
 
 
 <!-- ==================================================
@@ -417,6 +420,9 @@
 
     <header class="header">
 
+        <!-- アプリ版（スマホ）：いまの画面の名前 -->
+        <div id="appHeaderTitle" class="app-only app-header-title">チャット</div>
+
 
         <!-- プロフィール -->
 
@@ -493,6 +499,13 @@
             </button>
 
 
+            <!-- アプリ版（スマホ）：友達追加・グループ作成をまとめた「＋」 -->
+            <button id="appPlusButton" class="app-only icon-btn app-plus-button" type="button" aria-label="新しく追加">＋</button>
+            <div id="appPlusMenu" class="app-plus-menu hidden">
+                <button id="appPlusFriend" type="button">🙋 友達を追加</button>
+                <button id="appPlusGroup" type="button">👥 グループを作る</button>
+            </div>
+
             <!-- 友達に紹介（赤いボタン。端末の共有画面でゆうChatのリンクを送る） -->
 
             <button
@@ -565,6 +578,17 @@
             </span>
         </button>
 
+
+        <button
+            data-view="play"
+            class="app-only"
+            type="button"
+        >
+            🎮
+            <span>
+                あそぶ
+            </span>
+        </button>
 
         <button
             data-view="derby"
@@ -749,13 +773,16 @@
             >
 
 
-                <!-- チャットヘッダー -->
+                <!-- チャットヘッダー（アプリ版のスマホでは、左に「戻る」を出す） -->
 
-                <div
-                    id="chatHeader"
-                    class="chat-header"
-                >
-                    相手を選択してください
+                <div class="chat-top">
+                    <button id="chatBackButton" class="chat-back" type="button" aria-label="会話の一覧にもどる">‹</button>
+                    <div
+                        id="chatHeader"
+                        class="chat-header"
+                    >
+                        相手を選択してください
+                    </div>
                 </div>
 
 
@@ -879,6 +906,20 @@
             </section>
 
 
+
+            <!-- ==================================================
+                 あそぶ（アプリ版のスマホだけ。ダービー・ゆうワールド・ゆう経済の入口）
+            ================================================== -->
+            <section
+                id="playView"
+                class="view hidden"
+            >
+                <div class="play-grid">
+                    <button type="button" class="play-tile" data-goto="derby"><i>🏇</i><b>ゆうダービー</b><span>毎日 11:30・15:02</span></button>
+                    <button type="button" class="play-tile" data-goto="yuworld"><i>🎡</i><b>ゆうワールド</b><span>スロ・宝くじ・ゲーム</span></button>
+                    <button type="button" class="play-tile" data-goto="economy"><i>💰</i><b>ゆう経済</b><span>預金・株・送金</span></button>
+                </div>
+            </section>
 
             <!-- ==================================================
                  ゆうダービー
@@ -1491,6 +1532,14 @@
                         👤 マイページ
                     </h2>
 
+                    <!-- アプリ版（スマホ）：ヘッダーから移した操作 -->
+                    <div class="app-only app-account">
+                        <button type="button" class="app-invite" data-proxy="inviteButton">📨 友達にゆうChatを紹介</button>
+                        <button type="button" data-proxy="changeNameButton">✏️ 名前を変える</button>
+                        <button type="button" data-proxy="profileImageInput">🖼️ プロフィール画像を変える</button>
+                        <button type="button" class="app-logout" data-proxy="logoutButton">🚪 ログアウト</button>
+                    </div>
+
 
 
                     <!-- コイン残高 -->
@@ -1634,7 +1683,7 @@
      OFF のとき（とテスト環境）は、data-app-src のアプリ本体を読み込む -->
 <script
     src="./maintenance.js?v=20261009-maint-quota"
-    data-app-src="./script.js?v=20261106-fair1"
+    data-app-src="./script.js?v=20261110-applayout1"
 ></script>
 
 

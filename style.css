@@ -6596,3 +6596,279 @@ button.secondary {
     background: #fff3d6;
     color: #7a4a00;
 }
+
+
+/* ==================================================
+   アプリ版（スマホ）のレイアウト
+   ・html に app-mode が付いているとき（アプリ版、または確認用の ?app=1）だけ、幅 700px 以下で効く
+   ・Web版（app-mode なし）と、iPad（幅が広い）は、いままでと同じ
+================================================== */
+
+/* Web版と、アプリ版でも幅の広い画面（iPad など）では、アプリ用の部品を出さない */
+.app-only { display: none; }
+html:not(.app-mode) .app-only { display: none !important; }
+@media (min-width: 701px) {
+    html.app-mode .app-only { display: none !important; }
+}
+.chat-top { display: contents; }
+.chat-back { display: none; }
+
+@media (max-width: 700px) {
+
+    html.app-mode .app-only { display: revert; }
+
+    /* ---- 全体：上下の安全領域をよける ---- */
+    html.app-mode .app {
+        height: 100dvh;
+    }
+
+    html.app-mode .header {
+        height: calc(52px + env(safe-area-inset-top, 0px));
+        padding: env(safe-area-inset-top, 0px) 12px 0;
+        position: relative;
+    }
+
+    /* ---- 上の帯：画面の名前＋コイン＋「＋」だけ ---- */
+    html.app-mode .profile-area,
+    html.app-mode #inviteButton,
+    html.app-mode #addFriendButton,
+    html.app-mode #createGroupButton,
+    html.app-mode #logoutButton {
+        display: none;
+    }
+
+    html.app-mode .app-header-title {
+        font-size: 20px;
+        font-weight: 800;
+        letter-spacing: .02em;
+    }
+
+    html.app-mode .header-buttons {
+        gap: 8px;
+    }
+
+    html.app-mode .coin,
+    html.app-mode .header-buttons .icon-btn {
+        height: 40px;
+        min-width: 44px;
+        font-size: 15px;
+    }
+
+    html.app-mode .coin {
+        padding: 0 12px;
+    }
+
+    /* 「＋」は、チャットの一覧のときだけ */
+    html.app-mode .app-plus-button { display: none; }
+    html.app-mode body[data-view="chat"] .app-plus-button { display: inline-flex; align-items: center; justify-content: center; font-size: 22px; color: #2f6bff; }
+
+    html.app-mode .app-plus-menu {
+        position: absolute;
+        right: 12px;
+        top: calc(52px + env(safe-area-inset-top, 0px) - 2px);
+        z-index: 600;
+        min-width: 190px;
+        background: #fff;
+        border: 1px solid #e1e4e8;
+        border-radius: 14px;
+        box-shadow: 0 8px 24px rgba(20, 30, 60, .18);
+        overflow: hidden;
+    }
+
+    html.app-mode .app-plus-menu.hidden { display: none; }
+
+    html.app-mode .app-plus-menu button {
+        display: block;
+        width: 100%;
+        min-height: 48px;
+        padding: 0 16px;
+        border: 0;
+        border-bottom: 1px solid #eef0f3;
+        background: #fff;
+        text-align: left;
+        font-size: 15px;
+    }
+
+    html.app-mode .app-plus-menu button:last-child { border-bottom: 0; }
+
+    /* ---- 下のタブ：5つ。文字を全部見せて、ホームバーをよける ---- */
+    html.app-mode .tabs {
+        position: static;
+        order: 10;
+        height: calc(58px + env(safe-area-inset-bottom, 0px));
+        padding-bottom: env(safe-area-inset-bottom, 0px);
+        border-top: 1px solid #e1e4e8;
+        border-bottom: 0;
+        background: #fff;
+        backdrop-filter: none;
+    }
+
+    html.app-mode .tabs button[data-view="derby"],
+    html.app-mode .tabs button[data-view="yuworld"],
+    html.app-mode .tabs button[data-view="economy"] {
+        display: none;
+    }
+
+    html.app-mode .tabs button {
+        font-size: 21px;
+        gap: 1px;
+        min-height: 44px;
+    }
+
+    html.app-mode .tabs button span {
+        font-size: 10px;
+        overflow: visible;
+        text-overflow: clip;
+    }
+
+    html.app-mode .tabs button.app-only {
+        display: flex;
+    }
+
+    html.app-mode .tabs button.active {
+        color: #2f6bff;
+        border-bottom: 0;
+    }
+
+    html.app-mode .tabs .tab-label-long { display: none; }
+    html.app-mode .tabs .tab-label-short { display: inline; }
+
+    /* ---- ワークスペース：下のタブの分は、タブ自身が場所を取る ---- */
+    html.app-mode .workspace {
+        height: auto;
+        flex: 1;
+        min-height: 0;
+    }
+
+    html.app-mode #chatView {
+        padding-bottom: 0;
+    }
+
+    html.app-mode .view {
+        padding-bottom: 0;
+    }
+
+    /* ---- チャット：まず会話の一覧（友達・グループ）。選ぶと会話が全画面 ---- */
+    html.app-mode body[data-view="chat"]:not(.chat-open) .sidebar {
+        display: block;
+        width: 100%;
+        padding: 6px 12px 16px;
+        border-right: 0;
+        background: #f5f7fa;
+    }
+
+    html.app-mode body[data-view="chat"]:not(.chat-open) .content {
+        display: none;
+    }
+
+    html.app-mode .sidebar .chips button {
+        min-height: 56px;
+        background: #fff;
+        border: 1px solid #e7e9ed;
+        border-radius: 14px;
+        font-size: 15px;
+    }
+
+    html.app-mode .sidebar .section-title {
+        font-size: 13px;
+        margin: 14px 4px 8px;
+    }
+
+    /* 会話を開いているあいだ：上の帯と下のタブを隠して、会話を広く使う */
+    html.app-mode body.chat-open .header,
+    html.app-mode body.chat-open .tabs {
+        display: none;
+    }
+
+    html.app-mode body[data-view="chat"].chat-open .notify-announcement {
+        display: none;
+    }
+
+    html.app-mode .chat-top {
+        display: flex;
+        align-items: center;
+        flex-shrink: 0;
+        padding-top: env(safe-area-inset-top, 0px);
+        background: #fff;
+        border-bottom: 1px solid #e7e9ed;
+    }
+
+    html.app-mode .chat-back {
+        display: block;
+        flex-shrink: 0;
+        width: 48px;
+        height: 52px;
+        border: 0;
+        background: transparent;
+        color: #2f6bff;
+        font-size: 34px;
+        line-height: 1;
+    }
+
+    html.app-mode .chat-top .chat-header {
+        flex: 1;
+        min-width: 0;
+        border-bottom: 0;
+        padding-left: 0;
+    }
+
+    html.app-mode .input-area {
+        padding-bottom: calc(7px + env(safe-area-inset-bottom, 0px));
+    }
+
+    /* ---- あそぶ：大きく押せるタイル ---- */
+    html.app-mode .play-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+        padding: 16px 14px;
+    }
+
+    html.app-mode .play-tile {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+        min-height: 128px;
+        justify-content: center;
+        padding: 14px 8px;
+        background: #fff;
+        border: 1px solid #e7e9ed;
+        border-radius: 16px;
+        text-align: center;
+    }
+
+    html.app-mode .play-tile i { font-style: normal; font-size: 38px; }
+    html.app-mode .play-tile b { font-size: 15px; }
+    html.app-mode .play-tile span { font-size: 11px; color: #777; }
+
+    /* ---- マイページ：ヘッダーから移した操作 ---- */
+    html.app-mode .app-account {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        margin: 0 0 16px;
+    }
+
+    html.app-mode .app-account button {
+        min-height: 50px;
+        border: 1px solid #e1e4e8;
+        border-radius: 14px;
+        background: #fff;
+        font-size: 15px;
+        text-align: left;
+        padding: 0 16px;
+    }
+
+    html.app-mode .app-account .app-invite {
+        background: #d9423a;
+        border-color: #d9423a;
+        color: #fff;
+        font-weight: 700;
+        text-align: center;
+    }
+
+    html.app-mode .app-account .app-logout {
+        color: #d9423a;
+    }
+}

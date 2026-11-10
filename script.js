@@ -222,6 +222,7 @@ const chatView = document.getElementById("chatView");
 const derbyView = document.getElementById("derbyView");
 const gamesView = document.getElementById("gamesView");
 const mypageView = document.getElementById("mypageView");
+const playView = document.getElementById("playView");
 const announcementsView = document.getElementById("announcementsView");
 const userManageView = document.getElementById("userManageView");
 const economyView = document.getElementById("economyView");
@@ -1939,6 +1940,7 @@ function selectFriendChat(friend) {
   replyingMessage = null;
   updateReplyBar();
   renderChatHeaderForFriend(friend);
+  document.body.classList.add("chat-open");
   if (messageInput) messageInput.disabled = false;
   if (sendButton) sendButton.disabled = false;
   renderFriends();
@@ -1956,6 +1958,7 @@ function selectGroupChat(group) {
   replyingMessage = null;
   updateReplyBar();
   renderChatHeaderForGroup(group);
+  document.body.classList.add("chat-open");
   if (messageInput) messageInput.disabled = false;
   if (sendButton) sendButton.disabled = false;
   renderFriends();
@@ -1973,6 +1976,7 @@ function resetChat() {
 
   if (unsubscribeMessages) { unsubscribeMessages(); unsubscribeMessages = null; }
   if (chatHeader) chatHeader.textContent = "相手を選択してください";
+  document.body.classList.remove("chat-open");
   if (messageInput) messageInput.disabled = true;
   if (sendButton) sendButton.disabled = true;
   if (!isSendingMessage) clearPendingImage();
@@ -3662,11 +3666,24 @@ tabButtons.forEach((button) => {
   });
 });
 
+/* アプリ版（スマホ）：「あそぶ」の中の画面と、ヘッダーに出す画面の名前 */
+const APP_PLAY_VIEWS = ["derby", "yuworld", "economy", "games"];
+const APP_VIEW_TITLES = { chat: "チャット", play: "あそぶ", derby: "ゆうダービー", yuworld: "ゆうワールド", games: "ゆうワールド", economy: "ゆう経済", mart: "ゆうマート", announcements: "お知らせ", mypage: "マイページ", usermanage: "ユーザー管理" };
+const appHeaderTitle = document.getElementById("appHeaderTitle");
+const appPlusMenu = document.getElementById("appPlusMenu");
+document.body.dataset.view = "chat";
+document.querySelectorAll("[data-goto]").forEach((button) => button.addEventListener("click", () => switchView(button.dataset.goto)));
+document.querySelectorAll("[data-proxy]").forEach((button) => button.addEventListener("click", () => document.getElementById(button.dataset.proxy)?.click()));
+document.getElementById("appPlusButton")?.addEventListener("click", () => appPlusMenu?.classList.toggle("hidden"));
+document.getElementById("appPlusFriend")?.addEventListener("click", () => { appPlusMenu?.classList.add("hidden"); document.getElementById("addFriendButton")?.click(); });
+document.getElementById("appPlusGroup")?.addEventListener("click", () => { appPlusMenu?.classList.add("hidden"); document.getElementById("createGroupButton")?.click(); });
+document.getElementById("chatBackButton")?.addEventListener("click", () => resetChat());
+
 function switchView(view) {
   /* 👤 ユーザー管理は管理者だけ（タブも管理者にだけ表示） */
   if (view === "usermanage" && !isAdminUser()) view = "chat";
   currentViewName = view;
-  const views = { chat: chatView, derby: derbyView, economy: economyView, games: gamesView, yuworld: yuworldView, mart: martView, announcements: announcementsView, mypage: mypageView, usermanage: userManageView };
+  const views = { chat: chatView, play: playView, derby: derbyView, economy: economyView, games: gamesView, yuworld: yuworldView, mart: martView, announcements: announcementsView, mypage: mypageView, usermanage: userManageView };
 
   Object.entries(views).forEach(([name, element]) => {
     if (!element) return;
@@ -3675,8 +3692,14 @@ function switchView(view) {
   });
 
   tabButtons.forEach((button) => {
-    button.classList.toggle("active", button.dataset.view === (view === "games" ? "yuworld" : view));   /* ゲームの画面は、ゆうワールドの中 */
+    button.classList.toggle("active", button.dataset.view === (view === "games" ? "yuworld" : view) || (button.dataset.view === "play" && APP_PLAY_VIEWS.includes(view)));   /* ゲームの画面は、ゆうワールドの中。アプリ版では、ダービー・ゆうワールド・ゆう経済は「あそぶ」の中 */
   });
+
+  /* アプリ版（スマホ）の見た目用：いまの画面と、会話を開いているか */
+  document.body.dataset.view = view;
+  if (appHeaderTitle) appHeaderTitle.textContent = APP_VIEW_TITLES[view] || "ゆうChat";
+  document.body.classList.toggle("chat-open", view === "chat" && !!selectedChat);
+  appPlusMenu?.classList.add("hidden");
 
   if (view === "chat") { markSelectedChatAsRead(); renderFriends(); renderGroups(); }
   if (view === "mypage") loadMyPage();
