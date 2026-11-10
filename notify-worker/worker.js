@@ -127,6 +127,11 @@ export async function handleRequest(request, env = {}, deps = createDefaultDeps(
       const result = await handleAdminAction(deps, uid, body);
       return jsonResponse(result, result.status || 200, cors);
     }
+    /* 🎟 招待コード：登録済みの人が自分のコードを作る（create）／新しく登録する人がコードを使う（redeem） */
+    if (new URL(request.url).pathname.replace(/\/+$/, "") === "/invite") {
+      const result = await handleInviteAction(deps, uid, body);
+      return jsonResponse(result, result.status || 200, cors);
+    }
     /* 🗑 アカウントの削除：本人だけ（App Store の審査で、アプリの中から消せることが必要）。管理者の完全削除と同じ処理で、名前を入力して確かめる */
     if (new URL(request.url).pathname.replace(/\/+$/, "") === "/account") {
       const result = body?.action === "deleteMyAccount" ? await selfDeleteAccount(deps, uid, body) : { status: 400, error: "unknown_action" };
@@ -1008,6 +1013,53 @@ async function adminDeleteUser(deps, callerUid, uid, confirmName) {
     await writeAuditLog(deps, { action: "deleteUser", targetUid: uid, targetName: displayName, byUid: callerUid, result: "failed", failedStep: step });
     return { status: 500, error: "delete_failed", step };
   }
+}
+
+/* =========================================================
+   🎟 招待コード（新しく登録する人に必要）
+   ・登録済みの人は、自分のコードを1つ持つ（uid から計算で決まる8文字。作ると inviteCodes/{コード} に書く。使われた回数 uses を数える）
+   ・新しく登録する人は、友達からもらったコードを入力する（redeem）。1つのコードで INVITE_MAX_USES 人まで。1人（uid）につき1回だけ数える
+   ・Firestore のルールには出さない（クライアントからは読み書きできない。Worker だけ）
+   ・登録前のゲストは、コードを作れない（登録済みの書類が要る）。コードを持たない人の登録は、画面側で止める
+========================================================= */
+export const INVITE_MAX_USES = 30;
+const INVITE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+async function inviteCodeFor(deps, uid) {
+  const key = await slotHmacKey(deps.slotSecret);
+  const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`invite:${uid}`)));
+  let out = "";
+  for (let i = 0; i < 8; i++) out += INVITE_ALPHABET[sig[i] % INVITE_ALPHABET.length];
+  return out;
+}
+export async function handleInviteAction(deps, uid, body) {
+  const fs = deps.firestore;
+  if (body?.action === "create") {
+    const me = await transferFindUser(fs, uid, typeof body.username === "string" ? body.username : "");
+    if (!me) return { status: 403, error: "not_a_member" };
+    const code = await inviteCodeFor(deps, uid);
+    await fs.createIfAbsent(`inviteCodes/${code}`, { ownerUid: uid, ownerName: me.name, uses: 0, createdAt: new Date(deps.now()) });
+    return { ok: true, code };
+  }
+  if (body?.action === "redeem") {
+    const code = String(body.code || "").trim().toUpperCase();
+    if (!/^[A-Z2-9]{8}$/.test(code)) return { status: 404, error: "invalid_code" };
+    const already = await fs.get(`inviteRedeems/${uid}`);
+    if (already) return { ok: true, ownerName: already.ownerName || "" };
+    const c = await fs.get(`inviteCodes/${code}`);
+    if (!c) return { status: 404, error: "invalid_code" };
+    if (Number(c.uses || 0) >= INVITE_MAX_USES) return { status: 409, error: "code_full" };
+    const claimed = await fs.createIfAbsent(`inviteRedeems/${uid}`, { code, ownerUid: c.ownerUid || "", ownerName: c.ownerName || "", at: new Date(deps.now()) });
+    if (claimed) {
+      await fs.commit([{
+        update: { name: fs.docName(`inviteCodes/${code}`), fields: {} },
+        updateMask: { fieldPaths: [] },
+        updateTransforms: [{ fieldPath: "uses", increment: restInt(1) }],
+        currentDocument: { exists: true }
+      }]);
+    }
+    return { ok: true, ownerName: c.ownerName || "" };
+  }
+  return { status: 400, error: "unknown_action" };
 }
 
 /* 本人によるアカウント削除：管理者の完全削除と同じ（関連データの削除・Authentication の削除・記録）。名前の入力が一致しなければ削除しない。

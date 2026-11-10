@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>ゆうChatに招待されました</title>
+<meta name="theme-color" content="#ffffff">
+<style>
+  :root { --bg: #f5f7fa; --card: #fff; --fg: #1d2433; --muted: #667089; --line: #e7e9ed; --accent: #2f6bff; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100dvh; display: grid; place-items: center; background: var(--bg); color: var(--fg); font-family: -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
+  .card { width: min(100%, 420px); background: var(--card); border: 1px solid var(--line); border-radius: 24px; padding: 28px 22px; text-align: center; box-shadow: 0 10px 30px rgba(20, 30, 60, .08); }
+  .card img { width: 84px; height: 84px; border-radius: 20px; }
+  h1 { font-size: 22px; margin: 14px 0 6px; }
+  p { color: var(--muted); font-size: 14px; line-height: 1.7; margin: 6px 0; }
+  .code-label { margin-top: 20px; font-size: 12px; font-weight: 700; color: var(--muted); }
+  .code { display: block; margin: 6px 0 10px; padding: 12px; border: 2px dashed var(--accent); border-radius: 14px; font-size: 28px; font-weight: 800; letter-spacing: .18em; color: var(--accent); user-select: all; }
+  .btn { display: block; width: 100%; min-height: 52px; margin-top: 12px; border: 0; border-radius: 14px; font-size: 16px; font-weight: 700; text-decoration: none; line-height: 52px; }
+  .btn.store { background: #111; color: #fff; }
+  .btn.store[aria-disabled="true"] { background: #bbb; pointer-events: none; }
+  .btn.web { background: #fff; color: var(--accent); border: 1px solid var(--accent); }
+  .btn.copy { background: var(--accent); color: #fff; }
+  .small { font-size: 12px; margin-top: 16px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main class="card">
+  <img src="./icons/icon-192.png" alt="ゆうChat" width="84" height="84">
+  <h1>ゆうChatに招待されました</h1>
+  <p>友達とチャットして、ゲームやゆうスロでも遊べるアプリです。</p>
+
+  <div id="codeArea" hidden>
+    <div class="code-label">あなたの招待コード</div>
+    <span id="code" class="code"></span>
+    <button id="copyButton" class="btn copy" type="button">コードをコピー</button>
+    <p class="small">アプリを開いて、はじめての画面で、このコードを入力してください。</p>
+  </div>
+
+  <!-- App Store のページができたら、APP_STORE_URL にリンクを入れる（それまでは「準備中」） -->
+  <a id="storeButton" class="btn store" aria-disabled="true">App Store で入手（準備中）</a>
+  <a id="webButton" class="btn web" href="./">いまはWeb版で始める</a>
+</main>
+<script>
+  /* App Store のページのリンク（公開したら、ここに入れる） */
+  var APP_STORE_URL = "";
+  (function () {
+    var code = "";
+    try { code = (new URLSearchParams(location.search).get("code") || "").toUpperCase(); } catch (e) {}
+    if (!/^[A-Z2-9]{8}$/.test(code)) code = "";
+    var store = document.getElementById("storeButton");
+    if (APP_STORE_URL) { store.href = APP_STORE_URL; store.removeAttribute("aria-disabled"); store.textContent = "App Store で入手"; }
+    if (code) {
+      document.getElementById("codeArea").hidden = false;
+      document.getElementById("code").textContent = code;
+      document.getElementById("webButton").href = "./?invite=" + code;
+      document.getElementById("copyButton").addEventListener("click", function () {
+        var done = function () { document.getElementById("copyButton").textContent = "コピーしました"; };
+        if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(code).then(done, function () {});
+        else { var t = document.createElement("textarea"); t.value = code; document.body.appendChild(t); t.select(); try { document.execCommand("copy"); done(); } catch (e) {} t.remove(); }
+      });
+    }
+  })();
+</script>
+</body>
+</html>
