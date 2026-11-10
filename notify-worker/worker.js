@@ -1134,8 +1134,9 @@ async function adminSupporterSet(deps, callerUid, body) {
   const fs = deps.firestore, targetUid = String(body?.uid || "");
   if (!targetUid || targetUid.length > 128 || targetUid.includes("/")) return { status: 400, error: "invalid_uid" };
   const docs = await findUserDocsByUid(fs, targetUid);
-  if (docs.length !== 1) return { status: 404, error: "user_not_found" };
-  const name = docs[0].id, now = deps.now();
+  if (docs.length < 1) return { status: 404, error: "user_not_found" };
+  /* 同じログイン（uid）に名前が2つ以上ある人（サブアカウント）も、サポーターにできる。サポーターは uid ごと＝どの名前でも同じ。表示用の名前は、指定があればそれ、なければ先頭 */
+  const name = typeof body.name === "string" && docs.some((d) => d.id === body.name) ? body.name : docs[0].id, now = deps.now();
   const cur = await fs.get(`supporters/${targetUid}`);
   if (body.on === true) {
     if (cur && cur.active === true) return { ok: true, name, already: true };

@@ -91,3 +91,13 @@ test("サポーターの候補表：どの種類も、default を含み、id が
   for (const [k, list] of Object.entries(SUPPORTER_PRESETS)) { assert.ok(list.includes("default"), k); assert.equal(new Set(list).size, list.length, k); }
   assert.equal(supporterPrefsClean({ chatBg: "nope" }), null);
 });
+
+test("サポーター：同じログイン（uid）に名前が2つある人も、サポーターにできる（名前の指定があればそれ）", async () => {
+  const w = world();
+  w.fs.docs.set("users/けいと", { uid: "uK", name: "けいと", coins: 1 });
+  w.fs.docs.set("users/毛糸と", { uid: "uK", name: "毛糸と", coins: 1 });
+  const r = await admin(w, { action: "supporterSet", uid: "uK", on: true, name: "毛糸と" });
+  assert.equal(r.ok, true); assert.equal(r.name, "毛糸と");
+  const r2 = await admin(w, { action: "supporterSet", uid: "uK", on: true });
+  assert.equal(r2.already, true);
+});
