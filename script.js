@@ -38,7 +38,7 @@ import {
 } from "./derby-odds.js?v=20261013-fixed-odds";
 
 /* 📨 友達に紹介（ヘッダーの赤いボタン。端末の共有画面でリンクを送る） */
-import { inviteInit } from "./yuinvite.js?v=20261021-invite1";
+import { inviteInit } from "./yuinvite.js?v=20261110-invite2";
 
 import {
   getFirestore, initializeFirestore, collection, addDoc, getDocs, getDoc, doc, setDoc,
@@ -700,17 +700,7 @@ async function resolveAuthState(user) {
       return;
     }
 
-    /* Googleの表示名がまだ誰にも使われていなければ、今まで通りその名前で始める */
-    const suggestedName = (user.displayName || "").trim();
-    if (suggestedName && !validateUsername(suggestedName)) {
-      const snapshot = await getDoc(doc(db, "users", suggestedName));
-      if (seq !== authResolveSeq) return;
-      if (!snapshot.exists()) {
-        await enterAppAs(suggestedName, null, seq);
-        return;
-      }
-    }
-
+    /* 新しく始める人は、名前の画面で招待コードを入れてもらう（Googleの表示名で自動では始めない） */
     showNameScreen(nameScreenOrigin);
   } catch (error) {
     if (seq !== authResolveSeq) return;
@@ -758,10 +748,27 @@ authToLoginButton?.addEventListener("click", () => {
    名前画面
 ========================================================= */
 
+/* 🎟 招待コード：Worker（/invite）を呼ぶ。create＝自分のコード、redeem＝友達のコードを使う */
+async function callInviteApi(action, payload = {}) {
+  if (!currentUser) throw Object.assign(new Error("not_logged_in"), { code: "not_logged_in" });
+  const token = await currentUser.getIdToken();
+  const res = await fetch(NOTIFY_ENDPOINT.replace(/\/notify$/, "/invite"), { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ action, ...payload }) });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || json.ok === false) throw Object.assign(new Error(json.error || `http_${res.status}`), { code: json.error || `http_${res.status}` });
+  return json;
+}
+/* 招待のリンク（?invite=コード）から来た人は、コードを入れておく */
+try {
+  const fromLink = new URLSearchParams(location.search).get("invite");
+  if (fromLink && /^[A-Za-z0-9]{1,8}$/.test(fromLink)) sessionStorage.setItem("yuInviteCode", fromLink.toUpperCase());
+} catch (_) { /* 保存できなくても、手で入れられる */ }
+
 function showNameScreen(origin = "login") {
   nameScreenOrigin = origin;
   showError(nameError, "");
   if (nameInput) nameInput.value = "";
+  const codeInput = document.getElementById("inviteCodeInput");
+  if (codeInput) { try { codeInput.value = sessionStorage.getItem("yuInviteCode") || ""; } catch (_) { codeInput.value = ""; } }
   showAuthScreen(nameScreen);
 }
 
@@ -789,6 +796,18 @@ startChatButton?.addEventListener("click", async () => {
     if (existing.exists() && existing.data().uid !== currentUser.uid) {
       showError(nameError, "その名前はすでに使われています。");
       return;
+    }
+
+    /* 1.5 新しく始める人は、招待コードが必要（もう登録している人が、アカウントを探して入るときは要らない） */
+    if (!existing.exists()) {
+      const code = (document.getElementById("inviteCodeInput")?.value || "").trim().toUpperCase();
+      if (!code) { showError(nameError, "招待コードを入力してください。友達に教えてもらってね。"); return; }
+      try {
+        await callInviteApi("redeem", { code });
+      } catch (error) {
+        showError(nameError, error.code === "invalid_code" ? "招待コードが正しくありません。もう一度確かめてください。" : error.code === "code_full" ? "この招待コードは、使える人数に達しました。別の友達にコードをもらってください。" : "招待コードを確認できませんでした。通信を確かめて、もう一度お試しください。");
+        return;
+      }
     }
 
     /* 2. 保存してアプリへ（保存後の画面表示で起きたエラーは「保存失敗」として扱わない） */
@@ -3866,7 +3885,7 @@ const renderYachtRoom = lazyRoomRenderer(lazyYachtRoom, "renderYachtRoom");
 const renderKeshiRoom = lazyRoomRenderer(lazyKeshiRoom, "renderKeshiRoom");
 
 /* 📨 友達に紹介 */
-inviteInit(document.getElementById("inviteButton"), (title, body) => showAppToast(title, body));
+inviteInit(document.getElementById("inviteButton"), (title, body) => showAppToast(title, body), async () => (await callInviteApi("create", { username })).code);
 
 /* =========================================================
    ログアウト

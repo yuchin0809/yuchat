@@ -6911,3 +6911,13 @@ html:not(.app-mode) .app-only { display: none !important; }
     html.app-mode #mypageView .panel > h2:first-child { display: none; }
     html.app-mode .account-delete-area { display: none; }
 }
+
+
+/* ==================================================
+   アプリ版：通知の案内（バナー・設定のやり方の説明）は出さない。通知は、マイページのボタンで自分でONにする
+================================================== */
+html.app-mode .notify-announcement { display: none !important; }
+html.app-mode #notificationButton:not([data-state="on"]):not([data-state="denied"]) + #notificationStatus { display: none; }
+
+.invite-code-note { margin: 14px 0 6px; font-size: 13px; color: #666; }
+#inviteCodeInput { text-transform: uppercase; letter-spacing: .12em; text-align: center; }
