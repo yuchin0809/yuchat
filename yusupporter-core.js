@@ -178,3 +178,22 @@ export function isFeatureOpen(openAtMs, now = Date.now()) {
   if (!Number.isFinite(at)) return true;
   return now >= (isMeSupporter() ? at : at + EARLY_ACCESS_MS);
 }
+
+/* ---------- 画面のレイアウト（サポーターは、Web版でもアプリ版のレイアウトを試せる。この端末だけの設定） ----------
+   ・"std"＝ふつう（Web版）／"app"＝アプリ版のレイアウト（html に app-mode が付く。幅 700px 以下で、下のタブ5つ・会話の一覧など）
+   ・アプリの中（Capacitor）や確認用の ?app=1 のときは、いつもアプリ版。サポーターでない人が app を選んでいたら、サポーターの情報が読めた時点で戻す */
+const LAYOUT_KEY = "yuLayout";
+export const isNativeApp = () => Boolean(typeof window !== "undefined" && window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+export function getLayoutChoice() { try { return localStorage.getItem(LAYOUT_KEY) === "app" ? "app" : "std"; } catch (_) { return "std"; } }
+export function setLayoutChoice(choice) {
+  try { if (choice === "app") localStorage.setItem(LAYOUT_KEY, "app"); else localStorage.removeItem(LAYOUT_KEY); } catch (_) { /* 保存できなくても、このまま使える */ }
+  applyLayoutClass();
+}
+export function applyLayoutClass() {
+  if (typeof document === "undefined") return;
+  let forced = isNativeApp();
+  try { forced = forced || sessionStorage.getItem("yuApp") === "1"; } catch (_) { /* そのまま */ }
+  const want = forced || (isMeSupporter() && getLayoutChoice() === "app");
+  document.documentElement.classList.toggle("app-mode", want);
+  if (!want && !isMeSupporter() && getLayoutChoice() === "app") { try { localStorage.removeItem(LAYOUT_KEY); } catch (_) { /* そのまま */ } }
+}

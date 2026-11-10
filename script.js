@@ -41,7 +41,7 @@ import {
 import { inviteInit } from "./yuinvite.js?v=20261110-invite2";
 
 /* ⭐ ゆうChat サポーター（有料プラン）：目印・名前の色・吹き出しの色・チャットの背景を付ける小さい部品。設定の画面は、開くときに読み込む（yusupporter.js） */
-import { setSupporterIndex, setMySupporter, getSupporter, isMeSupporter, buildSupporterMark, applyNameStyle, applyBubbleStyle, applyChatBackground } from "./yusupporter-core.js?v=20261110-sup1";
+import { setSupporterIndex, setMySupporter, getSupporter, isMeSupporter, buildSupporterMark, applyNameStyle, applyBubbleStyle, applyChatBackground, applyLayoutClass } from "./yusupporter-core.js?v=20261110-sup3";
 
 import {
   getFirestore, initializeFirestore, collection, addDoc, getDocs, getDoc, doc, setDoc,
@@ -713,7 +713,7 @@ async function resolveAuthState(user) {
 }
 
 function handleSignedOut() {
-  supporterLoadSeq++; supporterLoadedAt = 0; setMySupporter(null); setSupporterIndex({});
+  supporterLoadSeq++; supporterLoadedAt = 0; supporterUnlockQueued = false; setMySupporter(null); setSupporterIndex({});
   authResolveSeq++;
   appSessionSeq++;
   currentUser = null;
@@ -761,7 +761,7 @@ async function callSupporterApi(action, payload = {}) {
   if (!res.ok || json.ok === false) throw Object.assign(new Error(json.error || `http_${res.status}`), { code: json.error || `http_${res.status}` });
   return json;
 }
-let supporterLoadSeq = 0, supporterLoadedAt = 0;
+let supporterLoadSeq = 0, supporterLoadedAt = 0, supporterUnlockQueued = false;
 /* ログイン後と、チャットを開いたとき（10分に1回まで）：全員ぶんの目印の一覧と、自分の状態を読む（Worker が60秒だけメモリに置くので、読み取りはほとんど増えない） */
 async function loadSupporterData(force = false) {
   if (!currentUser || (!force && Date.now() - supporterLoadedAt < 600000)) return;
@@ -772,7 +772,13 @@ async function loadSupporterData(force = false) {
     if (seq !== supporterLoadSeq || !currentUser) return;
     setSupporterIndex(index.byUid);
     setMySupporter(me.supporter);
+    applyLayoutClass();
     refreshSupporterLook();
+    /* サポーターになって、まだ演出を見ていない人には、ログインしたときに1回だけ流す（5秒の演出 → 特典の紹介 → さっそく見てみる／あとで見る） */
+    if (me.supporter && !me.supporter.unlockSeen && !supporterUnlockQueued) {
+      supporterUnlockQueued = true;
+      lazySupporter.load().then((m) => m.playSupporterUnlock()).catch((error) => { supporterUnlockQueued = false; lazyLoadFailed(error); });
+    }
   } catch (error) {
     supporterLoadedAt = 0;
     console.warn("サポーターの情報を読み込めませんでした:", error);
@@ -797,7 +803,12 @@ function decorateSupporterName(el, uid, size = 14) {
   applyNameStyle(span, entry);
   el.append(span, " ", buildSupporterMark(entry, size));
 }
-const lazySupporter = lazyModule("./yusupporter.js?v=20261110-sup1", (m) => m.supporterUiInit({ api: callSupporterApi, esc: escapeHTML, onChange: refreshSupporterLook }));
+const lazySupporter = lazyModule("./yusupporter.js?v=20261110-sup3", (m) => m.supporterUiInit({
+  api: callSupporterApi, esc: escapeHTML, onChange: refreshSupporterLook,
+  /* 通知をまだ決めていない人にだけ、特典の紹介のところで「通知をONにする」を出す（許可の画面を出せるのは、この画面を開いているときだけ） */
+  canAskNotify: () => typeof Notification !== "undefined" && Notification.permission === "default" && !isNotifyOptedIn() && !(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()),
+  askNotify: () => notificationButton?.click()
+}));
 function openSupporterScreen() {
   lazySupporter.load().then((m) => m.openSupporterScreen()).catch((error) => lazyLoadFailed(error));
 }
@@ -3897,7 +3908,7 @@ function lazyCaller(mod, name) {
 const adminCfg = () => ({ callAdmin: (action, payload) => callAdminApi(action, payload), isAdmin: () => isAdminUser(), esc: (v) => escapeHTML(v) });
 
 /* 🎡 ゆうワールド（ゆうスロ）。トークン・ユーザー名・最上位管理者かどうかは呼ばれた時点の状態を使う */
-const lazyYuWorld = lazyModule("./yuworld.js?v=20261110-sup1", (m) => m.initYuWorld({
+const lazyYuWorld = lazyModule("./yuworld.js?v=20261110-sup3", (m) => m.initYuWorld({
   openGame: (type) => openGameFromWorld(type),
   pendingInviteTypes: () => pendingGameInvites.map((invite) => invite.gameType),
   endpoint: NOTIFY_ENDPOINT.replace(/\/notify$/, "/yuslot"),

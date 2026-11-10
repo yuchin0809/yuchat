@@ -98,7 +98,8 @@ function fundLine(f, esc) {
     ${FUND.msg ? `<p class="${FUND.error ? "yec-err" : "yec-ok"}">${esc(FUND.msg)}</p>` : ""}
     <div class="yec-row"><button type="button" class="yec-btn" data-ec="derby-settle" ${FUND.busy ? "disabled" : ""}>ゆうダービー：未精算の馬券を今すぐ精算する</button></div>
     <div class="yec-row"><button type="button" class="yec-btn" data-ec="lottery-repay" ${FUND.busy ? "disabled" : ""}>宝くじ：払われていない賞金を調べて払う（直近の回）</button></div>
-    ${FUND.derby ? `<p class="${FUND.derbyError ? "yec-err" : "yec-ok"}" style="white-space:pre-line">${esc(FUND.derby)}</p>` : ""}`;
+    ${FUND.derby ? `<p class="${FUND.derbyError ? "yec-err" : "yec-ok"}" style="white-space:pre-line">${esc(FUND.derby)}</p>` : ""}
+    ${requestsBlock(esc)}`;
 }
 async function lotteryRepayNow() {
   FUND.busy = true; FUND.derby = ""; FUND.derbyError = false; render();
@@ -127,6 +128,25 @@ async function derbySettleNow() {
   render();
 }
 const FUND = { busy: false, msg: "", error: false };
+/* 💬 サポーターの要望（読んでいないものを新しい順。「読んだ」にすると一覧から消える） */
+const REQ = { list: null, busy: false, err: "" };
+function requestsBlock(esc) {
+  const when = (ms) => { const d = new Date(Number(ms || 0) + 9 * 3600000); return `${d.getUTCMonth() + 1}/${d.getUTCDate()} ${d.getUTCHours()}:${String(d.getUTCMinutes()).padStart(2, "0")}`; };
+  const items = (REQ.list || []).map((r) => `<li class="yec-req"><div><b>${esc(r.name || "だれか")}</b> <small>${when(r.at)}${r.priority ? "・優先" : ""}</small><p style="white-space:pre-wrap;margin:4px 0 0">${esc(r.text)}</p></div><button type="button" class="yec-btn" data-ec="req-done" data-id="${esc(r.id)}" ${REQ.busy ? "disabled" : ""}>読んだ</button></li>`).join("");
+  return `<div class="yec-row"><button type="button" class="yec-btn" data-ec="req-load" ${REQ.busy ? "disabled" : ""}>💬 サポーターの要望を読む</button></div>
+    ${REQ.err ? `<p class="yec-err">${esc(REQ.err)}</p>` : ""}
+    ${REQ.list ? (items ? `<ul style="list-style:none;padding:0;margin:8px 0;display:flex;flex-direction:column;gap:8px">${items}</ul>` : `<p class="yec-note">読んでいない要望は、ありません。</p>`) : ""}`;
+}
+async function reqLoad() {
+  REQ.busy = true; REQ.err = ""; render();
+  try { REQ.list = (await cfg.callAdmin("supporterRequests", {})).requests || []; } catch (error) { console.error("要望の読み込みエラー:", error); REQ.err = "読み込めませんでした。もう一度お試しください。"; }
+  REQ.busy = false; render();
+}
+async function reqDone(id) {
+  REQ.busy = true; REQ.err = ""; render();
+  try { await cfg.callAdmin("supporterRequestDone", { id }); REQ.list = (REQ.list || []).filter((r) => r.id !== id); } catch (error) { console.error("要望の既読エラー:", error); REQ.err = "うまくいきませんでした。もう一度お試しください。"; }
+  REQ.busy = false; render();
+}
 const FUND_SKIP = { done: "今日はもう配りました（1日1回）。", small_pool: "基金が10コイン未満なので、配れません。", no_one: "対象の人（直近3日以内にログインした人）がいないので、配れません。" };
 /* 基金ができる前に集めた分（ゆう税・スリ）を、1 回だけ基金に足す。先に内訳を見せる */
 async function fundBackfill() {
@@ -210,6 +230,8 @@ document.addEventListener("click", (event) => {
   const t = event.target.closest?.("[data-ec]");
   if (!t || !document.getElementById("userManageEconomy")?.contains(t) || S.busy || S.prize.busy) return;
   if (t.dataset.ec === "load") load();
+  else if (t.dataset.ec === "req-load") reqLoad();
+  else if (t.dataset.ec === "req-done") reqDone(t.dataset.id);
   else if (t.dataset.ec === "prize-find") prizeFind();
   else if (t.dataset.ec === "prize-revoke") prizeRevoke(t);
   else if (t.dataset.ec === "limit-reset") limitReset();

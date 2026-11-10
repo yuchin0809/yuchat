@@ -3,10 +3,10 @@
    ・サポーターの人：見た目の設定（名前の色・吹き出しの色・チャットの背景・確変台の見た目と演出）・マイ記録・要望・特典の説明
    ・保存は Worker（/supporter）。ここは画面だけ */
 import {
-  NAME_COLORS, BUBBLE_COLORS, CHAT_BACKGROUNDS, KAKU_THEMES, KAKU_EFFECTS, supporterState, setMySupporter, ensureMarkDefs
-} from "./yusupporter-core.js?v=20261110-sup1";
+  NAME_COLORS, BUBBLE_COLORS, CHAT_BACKGROUNDS, KAKU_THEMES, KAKU_EFFECTS, supporterState, setMySupporter, ensureMarkDefs, getLayoutChoice, setLayoutChoice
+} from "./yusupporter-core.js?v=20261110-sup3";
 
-let cfg = null;          // { api(action, payload), esc, onChange() }
+let cfg = null;          // { api(action, payload), esc, onChange(), canAskNotify(), askNotify() }
 let overlay = null;
 const view = { tab: "look", plan: "year", draft: null, saving: false, msg: "", records: null, recordsAt: 0 };
 
@@ -78,6 +78,13 @@ function pickerHtml(key, table, title, kind) {
   }).join("")}</div></div>`;
 }
 
+/* 画面のレイアウト（この端末だけ。サポーターは、Web版でもアプリ版のレイアウトを試せる） */
+function layoutHtml() {
+  const cur = getLayoutChoice();
+  const chip = (id, label, note) => `<button type="button" class="sup-chip sup-chip-wide ${cur === id ? "on" : ""}" role="radio" aria-checked="${cur === id}" data-layout="${id}"><b>${label}</b><small>${note}</small></button>`;
+  return `<div class="sup-group"><div class="sup-group-title">画面のレイアウト（この端末だけ）</div><div class="sup-chips" role="radiogroup" aria-label="画面のレイアウト">${chip("std", "ふつう", "いまのWeb版と同じ")}${chip("app", "アプリ版", "スマホの幅で、下のタブ5つ・会話の一覧")}</div><p class="sup-note">アプリ版のレイアウトは、スマホの幅の画面で変わります（iPadなど広い画面は、ふつうと同じです）。</p></div>`;
+}
+
 function previewHtml() {
   const d = view.draft || {};
   const bg = CHAT_BACKGROUNDS[d.chatBg]?.css || "";
@@ -94,6 +101,7 @@ function settingsHtml() {
   let body = "";
   if (view.tab === "look") {
     body = `${previewHtml()}
+      ${layoutHtml()}
       ${pickerHtml("nameColor", NAME_COLORS, "名前の色", "name")}
       ${pickerHtml("bubbleColor", BUBBLE_COLORS, "吹き出しの色", "bubble")}
       ${pickerHtml("chatBg", CHAT_BACKGROUNDS, "チャットの背景（自分の画面だけ）", "bg")}
@@ -123,8 +131,9 @@ function settingsHtml() {
 
 /* ---------- 操作 ---------- */
 async function onClick(event) {
-  const t = event.target.closest("[data-sup],[data-pick]");
+  const t = event.target.closest("[data-sup],[data-pick],[data-layout]");
   if (!t) { if (event.target === overlay) close(); return; }
+  if (t.dataset.layout) { setLayoutChoice(t.dataset.layout); view.msg = "✅ レイアウトを切り替えました。"; return keepScroll(render); }
   if (t.dataset.pick) { view.draft = { ...(view.draft || {}), [t.dataset.pick]: t.dataset.id }; view.msg = ""; keepScroll(render); return; }
   const a = t.dataset.sup;
   if (a === "close") return close();
@@ -179,4 +188,65 @@ async function sendRequest() {
     view.msg = error.code === "too_fast" ? "続けて送れません。1分ほどあけて、もう一度お試しください。" : "送れませんでした。しばらくしてから、もう一度お試しください。";
   }
   keepScroll(render);
+}
+
+
+/* =========================================================
+   ✨ サポーターのアンロック演出（約5秒）→ 特典の紹介 →「さっそく見てみる」「あとで見る」
+   ・サポーターになった人が、ログインしたときに1回だけ（見たことは、Worker に残す＝別の端末でも出ない）。アプリで購入した直後にも、同じ演出を流せる（playSupporterUnlock を呼ぶ）
+   ・マークの影が、だんだん光って、最後に「キラン」と光る。光過敏への配慮：動きを減らす設定の人は、短く・光らせない
+========================================================= */
+let unlockEl = null;
+export function playSupporterUnlock() {
+  if (!cfg || unlockEl) return;
+  ensureMarkDefs();
+  const reduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (supporterState.me) supporterState.me.unlockSeen = true;
+  cfg.api("unlockSeen", {}).catch((error) => console.warn("アンロックの記録に失敗:", error));   // 先に記録する（途中で閉じても、もう流れない）
+  unlockEl = document.createElement("div");
+  unlockEl.className = `sup-unlock ${reduced ? "is-reduced" : ""}`;
+  unlockEl.setAttribute("role", "dialog");
+  unlockEl.setAttribute("aria-modal", "true");
+  unlockEl.setAttribute("aria-label", "サポーターをアンロックしました");
+  const hex = "M52 6 L90 28 Q94 30.5 94 35 L94 69 Q94 73.5 90 76 L52 98 Q48 100 44 98 L14 76 Q10 73.5 10 69 L10 35 Q10 30.5 14 28 L48 6 Q50 5 52 6 Z";
+  const y = "M37 32 L52 56 L67 32 M52 56 L52 76";
+  unlockEl.innerHTML = `
+    <button type="button" class="sup-unlock-skip" data-ul="skip">スキップ</button>
+    <div class="sup-unlock-stage">
+      <div class="sup-unlock-flash"></div>
+      <svg class="sup-unlock-mark" viewBox="0 0 104 104" role="img" aria-label="サポーターのマーク">
+        <defs><linearGradient id="yuUlGold" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffe08a"/><stop offset=".55" stop-color="#e8b230"/><stop offset="1" stop-color="#b8820f"/></linearGradient></defs>
+        <g><path d="${hex}" fill="#262d3f" stroke="#3a4560" stroke-width="2"/><path d="${y}" stroke="#3a4560" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" fill="none"/></g>
+        <g class="sup-unlock-gold"><path d="${hex}" fill="url(#yuUlGold)"/><path d="${y}" stroke="#fff" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" fill="none"/></g>
+      </svg>
+      <div class="sup-unlock-star" aria-hidden="true"></div>
+      <h2 class="sup-unlock-title">サポーターを<br>アンロックしました</h2>
+    </div>`;
+  document.body.appendChild(unlockEl);
+  unlockEl.addEventListener("click", onUnlockClick);
+  unlockEl._timer = setTimeout(showUnlockPerks, reduced ? 1800 : 5300);
+}
+function closeUnlock() { if (unlockEl) { clearTimeout(unlockEl._timer); unlockEl.remove(); unlockEl = null; } }
+function onUnlockClick(event) {
+  const t = event.target.closest("[data-ul]");
+  if (!t) return;
+  if (t.dataset.ul === "skip") { clearTimeout(unlockEl._timer); showUnlockPerks(); return; }
+  if (t.dataset.ul === "later") return closeUnlock();
+  if (t.dataset.ul === "now") { closeUnlock(); openSupporterScreen(); return; }
+  if (t.dataset.ul === "notify") { try { cfg.askNotify?.(); } catch (_) { /* そのまま */ } t.disabled = true; t.textContent = "許可の画面で、選んでください"; }
+}
+function showUnlockPerks() {
+  if (!unlockEl) return;
+  clearTimeout(unlockEl._timer);
+  const canAsk = Boolean(cfg.canAskNotify && cfg.canAskNotify());
+  unlockEl.className = "sup-unlock sup-unlock-perks";
+  unlockEl.innerHTML = `
+    <div class="sup-unlock-card">
+      <svg width="64" height="64" viewBox="0 0 104 104" aria-hidden="true"><use href="#yuSupMark"></use></svg>
+      <h2>サポーターの特典</h2>
+      <ul class="sup-perks sup-perks-flat">${PERKS.map(([a, b]) => `<li><span class="sup-check" aria-hidden="true">✓</span><span>${esc(a)}${b ? `<small>${esc(b)}</small>` : ""}</span></li>`).join("")}</ul>
+      ${canAsk ? `<div class="sup-unlock-notify"><p>通知をONにすると、サポーターのお知らせが、ゆうChatを開いていなくても届きます。</p><button type="button" class="sup-cta sup-cta-sub" data-ul="notify">通知をONにする</button></div>` : ""}
+      <button type="button" class="sup-cta" data-ul="now">さっそく見てみる</button>
+      <button type="button" class="sup-later" data-ul="later">あとで見る</button>
+    </div>`;
 }
