@@ -6612,6 +6612,8 @@ html:not(.app-mode) .app-only { display: none !important; }
 }
 .chat-top { display: contents; }
 .app-chat-preview, .app-chat-time { display: none; }
+.account-delete-area { margin: 28px 0 12px; text-align: center; }
+.account-delete-link { border: 0; background: transparent; color: #999; font-size: 12px; text-decoration: underline; }
 .chat-back { display: none; }
 
 @media (max-width: 700px) {
@@ -6907,4 +6909,5 @@ html:not(.app-mode) .app-only { display: none !important; }
     }
     html.app-mode .app-logout { color: #d9423a; }
     html.app-mode #mypageView .panel > h2:first-child { display: none; }
+    html.app-mode .account-delete-area { display: none; }
 }

@@ -127,6 +127,11 @@ export async function handleRequest(request, env = {}, deps = createDefaultDeps(
       const result = await handleAdminAction(deps, uid, body);
       return jsonResponse(result, result.status || 200, cors);
     }
+    /* 🗑 アカウントの削除：本人だけ（App Store の審査で、アプリの中から消せることが必要）。管理者の完全削除と同じ処理で、名前を入力して確かめる */
+    if (new URL(request.url).pathname.replace(/\/+$/, "") === "/account") {
+      const result = body?.action === "deleteMyAccount" ? await selfDeleteAccount(deps, uid, body) : { status: 400, error: "unknown_action" };
+      return jsonResponse(result, result.status || 200, cors);
+    }
     /* 💰 ゆう経済・🏇 ゆうダービー：本人の操作（残高・締切・結果・払い戻しはサーバーで確かめる） */
     if (new URL(request.url).pathname.replace(/\/+$/, "") === "/economy") {
       const result = await handleEconomyAction(deps, uid, body);
@@ -1003,6 +1008,13 @@ async function adminDeleteUser(deps, callerUid, uid, confirmName) {
     await writeAuditLog(deps, { action: "deleteUser", targetUid: uid, targetName: displayName, byUid: callerUid, result: "failed", failedStep: step });
     return { status: 500, error: "delete_failed", step };
   }
+}
+
+/* 本人によるアカウント削除：管理者の完全削除と同じ（関連データの削除・Authentication の削除・記録）。名前の入力が一致しなければ削除しない。
+   未精算の馬券があれば断る（自動精算のあとに、もう一度）。管理者のアカウントは消せない */
+export async function selfDeleteAccount(deps, uid, body) {
+  if (typeof body?.confirmName !== "string" || !body.confirmName) return { status: 400, error: "confirm_mismatch" };
+  return adminDeleteUser(deps, uid, uid, body.confirmName);
 }
 
 /* ----- 新しいお知らせの通知（管理者がアプリでお知らせを作った直後に呼ぶ）。同じお知らせは1回だけ ----- */
