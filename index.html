@@ -12,7 +12,7 @@
     <title>web</title>
 
     <!-- アプリ版（Capacitor）か、確認用の ?app=1 のときだけ、アプリ用の見た目の目印を付ける（Web版は何も変わらない） -->
-    <script>try{var q=new URLSearchParams(location.search);if(q.get("app")==="1")sessionStorage.setItem("yuApp","1");if((window.Capacitor&&window.Capacitor.isNativePlatform&&window.Capacitor.isNativePlatform())||sessionStorage.getItem("yuApp")==="1")document.documentElement.classList.add("app-mode");}catch(e){}</script>
+    <script>try{var q=new URLSearchParams(location.search);if(q.get("app")==="1")sessionStorage.setItem("yuApp","1");if((window.Capacitor&&window.Capacitor.isNativePlatform&&window.Capacitor.isNativePlatform())||sessionStorage.getItem("yuApp")==="1"||localStorage.getItem("yuLayout")==="app")document.documentElement.classList.add("app-mode");}catch(e){}</script>
 
     <meta
         name="theme-color"
@@ -31,7 +31,7 @@
 
     <link
         rel="stylesheet"
-        href="./style.css?v=20261110-sup1"
+        href="./style.css?v=20261110-sup3"
     >
 
     <!-- 起動を早くするため、アプリ本体の読み込みと並べて Firebase の部品と接続先を先に準備する -->
@@ -1716,7 +1716,7 @@
      OFF のとき（とテスト環境）は、data-app-src のアプリ本体を読み込む -->
 <script
     src="./maintenance.js?v=20261009-maint-quota"
-    data-app-src="./script.js?v=20261110-sup2"
+    data-app-src="./script.js?v=20261110-sup3"
 ></script>
 
 

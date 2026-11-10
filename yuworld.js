@@ -22,7 +22,7 @@ import { eraserIcon, keshiLeagueTag } from "./yukeshi-core.js?v=20261106-fair1";
 /* 🌈 確変台のパネル（台の一覧の上）。抽選・先着・通知設定。Worker の kaku* アクションを呼んで表示するだけ */
 import { kakuInit, kakuPanelHtml, kakuBind, kakuMachineInfo, startKaku, stopKaku, refreshKaku } from "./yukaku.js?v=20261027-move2";
 /* ⭐ サポーター：確変台の見た目と当たり演出（自分の画面だけ。当たりやすさ・結果には関わらない） */
-import { applyKakuTheme, playKakuEffect } from "./yusupporter-core.js?v=20261110-sup1";
+import { applyKakuTheme, playKakuEffect } from "./yusupporter-core.js?v=20261110-sup3";
 /* 🏅 会員ランクのカード（台の一覧の上）。ランクの判定・進みは Worker の rankStatus が返す */
 import { rankInit, rankPanelHtml, rankRefresh } from "./yurank.js?v=20261023-rank2";
 /* 🎰 演出の判断（前兆・ステップアップ・連チャン）。画面には触れない */

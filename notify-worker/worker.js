@@ -71,6 +71,8 @@ export default {
     /* 🛠 ゆう経済の1日1回の処理（株価・利息・ゆう税・総資産ランキング）と、総資産ランキングの1時間おきの更新。決まった分以外は Firestore に触れずにすぐ戻る */
     ctx.waitUntil(runEconomyTick(env, event.scheduledTime).catch((error) => console.error("economy tick error", String(error?.message || error).slice(0, 300))));
     /* 🏇 ゆうダービーの精算：自動開催の回（11:30・15:02）のあと、決まった数回の分に、未精算の馬券を全員ぶん精算する（GitHub の定期実行・アプリを開くことに頼らない）。それ以外の分は Firestore に触れずにすぐ戻る */
+    /* ⭐ サポーターへのお知らせ：2026-11-11（水）8:20 に1回だけ、そのときのサポーターの通知をONにしている端末へ。それ以外の分は Firestore に触れずにすぐ戻る */
+    ctx.waitUntil(runSupporterAnnounceTick(env, event.scheduledTime).catch((error) => console.error("supporter announce error", String(error?.message || error).slice(0, 300))));
     ctx.waitUntil(runDerbySettleTick(env, event.scheduledTime).catch((error) => console.error("derby settle error", String(error?.message || error).slice(0, 300))));
     /* 🏦 ゆう基金：毎日 9:15（日本時間）に、スリ・ゆう税でたまったコインを、総資産の少ない人から順に配る。それ以外の分は Firestore に触れずにすぐ戻る */
     ctx.waitUntil(runFundTick(env, event.scheduledTime).catch((error) => console.error("fund tick error", String(error?.message || error).slice(0, 300))));
@@ -554,7 +556,7 @@ export async function handleAdminAction(deps, callerUid, body) {
 
   const action = typeof body?.action === "string" ? body.action : "";
   const uid = typeof body?.uid === "string" ? body.uid : "";
-  const noUidActions = ["listUsers", "notifyAnnouncement", "renameUserRefs", "transferList", "transferApprove", "transferReject", "kakuWinners", "keshiLeagueEnroll", "economyReport", "grantKakuTicket", "bankujiPrize", "bankujiResetLimit", "fundDistribute", "fundBackfill", "derbySettle", "lotteryRepay", "supporterList", "supporterSet"];
+  const noUidActions = ["listUsers", "notifyAnnouncement", "renameUserRefs", "transferList", "transferApprove", "transferReject", "kakuWinners", "keshiLeagueEnroll", "economyReport", "grantKakuTicket", "bankujiPrize", "bankujiResetLimit", "fundDistribute", "fundBackfill", "derbySettle", "lotteryRepay", "supporterList", "supporterSet", "supporterRequests", "supporterRequestDone"];
   if (!noUidActions.includes(action) && !UID_PATTERN.test(uid)) return { status: 400, error: "invalid_uid" };
 
   try {
@@ -581,6 +583,8 @@ export async function handleAdminAction(deps, callerUid, body) {
       case "fundDistribute": return await adminFundDistribute(deps, callerUid);
       case "derbySettle": return await adminDerbySettle(deps, callerUid);
       case "supporterList": return await adminSupporterList(deps);
+      case "supporterRequests": return await adminSupporterRequests(deps);
+      case "supporterRequestDone": return await adminSupporterRequestDone(deps, callerUid, body);
       case "supporterSet": return await adminSupporterSet(deps, callerUid, body);
       case "lotteryRepay": return await adminLotteryRepay(deps, callerUid, body);
       case "fundBackfill": return await adminFundBackfill(deps, callerUid, body);
@@ -1091,7 +1095,7 @@ export async function handleSupporterAction(deps, uid, body) {
   const mine = await fs.get(`supporters/${uid}`);
   const active = Boolean(mine && mine.active === true);
   if (action === "me") {
-    return { ok: true, supporter: active ? { source: mine.source || "admin", since: mine.sinceMs || 0, early: mine.early === true, prefs: { ...SUPPORTER_DEFAULT_PREFS, ...(mine.prefs || {}) } } : null, presets: SUPPORTER_PRESETS };
+    return { ok: true, supporter: active ? { source: mine.source || "admin", since: mine.sinceMs || 0, early: mine.early === true, unlockSeen: Boolean(mine.unlockSeenAt), prefs: { ...SUPPORTER_DEFAULT_PREFS, ...(mine.prefs || {}) } } : null, presets: SUPPORTER_PRESETS };
   }
   if (!active) return { status: 403, error: "not_supporter" };
   if (action === "setPrefs") {
@@ -1101,12 +1105,19 @@ export async function handleSupporterAction(deps, uid, body) {
     await supporterIndexMutate(deps, (byUid) => { byUid[uid] = supporterEntry({ ...mine, prefs }); });
     return { ok: true, prefs };
   }
+  if (action === "unlockSeen") {
+    if (!mine.unlockSeenAt) await fs.set(`supporters/${uid}`, { ...mine, unlockSeenAt: new Date(deps.now()) });
+    return { ok: true };
+  }
   if (action === "request") {
     const text = String(body.text || "").trim();
     if (!text || text.length > 500) return { status: 400, error: "invalid_text" };
     const slot = Math.floor(deps.now() / 60000);
     const created = await fs.createIfAbsent(`featureRequests/${uid}_${slot}`, { uid, name: mine.name || "", text, priority: true, createdAt: new Date(deps.now()) });
-    return created ? { ok: true } : { status: 429, error: "too_fast" };
+    if (!created) return { status: 429, error: "too_fast" };
+    /* 管理者（最上位）に通知：管理者の端末の分だけ（全員の端末は読まない） */
+    sendPushToUids(deps, `request-${uid}_${slot}`, [deps.adminUid], { kind: "request", title: "💬 サポーターの要望", body: truncate(`${mine.name || "だれか"}：${text.replace(/\s+/g, " ")}`, 40), link: "./?open=usermanage", tag: `request-${uid}` }).catch((error) => console.warn("request notify failed", String(error?.message || error).slice(0, 120)));
+    return { ok: true };
   }
   if (action === "records") {
     const me = await transferFindUser(fs, uid, mine.name || "");
@@ -1121,6 +1132,55 @@ export async function handleSupporterAction(deps, uid, body) {
     };
   }
   return { status: 400, error: "unknown_action" };
+}
+
+/* 決まった人（uid）の端末にだけ通知を送る（同じ logId は1回だけ）。全員の端末を読まない（読み取りが増えない） */
+async function sendPushToUids(deps, logId, uids, data) {
+  const fs = deps.firestore;
+  const list = [...new Set((uids || []).filter((u) => typeof u === "string" && u))];
+  if (!list.length) return { skipped: "no_targets" };
+  if (!(await claimBroadcastLog(deps, logId, data.kind || ""))) return { skipped: "duplicate" };
+  const tokens = await getTokensForUids(fs, list);
+  let sent = 0, failed = 0;
+  await Promise.all(tokens.map(async (token) => {
+    try {
+      const outcome = await deps.sendFcm(token, data);
+      if (outcome.ok) { sent++; return; }
+      failed++;
+      if (outcome.invalidToken) await fs.delete(`fcmTokens/${token}`).catch(() => {});
+    } catch { failed++; }
+  }));
+  return { sent, failed, tokens: tokens.length };
+}
+
+/* 管理者：サポーターの要望の一覧（読んでいないものを新しい順）／「読んだ」にする */
+async function adminSupporterRequests(deps) {
+  const docs = await deps.firestore.query("featureRequests", []);
+  const items = docs.filter((d) => d.data.done !== true).map((d) => ({ id: d.id, name: d.data.name || "", text: d.data.text || "", priority: d.data.priority === true, at: tsMillis(d.data.createdAt) || 0 })).sort((a, b) => b.at - a.at).slice(0, 100);
+  return { ok: true, requests: items };
+}
+async function adminSupporterRequestDone(deps, callerUid, body) {
+  const id = String(body?.id || "");
+  if (!/^[A-Za-z0-9_-]{1,160}$/.test(id)) return { status: 400, error: "invalid_id" };
+  const cur = await deps.firestore.get(`featureRequests/${id}`);
+  if (!cur) return { status: 404, error: "not_found" };
+  await deps.firestore.set(`featureRequests/${id}`, { ...cur, done: true, doneAt: new Date(deps.now()), doneBy: callerUid });
+  return { ok: true };
+}
+
+/* ⭐ 2026-11-11（水）8:20 に1回だけ、そのときのサポーターへ通知（通知をONにしている端末だけ。OFFの人には届かない）。8:20〜8:30 の毎分に確かめ、送れたら終わり */
+export const SUPPORTER_ANNOUNCE_MS = Date.UTC(2026, 10, 10, 23, 20, 0);   // 2026-11-11 08:20 JST
+const supporterAnnounceDone = new Set();
+export function resetSupporterAnnounceForTest() { supporterAnnounceDone.clear(); }
+export async function runSupporterAnnounceTick(env = {}, scheduledTime = Date.now(), deps = null) {
+  if (scheduledTime < SUPPORTER_ANNOUNCE_MS || scheduledTime >= SUPPORTER_ANNOUNCE_MS + 10 * 60000) return { skipped: "outside" };
+  if (supporterAnnounceDone.has("1")) return { skipped: "done" };
+  const d = { ...(deps || createDefaultDeps(env)), now: () => scheduledTime };
+  const docs = await d.firestore.query("supporters", [["active", "EQUAL", true]]);
+  const uids = docs.map((x) => x.data.uid || x.id);
+  const out = await sendPushToUids(d, "supporter-announce-2026-11-11", uids, { kind: "supporter", title: "⭐ サポーターをアンロックしました", body: "ゆうChatを開いて、サポーターの特典を見てみよう！", link: "./?open=mypage", tag: "supporter-2026-11-11" });
+  supporterAnnounceDone.add("1");
+  return out;
 }
 
 /* 管理者：サポーターの一覧 */
