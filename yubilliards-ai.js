@@ -1,7 +1,7 @@
 /* 🎱 ビリヤードの CPU（相手）。決まった幾何の計算だけで、狙う球・ポケット・強さを選ぶ（画面には触れない）
    ・当てやすい（切り込みが浅い）・近い・間に球がない、組み合わせを選ぶ。少しだけ、わざとずらして人間らしくする
    ・コインは使わない */
-import { TABLE, POCKETS, HEAD_SPOT, FOOT_SPOT, cueBall, groupOf, canPlace } from "./yubilliards-core.js?v=20261111-bl2";
+import { TABLE, POCKETS, HEAD_SPOT, FOOT_SPOT, cueBall, groupOf, canPlace } from "./yubilliards-core.js?v=20261111-bl3";
 
 const R = TABLE.r;
 
@@ -14,6 +14,7 @@ function distToSeg(px, py, ax, ay, bx, by) {
 /* いま打てる（狙ってよい）球 */
 export function legalTargets(game) {
   const on = game.balls.filter((b) => b.on && b.id > 0);
+  if (game.mode === "nine") { const l = game.balls.filter((b) => b.on && b.id > 0).sort((a, b) => a.id - b.id)[0]; return l ? [l] : []; }
   const g = game.groups[game.turn];
   if (!g) return on.filter((b) => b.id !== 8);
   const mine = on.filter((b) => groupOf(b.id) === g);
@@ -66,7 +67,8 @@ export function chooseShot(game, { rng = Math.random, error = 1 } = {}) {
     else {   // 狙える形がないときは、いちばん近い球に、ふつうの強さで当てる
       const ts = legalTargets(game).sort((a, c) => Math.hypot(a.x - cue.x, a.y - cue.y) - Math.hypot(c.x - cue.x, c.y - cue.y));
       const t = ts[0] || game.balls.find((x) => x.on && x.id > 0);
-      angle = Math.atan2(t.y - cue.y, t.x - cue.x); power = 0.45;
+      const d = Math.hypot(t.x - cue.x, t.y - cue.y);
+      angle = Math.atan2(t.y - cue.y, t.x - cue.x); power = clamp((Math.sqrt(0.05 * d) * 1.2 + 1.5) / 10, 0.3, 0.8);   // 届く強さで（弱すぎて届かない、をなくす）
     }
   }
   angle += gauss(rng) * 0.008 * error;
