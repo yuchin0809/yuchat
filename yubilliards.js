@@ -3,8 +3,8 @@
    ・打ち方：白い球から、指を引っぱって離す（引いた向きの反対へ飛ぶ。長く引くほど強い）。押し・引きも選べる
    ・球の動きは yubilliards-core.js（決まった計算）。CPUは yubilliards-ai.js。通信はしない
    ・ベストの記録（練習）は、この端末だけに残す */
-import { TABLE, POCKETS, POCKET_R, BALL_COLORS, HEAD_SPOT, FOOT_SPOT, groupLeft, lowestBall, groupOf, restore, newGame, shoot, step, isRest, settle, endShot, remaining, isCleared, cueBall, aimLine, canPlace, placeCue } from "./yubilliards-core.js?v=20261111-bl5";
-import { chooseShot, choosePlacement, bestShot } from "./yubilliards-ai.js?v=20261111-bl5";
+import { TABLE, POCKETS, POCKET_R, BALL_COLORS, HEAD_SPOT, FOOT_SPOT, groupLeft, lowestBall, groupOf, restore, newGame, shoot, step, isRest, settle, endShot, remaining, isCleared, cueBall, aimLine, canPlace, placeCue } from "./yubilliards-core.js?v=20261111-bl6";
+import { chooseShot, choosePlacement, bestShot } from "./yubilliards-ai.js?v=20261111-bl6";
 
 const M = 40;                          // 台の木の縁の幅（台の単位）
 const BEST_KEY = "yuBilliardsBest";
@@ -429,18 +429,23 @@ export function renderBilliards({ root, esc = (s) => String(s), onBack, adminNot
     return `${other}の番です`;
   }
   function showStart(html) { const el = $("#blStart"); $("#blStartBox").innerHTML = html; el.classList.toggle("on", !!html); }
+  function startChoices(note) {
+    showStart(`<b>ルールをえらぼう</b><span>コインは使いません（ビリヤードは、ゆうChatサポーター限定です）</span>${note ? `<span style="color:#d9423a;font-weight:700">${note}</span>` : ""}<button type="button" class="bl-btn pri" data-start="eight">8ボール</button><button type="button" class="bl-btn pri" data-start="nine">9ボール</button>`);
+    $("#blStartBox").querySelectorAll("[data-start]").forEach((b) => b.addEventListener("click", () => startGame(b.dataset.start)));
+  }
+  let denied = false;
+  function deny() { denied = true; showStart("<b>⭐ サポーター限定です</b><span>ビリヤードは、ゆうChatサポーターだけが遊べます。マイページの「ゆうChat サポーター」から見られます</span>"); }
   function onlineUpdate(room) {
     online.room = room;
+    if (denied) return;
     const y = room.billiards || null;
     myIdx = (room.memberUids || []).indexOf(online.uid);
     if (!y) {
       srv = null; playedN = -1; phase = "wait";
       const members = Array.isArray(room.members) ? room.members : [];
       if (members.length < 2 || room.status !== "playing") { showStart("<b>相手を待っています…</b><span>友達を招待するか、ほかの人が入るのを待とう</span>"); return; }
-      if (room.ownerUid === online.uid) {
-        showStart('<b>ルールをえらぼう</b><span>コインは使いません</span><button type="button" class="bl-btn pri" data-start="eight">8ボール</button><button type="button" class="bl-btn pri" data-start="nine">9ボール</button>');
-        $("#blStartBox").querySelectorAll("[data-start]").forEach((b) => b.addEventListener("click", () => startGame(b.dataset.start)));
-      } else showStart("<b>ルームを作った人が、ルールを選んでいます…</b>");
+      if (room.ownerUid === online.uid) startChoices("");
+      else showStart("<b>ルームを作った人が、ルールを選んでいます…</b>");
       return;
     }
     myIdx = y.order.indexOf(online.uid);
@@ -453,7 +458,9 @@ export function renderBilliards({ root, esc = (s) => String(s), onBack, adminNot
     try { const r = await online.api("billiardsRoomStart", { roomId: online.room.id, mode: m, rematch: rematchFlag }); offset = (r.serverNowMs || Date.now()) - Date.now(); showStart(""); consume(r.billiards); }
     catch (e) {
       const c = e?.code || e?.message || "エラー";
-      showStart(`<b>始められませんでした</b><span>${esc(c === "supporter_only" ? "ビリヤードは、ゆうChatサポーター限定です" : c === "opponent_not_supporter" ? "相手がサポーターではないため、始められません（ビリヤードはサポーター限定です）" : c === "not_published" ? "ビリヤードは、いま準備中です" : c)}</span>`);
+      const t = c === "supporter_only" ? "ビリヤードは、ゆうChatサポーター限定です" : c === "opponent_not_supporter" ? "相手がサポーターではないため、始められません。サポーターの友達と遊ぼう" : c === "not_published" ? "ビリヤードは、いま準備中です" : `始められませんでした（${c}）`;
+      if (!rematchFlag && online.room.ownerUid === online.uid) startChoices(esc(t)); else showStart(`<b>始められませんでした</b><span>${esc(t)}</span><button type="button" class="bl-btn pri" data-again="1">もう一度ためす</button>`);
+      $("#blStartBox").querySelector("[data-again]")?.addEventListener("click", () => startGame(m, rematchFlag));
     }
   }
   function rematch() { startGame(srv?.mode || "eight", true); }
@@ -640,7 +647,7 @@ export function renderBilliards({ root, esc = (s) => String(s), onBack, adminNot
   if (!ON) reset(); else { hud(); onlineUpdate(online.room); }
   resize();
   setTimeout(resize, 60);   // 画面の並びが落ち着いてから、もう一度大きさを合わせる
-  return ON ? { update: onlineUpdate } : undefined;
+  return ON ? { update: onlineUpdate, deny } : undefined;
 }
 
 /* 🎱 ビリヤードの2人対戦（ゲームルーム）：script.js の renderCurrentGame から、ルームが更新されるたびに呼ばれる。
@@ -650,4 +657,5 @@ export function renderBilliardsRoom(boardEl, room, { api, uid, esc }) {
   if (inst && inst.roomId === room.id && boardEl.firstElementChild && boardEl.firstElementChild.id === "blWrap" && boardEl.isConnected) { inst.update(room); return; }
   const handle = renderBilliards({ root: boardEl, esc, online: { room, api, uid } });
   boardEl.__billiards = { roomId: room.id, update: handle.update };
+  api("config").then((c) => { if (c && c.billiardsAllowed === false) handle.deny(); }).catch(() => { /* 確認できなくても、Worker が断る */ });
 }
