@@ -3932,7 +3932,7 @@ const stopYuWorldView = lazyCaller(lazyYuWorld, "stopYuWorldView");
 
 /* 📸 YuReal（いまは管理者だけ。公開の状態は、ログイン後に Worker に聞く。聞くのは1回だけ） */
 const yurealEndpoint = () => NOTIFY_ENDPOINT.replace(/\/notify$/, "/yureal");
-const lazyYureal = lazyModule("./yureal.js?v=20261111-yr1", (m) => m.initYureal({
+const lazyYureal = lazyModule("./yureal.js?v=20261111-yr2", (m) => m.initYureal({
   endpoint: yurealEndpoint(),
   getToken: () => currentUser.getIdToken(),
   getUsername: () => username

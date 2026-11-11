@@ -98,7 +98,7 @@ test("公開前は、最上位管理者だけ。公開の切り替えは、最�
   assert.equal((await c.act("id0", { action: "config" })).allowed, true);
 });
 
-test("投稿：通知の時刻より前はできない。2分以内はちょうどいい、遅れると「○分遅れ」。1日1回。写真の形と大きさを確かめる", async () => {
+test("投稿：通知の時刻より前はできない。3分以内はちょうどいい、遅れると「○分遅れ」。1日1回。写真の形と大きさを確かめる", async () => {
   const c = setup({ published: true });
   c.state.now = c.at - 1000;
   assert.equal((await c.act("id0", { action: "post", img: JPG })).error, "not_yet");
@@ -109,7 +109,7 @@ test("投稿：通知の時刻より前はできない。2分以内はちょう�
   const ok = await c.act("id0", { action: "post", img: JPG, caption: "ひるごはん" });
   assert.equal(ok.ok, true); assert.equal(ok.lateMin, 0);
   assert.equal((await c.act("id0", { action: "post", img: JPG })).error, "already_posted");
-  c.state.now = c.at + 2 * 60000 + 5 * 60000 + 1;   // 7分すこし後（締切の2分から、5分すこし遅れ）
+  c.state.now = c.at + 3 * 60000 + 5 * 60000 + 1;   // 8分すこし後（締切の3分から、5分すこし遅れ）
   assert.equal((await c.act("id1", { action: "post", img: JPG })).lateMin, 6);
 });
 
@@ -128,19 +128,18 @@ test("見られる範囲：友達だけ。自分が投稿するまで、友達�
   assert.equal((await c.act("id0", { action: "photo", id: `${c.key}_id2` })).error, "not_friend");
 });
 
-test("リアクションとコメント：友達の写真につけられる。同じ絵文字をもう一度押すと外れる。URLは送れない。上限がある", async () => {
+test("リアクション：友達の写真に、絵文字をタップして送れる。同じ絵文字をもう一度押すと外れる。コメントはない", async () => {
   const c = setup({ published: true });
   await c.act("id1", { action: "post", img: JPG }); await c.act("id0", { action: "post", img: JPG });
   const id = `${c.key}_id1`;
   const r1 = await c.act("id0", { action: "react", id, emoji: "❤️" });
   assert.deepEqual(r1.item.reactions, { "❤️": 1 }); assert.equal(r1.item.myReaction, "❤️");
   assert.deepEqual((await c.act("id0", { action: "react", id, emoji: "❤️" })).item.reactions, {});
+  assert.deepEqual((await c.act("id0", { action: "react", id, emoji: "😢" })).item.reactions, { "😢": 1 });
   assert.equal((await c.act("id0", { action: "react", id, emoji: "💩" })).error, "bad_emoji");
-  assert.equal((await c.act("id0", { action: "comment", id, text: "いいね" })).item.comments[0].t, "いいね");
-  assert.equal((await c.act("id0", { action: "comment", id, text: "https://x.y" })).error, "bad_text");
   assert.equal((await c.act("id2", { action: "react", id, emoji: "👍" })).error, "not_friend");
-  for (let i = 0; i < 19; i++) await c.act("id0", { action: "comment", id, text: `c${i}` });
-  assert.equal((await c.act("id0", { action: "comment", id, text: "21" })).error, "full");
+  assert.equal((await c.act("id0", { action: "comment", id, text: "いいね" })).error, "unknown_action", "コメントはなくなった");
+  assert.equal("comments" in (await c.act("id0", { action: "feed" })).items[0], false);
 });
 
 test("消す：自分の投稿は消せる。友達は消せない", async () => {

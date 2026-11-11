@@ -1,10 +1,10 @@
 /* 📸 YuReal（BeReal のような、1日1回の写真）の画面。中身は Worker（/yureal）が決める
-   ・通知（9:00〜15:00 のどこか）から2分以内に撮る。遅れても投稿できる（「○分遅れ」と出る）
+   ・通知（9:00〜15:00 のどこか）から3分以内に撮る。カメラは、内カメラ（自撮り）だけ。写真ライブラリからは選べない。遅れても投稿できる（「○分遅れ」と出る）
    ・友達だけに見える。自分が投稿するまで、友達のきょうの写真は見えない。保存は2日
    ・写真は小さく縮めて送る（200KB以下）。一覧では写真を読まず、見える所に来たときに、1枚ずつ読む（読み取りを減らすため）
    ・いまは管理者だけ（公開の切り替えは管理者のこの画面から） */
 const MAX_SIDE = 720, MAX_LEN = 200000;
-const EMOJIS = ["❤️", "😂", "😮", "👍", "🔥"];
+const EMOJIS = ["❤️", "😂", "😮", "😢", "👍", "🔥"];
 let cfg = null, root = null, st = null, observer = null, timer = 0, stream = null;
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -23,7 +23,6 @@ const STYLE = `
 .yr-img{width:100%;aspect-ratio:3/4;background:#e9ecf1;display:flex;align-items:center;justify-content:center;color:#8a93a8;font-size:13px}.yr-img img{width:100%;height:100%;object-fit:cover;display:block}
 .yr-cap{padding:8px 12px 0;font-size:14px}
 .yr-react{display:flex;gap:6px;padding:8px 12px;flex-wrap:wrap}.yr-react button{border:1px solid #e1e4e8;background:#fff;border-radius:14px;min-height:34px;padding:0 10px;font-size:15px}.yr-react button.on{background:#eef3ff;border-color:#2f6bff}.yr-react small{font-size:12px;margin-left:3px;color:#667089}
-.yr-cm{padding:0 12px 10px;display:flex;flex-direction:column;gap:4px;font-size:13px}.yr-cm form{display:flex;gap:6px}.yr-cm input{flex:1;min-width:0;border:1px solid #d6dbe6;border-radius:10px;padding:6px 10px;font-size:14px}
 .yr-modal{position:fixed;inset:0;z-index:99990;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:12px}
 .yr-modal video,.yr-modal .pv{width:min(100%,420px);aspect-ratio:3/4;object-fit:cover;border-radius:18px;background:#222}
 .yr-modal .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:center}.yr-modal input[type=text]{width:min(100%,420px);border-radius:12px;border:0;padding:10px 12px;font-size:15px}
@@ -39,7 +38,7 @@ async function api(action, body = {}) {
 }
 const nowMs = () => Date.now() + (st?.offset || 0);
 const fmtTime = (ms) => new Date(ms).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
-const errText = (e) => ({ not_yet: "まだ通知の時刻になっていません", already_posted: "きょうは、もう投稿ずみです", bad_image: "写真を送れませんでした（大きすぎるかも）", post_first: "先に自分が投稿しよう", not_friend: "友達だけが見られます", full: "コメントがいっぱいです", bad_text: "その言葉は送れません" }[e?.code] || `できませんでした（${e?.code || "エラー"}）`);
+const errText = (e) => ({ not_yet: "まだ通知の時刻になっていません", already_posted: "きょうは、もう投稿ずみです", bad_image: "写真を送れませんでした（大きすぎるかも）", post_first: "先に自分が投稿しよう", not_friend: "友達だけが見られます" }[e?.code] || `できませんでした（${e?.code || "エラー"}）`);
 
 export function initYureal(c) { cfg = c; }
 export function stopYurealView() { clearInterval(timer); timer = 0; closeCamera(); observer?.disconnect(); observer = null; }
@@ -64,7 +63,7 @@ function nowBox() {
     const left = c.atMs + c.windowMs - nowMs();
     return `<div class="yr-now"><b>📸 YuReal の時間です！</b><span id="yrCount">${left > 0 ? `あと ${Math.floor(left / 60000)}:${String(Math.floor(left / 1000) % 60).padStart(2, "0")}` : `${Math.ceil(-left / 60000)}分遅れ（それでも投稿できます）`}</span><button class="yr-btn pri big" id="yrShoot">📸 いま撮る</button></div>`;
   }
-  return `<div class="yr-now"><b>まだ、きょうの時間ではありません</b><span>通知が来たら、2分以内に撮ろう（9時〜15時のどこか）${c.isAdmin && c.atMs ? `<br>管理者だけ見える：きょうは ${fmtTime(c.atMs)}` : ""}</span></div>`;
+  return `<div class="yr-now"><b>まだ、きょうの時間ではありません</b><span>通知が来たら、3分以内に撮ろう（9時〜15時のどこか）${c.isAdmin && c.atMs ? `<br>管理者だけ見える：きょうは ${fmtTime(c.atMs)}` : ""}</span></div>`;
 }
 function render() {
   if (!root) return;
@@ -74,13 +73,12 @@ function render() {
     ${f ? `<div class="yr-card" id="yrNow">${nowBox()}</div>` : ""}
     ${f && f.hidden ? '<p class="yr-note">友達の投稿があります。自分が投稿すると見られます</p>' : ""}
     ${f ? (f.items.length ? f.items.map(postHtml).join("") : '<p style="text-align:center;color:#8a93a8">まだ投稿がありません</p>') : ""}
-    ${f ? '<p style="text-align:center;color:#8a93a8;font-size:12px">写真は2日で消えます。友達だけに見えます</p>' : ""}</div>`;
+    ${f ? '<p style="text-align:center;color:#8a93a8;font-size:12px">写真は2日で消えます。友達だけに見えます。絵文字をタップするとリアクションが送れます</p>' : ""}</div>`;
   root.querySelector("#yrReload")?.addEventListener("click", refresh);
   root.querySelector("#yrShoot")?.addEventListener("click", () => openCamera(false));
   root.querySelector("#yrTest")?.addEventListener("click", () => openCamera(true));
   root.querySelector("#yrPub")?.addEventListener("click", async () => { if (!confirm(c.published ? "非公開にしますか？" : "全員に公開しますか？（通知も全員に届くようになります）")) return; try { await api("setPublished", { published: !c.published }); } catch (e) { st.error = errText(e); } refresh(); });
   root.querySelectorAll("[data-react]").forEach((b) => b.addEventListener("click", () => act(b.dataset.id, "react", { emoji: b.dataset.react })));
-  root.querySelectorAll("form[data-cm]").forEach((fm) => fm.addEventListener("submit", (ev) => { ev.preventDefault(); const t = fm.querySelector("input").value.trim(); if (t) act(fm.dataset.cm, "comment", { text: t }); }));
   root.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", async () => { if (confirm("この投稿を消しますか？")) { try { await api("deletePost", { id: b.dataset.del }); } catch (e) { st.error = errText(e); } refresh(); } }));
   observePhotos();
 }
@@ -88,8 +86,7 @@ function postHtml(p) {
   const rc = EMOJIS.map((e) => `<button data-react="${e}" data-id="${p.id}" class="${p.myReaction === e ? "on" : ""}">${e}${p.reactions[e] ? `<small>${p.reactions[e]}</small>` : ""}</button>`).join("");
   return `<div class="yr-post"><div class="yr-head"><b>${esc(p.name)}${p.mine ? "（あなた）" : ""}</b>${p.lateMin ? `<span class="yr-late">${p.lateMin}分遅れ</span>` : ""}<small>${fmtTime(p.at)}</small>${p.mine ? `<button class="yr-btn" style="min-height:30px;padding:0 8px" data-del="${p.id}" aria-label="消す">🗑</button>` : ""}</div>
     <div class="yr-img" data-photo="${p.id}">写真を読み込み中…</div>${p.caption ? `<div class="yr-cap">${esc(p.caption)}</div>` : ""}
-    <div class="yr-react">${rc}</div>
-    <div class="yr-cm">${p.comments.map((m) => `<div><b>${esc(m.n)}</b> ${esc(m.t)}</div>`).join("")}<form data-cm="${p.id}"><input maxlength="60" placeholder="コメント" aria-label="コメント"><button class="yr-btn" type="submit">送る</button></form></div></div>`;
+    <div class="yr-react">${rc}</div></div>`;
 }
 async function act(id, action, body) {
   try {
@@ -122,21 +119,18 @@ function tick() {
   if (el && c?.atMs) { const left = c.atMs + c.windowMs - nowMs(); el.textContent = left > 0 ? `あと ${Math.floor(left / 60000)}:${String(Math.floor(left / 1000) % 60).padStart(2, "0")}` : `${Math.ceil(-left / 60000)}分遅れ（それでも投稿できます）`; }
 }
 
-/* ---- カメラ（撮る→確認→ひとこと→投稿）。カメラが使えない端末では、写真を選ぶ ---- */
+/* ---- カメラ（内カメラだけ。撮る→確認→ひとこと→投稿）。写真ライブラリからは選べない ---- */
 function closeCamera() { stream?.getTracks().forEach((t) => t.stop()); stream = null; document.getElementById("yrModal")?.remove(); }
 async function openCamera(test) {
   closeCamera();
   const m = document.createElement("div"); m.className = "yr-modal"; m.id = "yrModal";
-  m.innerHTML = '<video playsinline muted autoplay></video><div class="row"><button class="yr-btn" id="yrClose">やめる</button><button class="yr-shutter" id="yrSnap" aria-label="撮る"></button><button class="yr-btn" id="yrFlip">反転</button><label class="yr-btn" style="display:inline-flex;align-items:center">写真を選ぶ<input type="file" accept="image/*" id="yrFile" hidden></label></div>';
+  m.innerHTML = '<video playsinline muted autoplay style="transform:scaleX(-1)"></video><div class="row"><button class="yr-btn" id="yrClose">やめる</button><button class="yr-shutter" id="yrSnap" aria-label="撮る"></button></div>';
   document.body.appendChild(m);
-  let facing = "environment";
   const video = m.querySelector("video");
-  const start = async () => { stream?.getTracks().forEach((t) => t.stop()); try { stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing, width: { ideal: 1080 } }, audio: false }); video.srcObject = stream; } catch (_) { video.replaceWith(Object.assign(document.createElement("p"), { textContent: "カメラが使えません。「写真を選ぶ」から送れます", style: "color:#fff" })); } };
+  const start = async () => { stream?.getTracks().forEach((t) => t.stop()); try { stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 1080 } }, audio: false }); video.srcObject = stream; } catch (_) { video.replaceWith(Object.assign(document.createElement("p"), { textContent: "内カメラが使えません。カメラの許可を確かめてください", style: "color:#fff" })); } };
   start();
   m.querySelector("#yrClose").addEventListener("click", closeCamera);
-  m.querySelector("#yrFlip").addEventListener("click", () => { facing = facing === "environment" ? "user" : "environment"; start(); });
-  m.querySelector("#yrSnap").addEventListener("click", () => { if (video.videoWidth) review(drawFrom(video, video.videoWidth, video.videoHeight, facing === "user"), test); });
-  m.querySelector("#yrFile").addEventListener("change", (ev) => { const f = ev.target.files?.[0]; if (!f) return; const im = new Image(); im.onload = () => review(drawFrom(im, im.naturalWidth, im.naturalHeight, false), test); im.src = URL.createObjectURL(f); });
+  m.querySelector("#yrSnap").addEventListener("click", () => { if (video.videoWidth) review(drawFrom(video, video.videoWidth, video.videoHeight, true), test); });
 }
 /* 3:4 に切り取って、小さくして、200KB以下の JPEG にする */
 function drawFrom(src, w, h, mirror) {
