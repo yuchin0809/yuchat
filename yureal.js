@@ -22,7 +22,7 @@ const STYLE = `
 .yr-late{background:#eef0f4;color:#667089;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:700}
 .yr-img{width:100%;aspect-ratio:3/4;background:#e9ecf1;display:flex;align-items:center;justify-content:center;color:#8a93a8;font-size:13px}.yr-img img{width:100%;height:100%;object-fit:cover;display:block}
 .yr-cap{padding:8px 12px 0;font-size:14px}
-.yr-react{display:flex;gap:6px;padding:8px 12px;flex-wrap:wrap}.yr-react button{border:1px solid #e1e4e8;background:#fff;border-radius:14px;min-height:34px;padding:0 10px;font-size:15px}.yr-react button.on{background:#eef3ff;border-color:#2f6bff}.yr-react small{font-size:12px;margin-left:3px;color:#667089}
+.yr-react{display:flex;gap:6px;padding:8px 12px;flex-wrap:wrap}.yr-react button{border:1px solid #e1e4e8;background:#fff;border-radius:14px;min-height:34px;padding:0 10px;font-size:15px}.yr-react button.on{background:#eef3ff;border-color:#2f6bff}.yr-react button:disabled:not(.on){opacity:.4}.yr-react small{font-size:12px;margin-left:3px;color:#667089}
 .yr-modal{position:fixed;inset:0;z-index:99990;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:12px}
 .yr-modal video,.yr-modal .pv{width:min(100%,420px);aspect-ratio:3/4;object-fit:cover;border-radius:18px;background:#222}
 .yr-modal .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:center}.yr-modal input[type=text]{width:min(100%,420px);border-radius:12px;border:0;padding:10px 12px;font-size:15px}
@@ -38,7 +38,7 @@ async function api(action, body = {}) {
 }
 const nowMs = () => Date.now() + (st?.offset || 0);
 const fmtTime = (ms) => new Date(ms).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
-const errText = (e) => ({ not_yet: "まだ通知の時刻になっていません", already_posted: "きょうは、もう投稿ずみです", bad_image: "写真を送れませんでした（大きすぎるかも）", post_first: "先に自分が投稿しよう", not_friend: "友達だけが見られます" }[e?.code] || `できませんでした（${e?.code || "エラー"}）`);
+const errText = (e) => ({ not_yet: "まだ通知の時刻になっていません", already_posted: "きょうは、もう投稿ずみです", bad_image: "写真を送れませんでした（大きすぎるかも）", post_first: "先に自分が投稿しよう", already_reacted: "リアクションは1つの投稿に1個までです", not_friend: "友達だけが見られます" }[e?.code] || `できませんでした（${e?.code || "エラー"}）`);
 
 export function initYureal(c) { cfg = c; }
 export function stopYurealView() { clearInterval(timer); timer = 0; closeCamera(); observer?.disconnect(); observer = null; }
@@ -73,7 +73,7 @@ function render() {
     ${f ? `<div class="yr-card" id="yrNow">${nowBox()}</div>` : ""}
     ${f && f.hidden ? '<p class="yr-note">友達の投稿があります。自分が投稿すると見られます</p>' : ""}
     ${f ? (f.items.length ? f.items.map(postHtml).join("") : '<p style="text-align:center;color:#8a93a8">まだ投稿がありません</p>') : ""}
-    ${f ? '<p style="text-align:center;color:#8a93a8;font-size:12px">写真は2日で消えます。友達だけに見えます。絵文字をタップするとリアクションが送れます</p>' : ""}</div>`;
+    ${f ? '<p style="text-align:center;color:#8a93a8;font-size:12px">写真は2日で消えます。友達だけに見えます。絵文字をタップするとリアクションが送れます（1つの投稿に1個だけ）</p>' : ""}</div>`;
   root.querySelector("#yrReload")?.addEventListener("click", refresh);
   root.querySelector("#yrShoot")?.addEventListener("click", () => openCamera(false));
   root.querySelector("#yrTest")?.addEventListener("click", () => openCamera(true));
@@ -83,7 +83,7 @@ function render() {
   observePhotos();
 }
 function postHtml(p) {
-  const rc = EMOJIS.map((e) => `<button data-react="${e}" data-id="${p.id}" class="${p.myReaction === e ? "on" : ""}">${e}${p.reactions[e] ? `<small>${p.reactions[e]}</small>` : ""}</button>`).join("");
+  const rc = EMOJIS.map((e) => `<button data-react="${e}" data-id="${p.id}" class="${p.myReaction === e ? "on" : ""}" ${p.myReaction ? "disabled" : ""}>${e}${p.reactions[e] ? `<small>${p.reactions[e]}</small>` : ""}</button>`).join("");
   return `<div class="yr-post"><div class="yr-head"><b>${esc(p.name)}${p.mine ? "（あなた）" : ""}</b>${p.lateMin ? `<span class="yr-late">${p.lateMin}分遅れ</span>` : ""}<small>${fmtTime(p.at)}</small>${p.mine ? `<button class="yr-btn" style="min-height:30px;padding:0 8px" data-del="${p.id}" aria-label="消す">🗑</button>` : ""}</div>
     <div class="yr-img" data-photo="${p.id}">写真を読み込み中…</div>${p.caption ? `<div class="yr-cap">${esc(p.caption)}</div>` : ""}
     <div class="yr-react">${rc}</div></div>`;
