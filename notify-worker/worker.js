@@ -3329,6 +3329,23 @@ const yurealView = (d, me, id) => {
   for (const [u, e] of Object.entries(d.reactions || {})) { rc[e] = (rc[e] || 0) + 1; if (u === me) mine = e; }
   return { id, uid: d.uid, name: d.name || "", date: d.date, at: d.at, lateMin: d.lateMin || 0, caption: d.caption || "", mine: d.uid === me, reactions: rc, myReaction: mine };
 };
+/* 不適切なことばの自動チェック（YuSnap のひとこと）。一覧は、画面側の yungwords.js と同じ（test/ngwords.test.mjs が同じかを確かめる） */
+// NG-LIST-BEGIN
+const NG_JA = ["死ね", "しねよ", "殺す", "殺せ", "殺して", "ころす", "ころせ", "ころして", "ぶっころ", "自殺しろ", "じさつしろ", "消えろ", "きえろ", "くたばれ", "きちがい", "気違い", "がいじ", "ガイジ", "かたわ", "れいぷ", "強姦", "ごうかん", "ちんこ", "ちんぽ", "まんこ", "うんこまん", "ふぇら", "ぱいずり", "ちょんこ", "にがー"];
+const NG_EN = ["fuck", "fucking", "shit", "bitch", "cunt", "nigger", "nigga", "rape", "rapist", "kys", "kill yourself"];
+// NG-LIST-END
+const NG_EN_RE = new RegExp(`(^|[^a-z])(${NG_EN.map((w) => w.replace(/ /g, "[^a-z]*")).join("|")})([^a-z]|$)`);
+const ngNormalize = (s) => String(s || "").normalize("NFKC").toLowerCase()
+  .replace(/[\u30a1-\u30f6]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x60))
+  .replace(/[\s\u200b・ー\-_.,!?~、。「」『』（）()\[\]*/\\|]+/g, "");
+const NG_JA_NORM = NG_JA.map(ngNormalize);
+export function isNgText(text) {
+  const t = String(text || "");
+  if (!t) return false;
+  const n = ngNormalize(t);
+  return NG_JA_NORM.some((w) => w && n.includes(w)) || NG_EN_RE.test(t.normalize("NFKC").toLowerCase());
+}
+
 export async function handleYurealAction(deps, uid, body) {
   const action = typeof body?.action === "string" ? body.action : "";
   const fs = deps.firestore, now = deps.now();
@@ -3355,6 +3372,7 @@ export async function handleYurealAction(deps, uid, body) {
       if (!/^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(img) || img.length > YUREAL_IMG_MAX) return { status: 400, error: "bad_image" };
       const caption = String(body?.caption || "").trim().slice(0, 40);
       if (/https?:|www\./i.test(caption)) return { status: 400, error: "bad_caption" };
+      if (isNgText(caption)) return { status: 400, error: "ng_word" };
       const at = yurealTimeFor(today), test = admin && body?.test === true;
       if (now < at && !test) return { status: 409, error: "not_yet" };
       const id = `${today}_${uid}`;

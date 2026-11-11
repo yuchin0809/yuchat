@@ -41,6 +41,9 @@ import {
 import { inviteInit } from "./yuinvite.js?v=20261110-invite2";
 
 /* ⭐ ゆうChat サポーター（有料プラン）：目印・名前の色・吹き出しの色・チャットの背景を付ける小さい部品。設定の画面は、開くときに読み込む（yusupporter.js） */
+import { hasNgWord, NG_MESSAGE } from "./yungwords.js?v=20261111-ng2";
+/* iPhone アプリの中か（アプリでは、サポーター（有料）の案内を出さない。App Store の課金（IAP）がまだ無いため） */
+const IN_NATIVE_APP = document.documentElement.classList.contains("native-app");
 import { setSupporterIndex, setMySupporter, getSupporter, isMeSupporter, buildSupporterMark, applyNameStyle, applyBubbleStyle, applyChatBackground, applyLayoutClass } from "./yusupporter-core.js?v=20261110-sup3";
 
 import {
@@ -383,6 +386,7 @@ function validateUsername(name) {
     return "使用できない文字が含まれています。（ひらがな・カタカナ・漢字・英数字・スペース・「_」「-」が使えます）";
   }
   if (/^__.*__$/.test(name)) return "先頭と末尾が「__」の名前は使えません。";
+  if (hasNgWord(name)) return NG_MESSAGE;
   return "";
 }
 
@@ -1904,6 +1908,7 @@ function openGroupCreateModal() {
     const name = modal.querySelector("#groupNameInput")?.value.trim() || "";
     if (!name) { errorEl.textContent = "グループ名を入力してください。"; return; }
     if (name.length > GROUP_NAME_MAX) { errorEl.textContent = `グループ名は${GROUP_NAME_MAX}文字以内にしてください。`; return; }
+    if (hasNgWord(name)) { errorEl.textContent = NG_MESSAGE; return; }
     if (groupActionBusy) return;
     groupActionBusy = true;
     event.currentTarget.disabled = true;
@@ -2942,6 +2947,7 @@ async function sendMessage() {
     if (pendingImage?.status === "error") renderImagePreview();
     return;
   }
+  if (text && hasNgWord(text)) { alert(NG_MESSAGE); return; }   // 暴言などは送れない（入力は消さない）
 
   if (image && typeof navigator !== "undefined" && navigator.onLine === false) {
     sendingImage.error = "通信できませんでした。電波の良い場所で、もう一度送信してください。";
@@ -4067,7 +4073,7 @@ const stopYuWorldView = lazyCaller(lazyYuWorld, "stopYuWorldView");
 
 /* 📸 YuReal（いまは管理者だけ。公開の状態は、ログイン後に Worker に聞く。聞くのは1回だけ） */
 const yurealEndpoint = () => NOTIFY_ENDPOINT.replace(/\/notify$/, "/yureal");
-const lazyYureal = lazyModule("./yureal.js?v=20261111-sn2", (m) => m.initYureal({
+const lazyYureal = lazyModule("./yureal.js?v=20261111-sn3", (m) => m.initYureal({
   endpoint: yurealEndpoint(),
   reportEndpoint: NOTIFY_ENDPOINT.replace(/\/notify$/, "/friend"),
   getToken: () => currentUser.getIdToken(),
@@ -4125,7 +4131,7 @@ const economyAdminReset = lazyCaller(lazyEconomyAdmin, "economyAdminReset");
 /* 🎲 ヨット / 🥊 消しバトの部屋の描画：読み込み前は準備中の表示を出し、読み込めたらもう一度描く */
 const lazyYachtRoom = lazyModule("./yuyacht.js?v=20261026-yacht6");
 const lazyKeshiRoom = lazyModule("./yukeshi-room.js?v=20261106-fair1");
-const lazyBilliardsRoom = lazyModule("./yubilliards.js?v=20261111-bl7");
+const lazyBilliardsRoom = lazyModule("./yubilliards.js?v=20261111-bl8");
 function lazyRoomRenderer(mod, name) {
   return (boardEl, room, c) => {
     const m = mod.get();
@@ -8077,7 +8083,7 @@ createGameRoomButton?.addEventListener("click", async () => {
   const gameName = getGameTypeName(type);
   if (type === "billiards") {   // 公開前は、最上位管理者だけがルームを作れる
     const cfg = await callYuslotApi("config").catch(() => null);
-    if (!cfg || !cfg.billiardsAllowed) return alert(cfg && cfg.billiardsPublished ? "ビリヤードは、ゆうChatサポーター限定です。" : "ビリヤードは、いま準備中です。");
+    if (!cfg || !cfg.billiardsAllowed) return alert(cfg && cfg.billiardsPublished && !IN_NATIVE_APP ? "ビリヤードは、ゆうChatサポーター限定です。" : "ビリヤードは、いま準備中です。");
   }
   /* 自分はもう抜けているのに残っている、自分が作ったルームは、先に閉じる（作成者が抜けたルームは、本来は残らない） */
   await Promise.all(latestGameRooms.filter((room) => isMyOrphanRoom(room, type)).map((room) => deleteDoc(doc(db, "gameRooms", room.id)).catch((error) => console.error("残っていたルームの片づけエラー:", error))));
@@ -8155,7 +8161,7 @@ async function joinGameRoom(room) {
   if (!currentUser || !username || !room?.id) return false;
   if (room.gameType === "billiards") {   // ビリヤードは、ゆうChatサポーター限定（サポーターでない人は、入る前に断る）
     const cfg = await callYuslotApi("config").catch(() => null);
-    if (!cfg || !cfg.billiardsAllowed) { alert(cfg && cfg.billiardsPublished ? "ビリヤードは、ゆうChatサポーター限定です。" : "ビリヤードは、いま準備中です。"); return false; }
+    if (!cfg || !cfg.billiardsAllowed) { alert(cfg && cfg.billiardsPublished && !IN_NATIVE_APP ? "ビリヤードは、ゆうChatサポーター限定です。" : "ビリヤードは、いま準備中です。"); return false; }
   }
 
   try {

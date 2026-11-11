@@ -6,6 +6,7 @@
 import { TABLE, POCKETS, POCKET_R, BALL_COLORS, HEAD_SPOT, FOOT_SPOT, groupLeft, lowestBall, groupOf, restore, newGame, shoot, step, isRest, settle, endShot, remaining, isCleared, cueBall, aimLine, canPlace, placeCue } from "./yubilliards-core.js?v=20261111-bl7";
 import { chooseShot, choosePlacement, bestShot } from "./yubilliards-ai.js?v=20261111-bl7";
 
+const IN_APP = document.documentElement.classList.contains("native-app");   // iPhone アプリでは、サポーター（有料）の案内を出さない
 const M = 40;                          // 台の木の縁の幅（台の単位）
 const BEST_KEY = "yuBilliardsBest";
 const REC_KEY = "yuBilliardsRec";
@@ -430,11 +431,11 @@ export function renderBilliards({ root, esc = (s) => String(s), onBack, adminNot
   }
   function showStart(html) { const el = $("#blStart"); $("#blStartBox").innerHTML = html; el.classList.toggle("on", !!html); }
   function startChoices(note) {
-    showStart(`<b>ルールをえらぼう</b><span>コインは使いません（ビリヤードは、ゆうChatサポーター限定です）</span>${note ? `<span style="color:#d9423a;font-weight:700">${note}</span>` : ""}<button type="button" class="bl-btn pri" data-start="eight">8ボール</button><button type="button" class="bl-btn pri" data-start="nine">9ボール</button>`);
+    showStart(`<b>ルールをえらぼう</b><span>コインは使いません${IN_APP ? "" : "（ビリヤードは、ゆうChatサポーター限定です）"}</span>${note ? `<span style="color:#d9423a;font-weight:700">${note}</span>` : ""}<button type="button" class="bl-btn pri" data-start="eight">8ボール</button><button type="button" class="bl-btn pri" data-start="nine">9ボール</button>`);
     $("#blStartBox").querySelectorAll("[data-start]").forEach((b) => b.addEventListener("click", () => startGame(b.dataset.start)));
   }
   let denied = false;
-  function deny() { denied = true; showStart("<b>⭐ サポーター限定です</b><span>ビリヤードは、ゆうChatサポーターだけが遊べます。マイページの「ゆうChat サポーター」から見られます</span>"); }
+  function deny() { denied = true; showStart(IN_APP ? "<b>いま準備中です</b><span>ビリヤードは、もうすぐ遊べるようになります</span>" : "<b>⭐ サポーター限定です</b><span>ビリヤードは、ゆうChatサポーターだけが遊べます。マイページの「ゆうChat サポーター」から見られます</span>"); }
   function onlineUpdate(room) {
     online.room = room;
     if (denied) return;
@@ -458,7 +459,7 @@ export function renderBilliards({ root, esc = (s) => String(s), onBack, adminNot
     try { const r = await online.api("billiardsRoomStart", { roomId: online.room.id, mode: m, rematch: rematchFlag }); offset = (r.serverNowMs || Date.now()) - Date.now(); showStart(""); consume(r.billiards); }
     catch (e) {
       const c = e?.code || e?.message || "エラー";
-      const t = c === "supporter_only" ? "ビリヤードは、ゆうChatサポーター限定です" : c === "opponent_not_supporter" ? "相手がサポーターではないため、始められません。サポーターの友達と遊ぼう" : c === "not_published" ? "ビリヤードは、いま準備中です" : `始められませんでした（${c}）`;
+      const t = c === "supporter_only" ? (IN_APP ? "ビリヤードは、いま準備中です" : "ビリヤードは、ゆうChatサポーター限定です") : c === "opponent_not_supporter" ? (IN_APP ? "いまは、この相手とは始められません" : "相手がサポーターではないため、始められません。サポーターの友達と遊ぼう") : c === "not_published" ? "ビリヤードは、いま準備中です" : `始められませんでした（${c}）`;
       if (!rematchFlag && online.room.ownerUid === online.uid) startChoices(esc(t)); else showStart(`<b>始められませんでした</b><span>${esc(t)}</span><button type="button" class="bl-btn pri" data-again="1">もう一度ためす</button>`);
       $("#blStartBox").querySelector("[data-again]")?.addEventListener("click", () => startGame(m, rematchFlag));
     }
