@@ -3,6 +3,7 @@
    ・友達だけに見える。自分が投稿するまで、友達のきょうの写真は見えない。保存は2日
    ・写真は小さく縮めて送る（200KB以下）。一覧では写真を読まず、見える所に来たときに、1枚ずつ読む（読み取りを減らすため）
    ・いまは管理者だけ（公開の切り替えは管理者のこの画面から） */
+import { hasNgWord, NG_MESSAGE } from "./yungwords.js?v=20261111-ng2";
 const MAX_SIDE = 720, MAX_LEN = 200000;
 const EMOJIS = ["❤️", "😂", "😮", "😢", "👍", "🔥"];
 let cfg = null, root = null, st = null, observer = null, timer = 0, stream = null;
@@ -38,7 +39,7 @@ async function api(action, body = {}) {
 }
 const nowMs = () => Date.now() + (st?.offset || 0);
 const fmtTime = (ms) => new Date(ms).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
-const errText = (e) => ({ not_yet: "まだ通知の時刻になっていません", already_posted: "きょうは、もう投稿ずみです", bad_image: "写真を送れませんでした（大きすぎるかも）", post_first: "先に自分が投稿しよう", already_reacted: "リアクションは1つの投稿に1個までです", not_friend: "友達だけが見られます" }[e?.code] || `できませんでした（${e?.code || "エラー"}）`);
+const errText = (e) => ({ not_yet: "まだ通知の時刻になっていません", already_posted: "きょうは、もう投稿ずみです", bad_image: "写真を送れませんでした（大きすぎるかも）", post_first: "先に自分が投稿しよう", already_reacted: "リアクションは1つの投稿に1個までです", not_friend: "友達だけが見られます", ng_word: "使えないことばが含まれています。ひとことを書き直してください" }[e?.code] || `できませんでした（${e?.code || "エラー"}）`);
 
 export function initYureal(c) { cfg = c; }
 export function stopYurealView() { clearInterval(timer); timer = 0; closeCamera(); observer?.disconnect(); observer = null; }
@@ -162,6 +163,7 @@ function review(dataUrl, test) {
   m.innerHTML = `<img class="pv" src="${dataUrl}" alt=""><input type="text" id="yrCap" maxlength="40" placeholder="ひとこと（なくてもOK）"><div class="row"><button class="yr-btn" id="yrRe">撮り直す</button><button class="yr-btn pri" style="background:#2f6bff;border-color:#2f6bff" id="yrSend">投稿する</button></div><p id="yrMsg" style="color:#fff;margin:0;font-size:13px"></p>`;
   m.querySelector("#yrRe").addEventListener("click", () => openCamera(test));
   m.querySelector("#yrSend").addEventListener("click", async (ev) => {
+    if (hasNgWord(m.querySelector("#yrCap").value)) { m.querySelector("#yrMsg").textContent = NG_MESSAGE; return; }
     ev.currentTarget.disabled = true; m.querySelector("#yrMsg").textContent = "送っています…";
     try { await api("post", { img: dataUrl, caption: m.querySelector("#yrCap").value, ...(test ? { test: true } : {}) }); closeCamera(); photoCache.clear(); await refresh(); }
     catch (e) { m.querySelector("#yrMsg").textContent = errText(e); ev.currentTarget.disabled = false; }
