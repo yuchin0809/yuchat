@@ -3,8 +3,8 @@
    ・打ち方：白い球から、指を引っぱって離す（引いた向きの反対へ飛ぶ。長く引くほど強い）。押し・引きも選べる
    ・球の動きは yubilliards-core.js（決まった計算）。CPUは yubilliards-ai.js。通信はしない
    ・ベストの記録（練習）は、この端末だけに残す */
-import { TABLE, POCKETS, POCKET_R, BALL_COLORS, HEAD_SPOT, FOOT_SPOT, groupLeft, lowestBall, groupOf, newGame, shoot, step, isRest, settle, endShot, remaining, isCleared, cueBall, aimLine, canPlace, placeCue } from "./yubilliards-core.js?v=20261111-bl3";
-import { chooseShot, choosePlacement, bestShot } from "./yubilliards-ai.js?v=20261111-bl3";
+import { TABLE, POCKETS, POCKET_R, BALL_COLORS, HEAD_SPOT, FOOT_SPOT, groupLeft, lowestBall, groupOf, restore, newGame, shoot, step, isRest, settle, endShot, remaining, isCleared, cueBall, aimLine, canPlace, placeCue } from "./yubilliards-core.js?v=20261111-bl4";
+import { chooseShot, choosePlacement, bestShot } from "./yubilliards-ai.js?v=20261111-bl4";
 
 const M = 40;                          // 台の木の縁の幅（台の単位）
 const BEST_KEY = "yuBilliardsBest";
@@ -91,23 +91,24 @@ function blip(freq, dur, gain, type = "triangle") {
 }
 
 /* root：描き込む先の要素。esc：文字の安全化。onBack：もどる。adminNote：管理者だけに見せている間の説明 */
-export function renderBilliards({ root, esc = (s) => String(s), onBack, adminNote = "" }) {
+export function renderBilliards({ root, esc = (s) => String(s), onBack, adminNote = "", online = null, openRooms = null }) {
   stopBilliards();
   ensureStyle();
-  document.documentElement.classList.add("bl-lock"); document.body.classList.add("bl-lock");   // 引っぱるときに、画面がスクロールしないように固定する
+  const ON = !!online;                   // ルーム対戦（人と人）。球の動きの結果は Worker が決める
+  if (!ON) { document.documentElement.classList.add("bl-lock"); document.body.classList.add("bl-lock"); }   // 引っぱるときに、画面がスクロールしないように固定する
   root.innerHTML = `<div class="bl-wrap" id="blWrap">
-    <div class="bl-top"><button type="button" class="bl-btn" id="blBack" aria-label="もどる">‹</button><div class="bl-modes"><button type="button" class="bl-btn on" data-mode="eight">8ボール</button><button type="button" class="bl-btn" data-mode="nine">9ボール</button><button type="button" class="bl-btn" data-mode="practice">練習</button></div><button type="button" class="bl-btn" id="blSound" aria-label="音">🔊</button><button type="button" class="bl-btn" id="blReset" aria-label="はじめから">↺</button></div>
+    <div class="bl-top">${ON ? `<div class="bl-modes"><b id="blTitle" style="padding:8px 4px">🎱 ビリヤード対戦</b></div><button type="button" class="bl-btn" id="blSound" aria-label="音">🔊</button>` : `<button type="button" class="bl-btn" id="blBack" aria-label="もどる">‹</button><div class="bl-modes"><button type="button" class="bl-btn on" data-mode="eight">8ボール</button><button type="button" class="bl-btn" data-mode="nine">9ボール</button><button type="button" class="bl-btn" data-mode="practice">練習</button></div><button type="button" class="bl-btn" id="blSound" aria-label="音">🔊</button><button type="button" class="bl-btn" id="blReset" aria-label="はじめから">↺</button>`}</div>
     ${adminNote ? `<p class="bl-note">${esc(adminNote)}</p>` : ""}
-    <div class="bl-lv" id="blLv"><span>CPU</span><button type="button" class="bl-btn" data-level="easy">かんたん</button><button type="button" class="bl-btn on" data-level="normal">ふつう</button><button type="button" class="bl-btn" data-level="hard">つよい</button></div>
+    <div class="bl-lv" id="blLv"${ON ? ' style="display:none"' : ""}><span>CPU</span><button type="button" class="bl-btn" data-level="easy">かんたん</button><button type="button" class="bl-btn on" data-level="normal">ふつう</button><button type="button" class="bl-btn" data-level="hard">つよい</button></div>
     <div class="bl-hud" id="blHud"></div>
     <div class="bl-tray" id="blTray"></div>
     <p class="bl-msg" id="blMsg"></p>
-    <div class="bl-stage" id="blStage"><canvas id="blCanvas" aria-label="ビリヤード台"></canvas><div class="bl-over" id="blOver"><div><b id="blOverTitle"></b><span id="blOverText"></span><button type="button" class="bl-btn pri" id="blAgain">もう一度</button></div></div></div>
+    <div class="bl-stage" id="blStage"><canvas id="blCanvas" aria-label="ビリヤード台"></canvas><div class="bl-over" id="blStart"><div id="blStartBox"></div></div><div class="bl-over" id="blOver"><div><b id="blOverTitle"></b><span id="blOverText"></span><button type="button" class="bl-btn pri" id="blAgain">もう一度</button></div></div></div>
     <div class="bl-power" aria-hidden="true"><i id="blPower"></i></div>
     <div class="bl-ctl">
       <canvas class="bl-eng" id="blEng" width="152" height="152" aria-label="手球を突く位置（上＝押し、下＝引き、左右＝ひねり）"></canvas>
       <div class="col">
-        <div class="row"><button type="button" class="bl-btn on" data-aim="pull">引っぱって打つ</button><button type="button" class="bl-btn" data-aim="tap">タップで狙う</button><button type="button" class="bl-btn" id="blHint">💡ヒント</button></div>
+        <div class="row"><button type="button" class="bl-btn on" data-aim="pull">引っぱって打つ</button><button type="button" class="bl-btn" data-aim="tap">タップで狙う</button>${ON ? "" : '<button type="button" class="bl-btn" id="blHint">💡ヒント</button>'}${!ON && openRooms ? '<button type="button" class="bl-btn pri" id="blRoomBtn">👥 友達と対戦</button>' : ""}</div>
         <div class="row" id="blTapRow" style="display:none"><button type="button" class="bl-btn" id="blL">◀</button><button type="button" class="bl-btn" id="blR">▶</button><input type="range" id="blPow" min="8" max="100" value="55" aria-label="強さ"><button type="button" class="bl-btn pri" id="blFire">打つ</button></div>
         <small id="blTip">白い球から指を引っぱって離すと打てます。左の丸で、球を突く位置（押し・引き・ひねり）を選べます</small>
       </div>
@@ -118,6 +119,8 @@ export function renderBilliards({ root, esc = (s) => String(s), onBack, adminNot
   const canvas = $("#blCanvas"), ctx = canvas.getContext("2d");
   const stage = $("#blStage");
   let mode = "eight", game = newGame("eight");
+  let srv = null, offset = 0, playedN = -1, myIdx = -1, pendingY = null, placedAt = null, timerId = 0, timeoutKey = "";
+  const seat = () => (ON ? myIdx : 0);
   let phase = "aim";                     // aim（打つ前）／anim（キューを引いて打つ）／moving（球が動いている）／cpu（相手の番）／over
   let aim = null, muted = false, level = "normal", aimMode = "pull";
   let eng = { x: 0, y: 0 };               // 手球を突く位置（−1〜1。上＝押し、下＝引き、右＝右ひねり）
@@ -159,6 +162,7 @@ export function renderBilliards({ root, esc = (s) => String(s), onBack, adminNot
   /* ---- 表示 ---- */
   function setMsg(t, foul = false) { const el = $("#blMsg"); el.textContent = t; el.classList.toggle("foul", foul); }
   function recText() {
+    if (ON) return onlineInfo();
     if (mode === "practice") return "";
     const v = readRec()[`${mode}-${level}`] || [0, 0];
     return `戦績（${MODE_NAME[mode]}・${LEVEL_NAME[level]}）：${v[0]}勝 ${v[1]}敗`;
@@ -167,6 +171,7 @@ export function renderBilliards({ root, esc = (s) => String(s), onBack, adminNot
     const el = $("#blTray");
     el.innerHTML = mode === "practice" ? "" : game.pocketed.filter((id) => id > 0).map((id) => `<i style="background:${id > 8 ? `linear-gradient(${BALL_COLORS[id]} 0 30%,#fff 30% 70%,${BALL_COLORS[id]} 70%)` : BALL_COLORS[id]};${id > 8 ? "color:#1d2433" : ""}">${id}</i>`).join("");
   }
+  const nameOf = (p) => (ON ? (p === myIdx ? "あなた" : esc(srv?.names?.[p] || "相手")) : p === 0 ? "あなた" : "CPU");
   function hud() {
     const el = $("#blHud");
     $("#blRec").textContent = recText();
@@ -179,12 +184,12 @@ export function renderBilliards({ root, esc = (s) => String(s), onBack, adminNot
     const turn = (p) => (game.turn === p && !game.over ? "turn" : "");
     if (mode === "nine") {
       const low = lowestBall(game);
-      el.innerHTML = `<div class="${turn(0)}"><span>あなた</span><b>${game.turn === 0 ? "打つ番" : "待ち"}</b></div><div class="${turn(1)}"><span>CPU</span><b>${game.turn === 1 ? "打つ番" : "待ち"}</b></div><div><span>次に当てる球</span><b>${low ? low.id + "番" : "－"}</b></div>`;
+      el.innerHTML = `<div class="${turn(0)}"><span>${nameOf(0)}</span><b>${game.turn === 0 ? "打つ番" : "待ち"}</b></div><div class="${turn(1)}"><span>${nameOf(1)}</span><b>${game.turn === 1 ? "打つ番" : "待ち"}</b></div><div><span>次に当てる球</span><b>${low ? low.id + "番" : "－"}</b></div>`;
       return;
     }
     const lab = (g) => (g === "solid" ? "ソリッド（無地）" : g === "stripe" ? "ストライプ（しま）" : "グループ未定");
     const left = (p) => { const g = game.groups[p]; if (!g) return "－"; const n = groupLeft(game, g); return n === 0 ? "8番" : `残り${n}`; };
-    el.innerHTML = [0, 1].map((p) => `<div class="${turn(p)}"><span>${p === 0 ? "あなた" : "CPU"}・${esc(lab(game.groups[p]))}</span><b>${left(p)}</b></div>`).join("");
+    el.innerHTML = [0, 1].map((p) => `<div class="${turn(p)}"><span>${nameOf(p)}・${esc(lab(game.groups[p]))}</span><b>${left(p)}</b></div>`).join("");
   }
   function setMode(m) {
     mode = m; root.querySelectorAll("[data-mode]").forEach((b) => b.classList.toggle("on", b.dataset.mode === m));
@@ -193,7 +198,7 @@ export function renderBilliards({ root, esc = (s) => String(s), onBack, adminNot
   function reset() {
     timers.splice(0).forEach(clearTimeout);
     game = newGame(mode); aim = null; anim = null; pulling = false; dragCue = false; phase = "aim"; roll.clear(); drops.length = 0;
-    $("#blLv").style.display = mode === "practice" ? "none" : "";
+    if (!ON) $("#blLv").style.display = mode === "practice" ? "none" : "";
     $("#blOver").classList.remove("on"); $("#blPower").style.width = "0";
     setMsg(mode === "practice" ? "15個の球を、少ない打数で全部落とそう" : "あなたのブレイク（最初の一発）です。強く打って、球を散らそう");
     hud(); draw(); setTimeout(resize, 0);
@@ -291,7 +296,7 @@ export function renderBilliards({ root, esc = (s) => String(s), onBack, adminNot
     }
     for (const b of game.balls) if (b.on && b.id !== 0) drawBall(b);
     if (cue.on) {
-      if (game.inHand && phase === "aim" && game.turn === 0) { ctx.globalAlpha = 0.85; drawBall(cue); ctx.globalAlpha = 1; ctx.strokeStyle = "#ffe27a"; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.arc(cue.x, cue.y, TABLE.r + 5, 0, Math.PI * 2); ctx.stroke(); }
+      if (game.inHand && phase === "aim" && game.turn === seat()) { ctx.globalAlpha = 0.85; drawBall(cue); ctx.globalAlpha = 1; ctx.strokeStyle = "#ffe27a"; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.arc(cue.x, cue.y, TABLE.r + 5, 0, Math.PI * 2); ctx.stroke(); }
       else drawBall(cue);
     }
     for (const d of drops) { const k = Math.min(1, d.t), sc = 1 - k * 0.7; ctx.save(); ctx.globalAlpha = 1 - k * 0.6; ctx.translate(d.x + (d.px - d.x) * k, d.y + (d.py - d.y) * k); ctx.scale(sc, sc); drawBall({ id: d.id, x: 0, y: 0 }); ctx.restore(); }
@@ -327,6 +332,7 @@ export function renderBilliards({ root, esc = (s) => String(s), onBack, adminNot
   }
   function frame(ts) {
     raf = 0;
+    if (!root.isConnected) { stopBilliards(); return; }
     const dt = Math.min(0.1, (ts - (lastTs || ts)) / 1000); lastTs = ts;
     let again = false;
     if (drops.length) { for (const d of drops) d.t += dt / 0.3; for (let i = drops.length - 1; i >= 0; i--) if (drops[i].t >= 1) drops.splice(i, 1); again = true; }
@@ -339,7 +345,7 @@ export function renderBilliards({ root, esc = (s) => String(s), onBack, adminNot
       let n = 0;
       while (acc >= DT && n++ < 6) { acc -= DT; step(game); track(); }
       sounds();
-      if (isRest(game)) { acc = 0; afterShot(); } else again = true;
+      if (isRest(game)) { acc = 0; if (ON) afterReplay(); else afterShot(); } else again = true;
     }
     draw();
     if (again) raf = requestAnimationFrame(frame);
@@ -353,6 +359,7 @@ export function renderBilliards({ root, esc = (s) => String(s), onBack, adminNot
     loop();
   }
   function doShoot(a) {
+    if (ON) return submit(a);
     if (shoot(game, a.angle, a.power, a.spin, a.side)) { aim = null; phase = "moving"; hud(); loop(); }
     else { phase = "aim"; draw(); }
   }
@@ -400,6 +407,123 @@ export function renderBilliards({ root, esc = (s) => String(s), onBack, adminNot
     $("#blOver").classList.add("on"); hud(); draw();
   }
 
+
+  /* ---- ルーム対戦（人と人）：球の動きの結果は Worker が決める。画面は、同じ計算で動きを再生して、終わったら Worker の位置にそろえる ---- */
+  const nowMs = () => Date.now() + offset;
+  const lastN = (y) => (y && y.last ? y.last.n : 0);
+  const busy = () => phase === "moving" || phase === "busy" || phase === "anim";
+  function onlineInfo() {
+    if (!srv) return "";
+    const sc = Array.isArray(srv.score) ? `　${srv.score[myIdx] ?? 0}勝 − ${srv.score[1 - myIdx] ?? 0}勝` : "";
+    if (srv.done) return `対戦は終わりました${sc}`;
+    const sec = Math.max(0, Math.ceil((srv.deadline - nowMs()) / 1000));
+    return `${srv.cur === myIdx ? "あなたの持ち時間" : "相手の持ち時間"}：あと${sec}秒${sc}`;
+  }
+  function describe(y) {
+    const l = y.last; if (!l) return "";
+    const who = l.by === myIdx ? "あなた" : "相手", other = l.by === myIdx ? "相手" : "あなた";
+    if (l.timeout) return `${who}は時間切れ。${other}は手球を好きな場所に置けます`;
+    if (l.foul) return `${who}の反則（${l.reason}）。${other}は手球を好きな場所に置けます`;
+    if (l.assigned) return `${who}は${y.st.g[l.by] === "solid" ? "ソリッド（無地）" : "ストライプ（しま）"}に決まりました`;
+    if (!l.switched) return `${who}は続けて打てます`;
+    return `${other}の番です`;
+  }
+  function showStart(html) { const el = $("#blStart"); $("#blStartBox").innerHTML = html; el.classList.toggle("on", !!html); }
+  function onlineUpdate(room) {
+    online.room = room;
+    const y = room.billiards || null;
+    myIdx = (room.memberUids || []).indexOf(online.uid);
+    if (!y) {
+      srv = null; playedN = -1; phase = "wait";
+      const members = Array.isArray(room.members) ? room.members : [];
+      if (members.length < 2 || room.status !== "playing") { showStart("<b>相手を待っています…</b><span>友達を招待するか、ほかの人が入るのを待とう</span>"); return; }
+      if (room.ownerUid === online.uid) {
+        showStart('<b>ルールをえらぼう</b><span>コインは使いません</span><button type="button" class="bl-btn pri" data-start="eight">8ボール</button><button type="button" class="bl-btn pri" data-start="nine">9ボール</button>');
+        $("#blStartBox").querySelectorAll("[data-start]").forEach((b) => b.addEventListener("click", () => startGame(b.dataset.start)));
+      } else showStart("<b>ルームを作った人が、ルールを選んでいます…</b>");
+      return;
+    }
+    myIdx = y.order.indexOf(online.uid);
+    showStart("");
+    if (srv && srv.gid !== y.gid) { playedN = -1; $("#blOver").classList.remove("on"); }
+    if (busy()) { pendingY = y; return; }   // 動いている間は、終わってから
+    consume(y);
+  }
+  async function startGame(m, rematchFlag = false) {
+    try { const r = await online.api("billiardsRoomStart", { roomId: online.room.id, mode: m, rematch: rematchFlag }); offset = (r.serverNowMs || Date.now()) - Date.now(); showStart(""); consume(r.billiards); }
+    catch (e) { showStart(`<b>始められませんでした</b><span>${esc(e?.code || e?.message || "エラー")}</span>`); }
+  }
+  function rematch() { startGame(srv?.mode || "eight", true); }
+  function consume(y) {
+    const prev = srv; srv = y; mode = y.mode;
+    const n = lastN(y);
+    if (n > playedN && playedN >= 0 && y.last && y.last.angle !== undefined && !y.last.timeout && !(prev && prev.gid !== y.gid)) { playedN = n; replay(y); return; }
+    playedN = n;
+    applyState(y, y.last && n > 0 ? describe(y) : "");
+  }
+  function replay(y) {
+    const l = y.last;
+    game = restore(y.mode, l.pre);
+    if (l.place) { const c = cueBall(game); c.x = l.place.x; c.y = l.place.y; c.on = true; }
+    game.inHand = false; game.shot = null;
+    shoot(game, l.angle, l.power, l.spin, l.side);
+    aim = null; anim = null; phase = "moving"; roll.clear(); hud(); loop();
+  }
+  function afterReplay() {
+    const a = pendingY, b = srv;
+    const y = a && lastN(a) >= lastN(b) ? a : b; pendingY = null;
+    srv = y; playedN = lastN(y);
+    applyState(y, describe(y));
+  }
+  function applyState(y, text) {
+    game = restore(y.mode, y.st);
+    hud();
+    if (y.done) {
+      phase = "over";
+      const win = y.winner === myIdx;
+      $("#blOverTitle").textContent = win ? "あなたの勝ち！" : "相手の勝ち";
+      $("#blOverText").textContent = y.reason === "timeout" ? "時間切れで決まりました" : (y.mode === "nine" ? "9番が落ちて決まりました" : "8番が決まって終わりました");
+      $("#blOver").classList.add("on"); setMsg(win ? "勝ち！" : "負け…");
+    } else {
+      $("#blOver").classList.remove("on");
+      const mine = y.cur === myIdx;
+      phase = mine ? "aim" : "wait";
+      const first = !y.last ? (mine ? "あなたのブレイク（最初の一発）です。強く打って、球を散らそう" : "相手のブレイクです") : (text ? "" : mine ? "あなたの番です" : "相手の番です");
+      setMsg([text, first].filter(Boolean).join("　") + (mine && game.inHand ? "　白い球を、好きな場所にドラッグして置こう" : ""), !!(y.last && (y.last.foul || y.last.timeout)));
+    }
+    placedAt = null; aim = null;
+    draw(); startTimer(); setTimeout(resize, 0);
+  }
+  function startTimer() {
+    clearInterval(timerId);
+    timerId = setInterval(() => {
+      if (!root.isConnected) { clearInterval(timerId); return; }
+      if (!srv) return;
+      $("#blRec").textContent = onlineInfo();
+      if (srv.done || busy()) return;
+      if (nowMs() > srv.deadline + 1500) {
+        const key = `${srv.gid}:${lastN(srv)}:${srv.cur}`;
+        if (key === timeoutKey) return;
+        timeoutKey = key;
+        online.api("billiardsRoomTimeout", { roomId: online.room.id, gid: srv.gid, n: lastN(srv), turn: srv.cur })
+          .then((r) => { offset = (r.serverNowMs || Date.now()) - Date.now(); if (r.billiards) { if (busy()) pendingY = r.billiards; else consume(r.billiards); } })
+          .catch(() => { setTimeout(() => { timeoutKey = ""; }, 5000); });
+      }
+    }, 500);
+  }
+  async function submit(a) {
+    phase = "busy"; setMsg("送信中…"); draw();
+    try {
+      const r = await online.api("billiardsRoomShoot", { roomId: online.room.id, gid: srv.gid, angle: a.angle, power: a.power, spin: a.spin, side: a.side, ...(placedAt ? { place: placedAt } : {}) });
+      offset = (r.serverNowMs || Date.now()) - Date.now();
+      phase = "wait"; consume(r.billiards);
+    } catch (e) {
+      const code = e?.code || e?.message || "エラー";
+      phase = "aim"; placedAt = null;
+      applyState(srv, code === "not_your_turn" ? "いまはあなたの番ではありません" : code === "timeout" ? "時間切れです" : code === "stale" ? "ゲームが新しくなりました" : `打てませんでした（${code}）`);
+    }
+  }
+
   /* ---- 操作 ---- */
   function placeAt(p) {
     const r = TABLE.r, x = Math.max(r, Math.min(TABLE.w - r, p.x)), y = Math.max(r, Math.min(TABLE.h - r, p.y));
@@ -421,10 +545,10 @@ export function renderBilliards({ root, esc = (s) => String(s), onBack, adminNot
     draw();
   }
   function fire() {
-    if (aim && phase === "aim" && game.turn === 0 && !game.inHand && !game.over && aim.power >= 0.04) startShot(aim.angle, aim.power, engSpin(), engSide());
+    if (aim && phase === "aim" && game.turn === seat() && !game.inHand && !game.over && aim.power >= 0.04) startShot(aim.angle, aim.power, engSpin(), engSide());
   }
   function hint() {
-    if (phase !== "aim" || game.turn !== 0 || game.inHand || game.over) return;
+    if (ON || phase !== "aim" || game.turn !== 0 || game.inHand || game.over) return;
     const h = chooseShot(game, { error: 0, rng: () => 0.5 });
     setAimMode("tap"); $("#blPow").value = String(Math.round(h.power * 100));
     aim = { angle: h.angle, power: h.power }; $("#blPower").style.width = `${Math.round(h.power * 100)}%`;
@@ -458,7 +582,7 @@ export function renderBilliards({ root, esc = (s) => String(s), onBack, adminNot
   function onDown(ev) {
     initAudio();
     ev.preventDefault();
-    if (phase !== "aim" || game.over || game.turn !== 0) return;
+    if (phase !== "aim" || game.over || game.turn !== seat()) return;
     try { canvas.setPointerCapture(ev.pointerId); } catch (_) { /* なくてもよい */ }
     const p = toTable(ev);
     if (game.inHand) { dragCue = true; placeAt(p); return; }
@@ -469,7 +593,7 @@ export function renderBilliards({ root, esc = (s) => String(s), onBack, adminNot
     else if (pulling) { ev.preventDefault(); if (aimMode === "tap") tapAim(toTable(ev)); else updateAim(toTable(ev)); }
   }
   function onUp() {
-    if (dragCue) { dragCue = false; game.inHand = false; setMsg("白い球を置きました。引っぱって打とう"); draw(); return; }
+    if (dragCue) { dragCue = false; if (ON) { const c = cueBall(game); placedAt = { x: c.x, y: c.y }; } game.inHand = false; setMsg("白い球を置きました。引っぱって打とう"); draw(); return; }
     if (!pulling) return;
     pulling = false;
     if (aimMode === "tap") return;   // タップで狙うときは、「打つ」ボタンで打つ
@@ -484,14 +608,15 @@ export function renderBilliards({ root, esc = (s) => String(s), onBack, adminNot
   stage.addEventListener("touchstart", stopScroll, { passive: false });
   stage.addEventListener("touchmove", stopScroll, { passive: false });
   stage.addEventListener("contextmenu", stopScroll);
-  $("#blBack").addEventListener("click", () => { stopBilliards(); if (onBack) onBack(); });
-  $("#blReset").addEventListener("click", reset);
-  $("#blAgain").addEventListener("click", reset);
+  $("#blBack")?.addEventListener("click", () => { stopBilliards(); if (onBack) onBack(); });
+  $("#blReset")?.addEventListener("click", reset);
+  $("#blAgain").addEventListener("click", () => { if (ON) rematch(); else reset(); });
+  $("#blRoomBtn")?.addEventListener("click", () => { stopBilliards(); if (openRooms) openRooms(); });
   $("#blSound").addEventListener("click", () => { muted = !muted; $("#blSound").textContent = muted ? "🔇" : "🔊"; });
   root.querySelectorAll("[data-mode]").forEach((b) => b.addEventListener("click", () => setMode(b.dataset.mode)));
   root.querySelectorAll("[data-level]").forEach((b) => b.addEventListener("click", () => { level = b.dataset.level; root.querySelectorAll("[data-level]").forEach((x) => x.classList.toggle("on", x === b)); hud(); }));
   root.querySelectorAll("[data-aim]").forEach((b) => b.addEventListener("click", () => setAimMode(b.dataset.aim)));
-  $("#blHint").addEventListener("click", hint);
+  $("#blHint")?.addEventListener("click", hint);
   $("#blFire").addEventListener("click", fire);
   $("#blPow").addEventListener("input", () => { if (aim) { aim.power = powVal(); $("#blPower").style.width = `${Math.round(aim.power * 100)}%`; draw(); } });
   let rot = 0;
@@ -505,9 +630,21 @@ export function renderBilliards({ root, esc = (s) => String(s), onBack, adminNot
   engEl.addEventListener("touchstart", stopScroll, { passive: false });
   window.addEventListener("resize", resize);
   cleanup = () => {
-    window.removeEventListener("resize", resize); timers.splice(0).forEach(clearTimeout);
+    window.removeEventListener("resize", resize); timers.splice(0).forEach(clearTimeout); clearInterval(timerId); clearInterval(rot);
     document.documentElement.classList.remove("bl-lock"); document.body.classList.remove("bl-lock");
   };
-  drawEng(); reset(); resize();
+  drawEng();
+  if (!ON) reset(); else { hud(); onlineUpdate(online.room); }
+  resize();
   setTimeout(resize, 60);   // 画面の並びが落ち着いてから、もう一度大きさを合わせる
+  return ON ? { update: onlineUpdate } : undefined;
+}
+
+/* 🎱 ビリヤードの2人対戦（ゲームルーム）：script.js の renderCurrentGame から、ルームが更新されるたびに呼ばれる。
+   同じルームなら、作り直さず、いまの画面に新しい状態を渡す（動きの再生を止めないため） */
+export function renderBilliardsRoom(boardEl, room, { api, uid, esc }) {
+  const inst = boardEl.__billiards;
+  if (inst && inst.roomId === room.id && boardEl.firstElementChild && boardEl.firstElementChild.id === "blWrap" && boardEl.isConnected) { inst.update(room); return; }
+  const handle = renderBilliards({ root: boardEl, esc, online: { room, api, uid } });
+  boardEl.__billiards = { roomId: room.id, update: handle.update };
 }

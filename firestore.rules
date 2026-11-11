@@ -512,9 +512,10 @@ service cloud.firestore {
         && request.resource.data.get('ownerUid', '') == request.auth.uid
         && request.resource.data.get('memberUids', []).hasOnly([request.auth.uid])
         && !('yacht' in request.resource.data)
-        && !('keshi' in request.resource.data);
+        && !('keshi' in request.resource.data)
+        && !('billiards' in request.resource.data);
 
-      // 🎲 ヨットの対戦の進み（yacht：サイコロの目・点数・手番）と、🥊 消しバトの対戦の進み（keshi：消しゴムの位置・勝敗・手番）は、通知 Worker（サービスアカウント）だけが書く。ブラウザからは変えられない
+      // 🎲 ヨットの対戦の進み（yacht：サイコロの目・点数・手番）、🥊 消しバトの対戦の進み（keshi：消しゴムの位置・勝敗・手番）と、🎱 ビリヤードの対戦の進み（billiards：球の位置・勝敗・手番）は、通知 Worker（サービスアカウント）だけが書く。ブラウザからは変えられない
       allow update: if signedIn() && (
         ((request.auth.uid in resource.data.get('memberUids', [])) && yachtUntouched())
         || (isJoiningGameRoom() && yachtUntouched())
@@ -522,7 +523,7 @@ service cloud.firestore {
       );
 
       function yachtUntouched() {
-        return !request.resource.data.diff(resource.data).affectedKeys().hasAny(['yacht', 'keshi']);
+        return !request.resource.data.diff(resource.data).affectedKeys().hasAny(['yacht', 'keshi', 'billiards']);
       }
 
       allow delete: if signedIn() && (

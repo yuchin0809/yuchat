@@ -3908,7 +3908,7 @@ function lazyCaller(mod, name) {
 const adminCfg = () => ({ callAdmin: (action, payload) => callAdminApi(action, payload), isAdmin: () => isAdminUser(), esc: (v) => escapeHTML(v) });
 
 /* 🎡 ゆうワールド（ゆうスロ）。トークン・ユーザー名・最上位管理者かどうかは呼ばれた時点の状態を使う */
-const lazyYuWorld = lazyModule("./yuworld.js?v=20261111-bl3", (m) => m.initYuWorld({
+const lazyYuWorld = lazyModule("./yuworld.js?v=20261111-bl4", (m) => m.initYuWorld({
   openGame: (type) => openGameFromWorld(type),
   pendingInviteTypes: () => pendingGameInvites.map((invite) => invite.gameType),
   endpoint: NOTIFY_ENDPOINT.replace(/\/notify$/, "/yuslot"),
@@ -3962,6 +3962,7 @@ const economyAdminReset = lazyCaller(lazyEconomyAdmin, "economyAdminReset");
 /* 🎲 ヨット / 🥊 消しバトの部屋の描画：読み込み前は準備中の表示を出し、読み込めたらもう一度描く */
 const lazyYachtRoom = lazyModule("./yuyacht.js?v=20261026-yacht6");
 const lazyKeshiRoom = lazyModule("./yukeshi-room.js?v=20261106-fair1");
+const lazyBilliardsRoom = lazyModule("./yubilliards.js?v=20261111-bl4");
 function lazyRoomRenderer(mod, name) {
   return (boardEl, room, c) => {
     const m = mod.get();
@@ -3973,6 +3974,7 @@ function lazyRoomRenderer(mod, name) {
 }
 const renderYachtRoom = lazyRoomRenderer(lazyYachtRoom, "renderYachtRoom");
 const renderKeshiRoom = lazyRoomRenderer(lazyKeshiRoom, "renderKeshiRoom");
+const renderBilliardsRoom = lazyRoomRenderer(lazyBilliardsRoom, "renderBilliardsRoom");
 
 /* 📨 友達に紹介 */
 inviteInit(document.getElementById("inviteButton"), (title, body) => showAppToast(title, body), async () => (await callInviteApi("create", { username })).code);
@@ -7659,6 +7661,7 @@ function getGameTypeName(type) {
   if (type === "shogi") return "将棋";
   if (type === "yacht") return "ヨット";
   if (type === "keshi") return "消しバト";
+  if (type === "billiards") return "ビリヤード";
   return "ゲーム";
 }
 
@@ -7906,6 +7909,10 @@ createGameRoomButton?.addEventListener("click", async () => {
   const type = currentGameType || "daifugo";
   if (isGameUnderMaintenance(type)) return alert(GAME_MAINTENANCE_ALERT);
   const gameName = getGameTypeName(type);
+  if (type === "billiards") {   // 公開前は、最上位管理者だけがルームを作れる
+    const cfg = await callYuslotApi("config").catch(() => null);
+    if (!cfg || (!cfg.billiardsPublished && !cfg.isTopAdmin)) return alert("ビリヤードは、いま準備中です。");
+  }
   /* 自分はもう抜けているのに残っている、自分が作ったルームは、先に閉じる（作成者が抜けたルームは、本来は残らない） */
   await Promise.all(latestGameRooms.filter((room) => isMyOrphanRoom(room, type)).map((room) => deleteDoc(doc(db, "gameRooms", room.id)).catch((error) => console.error("残っていたルームの片づけエラー:", error))));
   const existing = latestGameRooms.find((room) => isMyOpenRoom(room, type));
@@ -8007,7 +8014,7 @@ async function joinGameRoom(room) {
       const updateData = { members, memberUids, updatedAt: serverTimestamp() };
 
       /* オセロ・将棋は2人そろった時点で対戦開始（大富豪は開始ボタンで切り替えるので対象外） */
-      const isBoardGame = data.gameType === "othello" || data.gameType === "shogi" || data.gameType === "yacht" || data.gameType === "keshi";
+      const isBoardGame = data.gameType === "othello" || data.gameType === "shogi" || data.gameType === "yacht" || data.gameType === "keshi" || data.gameType === "billiards";
       if (isBoardGame && members.length >= maxPlayers) updateData.status = "playing";
 
       await updateDoc(roomRef, updateData);
@@ -8140,6 +8147,7 @@ function renderCurrentGame(room) {
   if (room.gameType === "daifugo") return renderDaifugoGame(boardEl, room);
   if (room.gameType === "yacht") return renderYachtRoom(boardEl, room, { api: callYuslotApi, uid: currentUser?.uid, esc: escapeHTML });
   if (room.gameType === "keshi") return renderKeshiRoom(boardEl, room, { api: callYuslotApi, uid: currentUser?.uid, esc: escapeHTML });
+  if (room.gameType === "billiards") return renderBilliardsRoom(boardEl, room, { api: callYuslotApi, uid: currentUser?.uid, esc: escapeHTML });
 
   boardEl.innerHTML = `<div class="empty-state">ゲームを準備中です</div>`;
 }
@@ -8151,7 +8159,7 @@ function renderCurrentGame(room) {
    ・参加するときは既存の joinGameRoom() を使う
 ========================================================= */
 
-const INVITABLE_GAME_TYPES = ["othello", "shogi", "yacht", "keshi"];
+const INVITABLE_GAME_TYPES = ["othello", "shogi", "yacht", "keshi", "billiards"];
 
 function canInviteToGameRoom(room) {
   if (!room || !INVITABLE_GAME_TYPES.includes(room.gameType)) return false;
