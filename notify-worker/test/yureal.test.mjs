@@ -128,14 +128,16 @@ test("見られる範囲：友達だけ。自分が投稿するまで、友達�
   assert.equal((await c.act("id0", { action: "photo", id: `${c.key}_id2` })).error, "not_friend");
 });
 
-test("リアクション：友達の写真に、絵文字をタップして送れる。同じ絵文字をもう一度押すと外れる。コメントはない", async () => {
+test("リアクション：友達の写真に、絵文字をタップして送れる。1つの投稿に、1人1個だけ（変えたり外したりはできない）。コメントはない", async () => {
   const c = setup({ published: true });
   await c.act("id1", { action: "post", img: JPG }); await c.act("id0", { action: "post", img: JPG });
   const id = `${c.key}_id1`;
   const r1 = await c.act("id0", { action: "react", id, emoji: "❤️" });
   assert.deepEqual(r1.item.reactions, { "❤️": 1 }); assert.equal(r1.item.myReaction, "❤️");
-  assert.deepEqual((await c.act("id0", { action: "react", id, emoji: "❤️" })).item.reactions, {});
-  assert.deepEqual((await c.act("id0", { action: "react", id, emoji: "😢" })).item.reactions, { "😢": 1 });
+  assert.equal((await c.act("id0", { action: "react", id, emoji: "❤️" })).error, "already_reacted", "同じものを、もう一度は押せない");
+  assert.equal((await c.act("id0", { action: "react", id, emoji: "😢" })).error, "already_reacted", "べつの絵文字も、追加できない");
+  assert.equal((await c.act("id0", { action: "react", id, emoji: "" })).error, "bad_emoji", "外すこともできない");
+  assert.equal((await c.act("id1", { action: "react", id, emoji: "😢" })).item.reactions["😢"], 1, "ほかの人は、べつに付けられる");
   assert.equal((await c.act("id0", { action: "react", id, emoji: "💩" })).error, "bad_emoji");
   assert.equal((await c.act("id2", { action: "react", id, emoji: "👍" })).error, "not_friend");
   assert.equal((await c.act("id0", { action: "comment", id, text: "いいね" })).error, "unknown_action", "コメントはなくなった");
