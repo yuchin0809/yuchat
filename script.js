@@ -1373,6 +1373,7 @@ let friendDocsAsUser2 = null;
 
 function stopFriendListeners() {
   stopFriendRequestListeners();
+  stopBlockListener();
   if (unsubscribeFriends) { unsubscribeFriends(); unsubscribeFriends = null; }
   if (unsubscribeFriendsAsUser2) { unsubscribeFriendsAsUser2(); unsubscribeFriendsAsUser2 = null; }
   friendDocsAsUser1 = null;
@@ -1407,6 +1408,7 @@ function listenFriends() {
   if (!username) return;
   stopFriendListeners();
   listenFriendRequests();
+  listenBlocks();
 
   const rebuild = () => {
     if (!friendDocsAsUser1 || !friendDocsAsUser2) return; /* 両方そろってから表示する */
@@ -1634,19 +1636,93 @@ function attachLongPress(element, onLongPress, delay = 550) {
   ["pointerup", "pointercancel", "pointerleave"].forEach((type) => element.addEventListener(type, cancel));
 }
 
+/* 📜 利用規約とプライバシーポリシーへの同意（はじめて使うとき・規約を変えたとき。同意しないとは、使えない） */
+const TERMS_VERSION = "2026-11-11";
+let termsAsked = false;
+function askTermsIfNeeded(data) {
+  if (termsAsked || !data || data.termsVersion === TERMS_VERSION || !username) return;
+  termsAsked = true;
+  const overlay = document.createElement("div");
+  overlay.id = "termsOverlay"; overlay.className = "terms-overlay";
+  overlay.innerHTML = `<div class="terms-card" role="dialog" aria-modal="true" aria-label="利用規約">
+    <h3>📜 ゆうChat の利用規約とプライバシーポリシー</h3>
+    <p>ゆうChat を使うには、次の内容に同意してください。</p>
+    <ul><li>人をいやな気持ちにさせる内容（いやがらせ・いじめ・暴力・性的な内容・差別・個人情報の公開 など）を、送ったり投稿したりしてはいけません。</li>
+    <li>そのような内容を見つけたら「通報」できます。ブロックもできます。運営は、通報を確認して、内容の削除や利用の停止を行います。</li>
+    <li>ゆうコインは、ゲームの中だけで使えるものです。現金や商品には換えられません。</li>
+    <li>名前・メッセージ・画像・写真・通知の情報などを、ゆうChat の機能のために使います。くわしくはプライバシーポリシーを読んでください。</li></ul>
+    <p class="terms-links"><a href="./terms.html" target="_blank" rel="noopener">利用規約</a>　<a href="./privacy.html" target="_blank" rel="noopener">プライバシーポリシー</a></p>
+    <div class="terms-buttons"><button type="button" id="termsNo">同意しない（ログアウト）</button><button type="button" id="termsYes" class="terms-yes">同意して使う</button></div></div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector("#termsYes").addEventListener("click", async (event) => {
+    event.currentTarget.disabled = true;
+    try { await updateDoc(doc(db, "users", username), { termsVersion: TERMS_VERSION, termsAcceptedAt: serverTimestamp() }); overlay.remove(); }
+    catch (error) { console.error("規約の同意の保存エラー:", error); event.currentTarget.disabled = false; alert("保存できませんでした。通信を確かめて、もう一度押してください。"); }
+  });
+  overlay.querySelector("#termsNo").addEventListener("click", () => { overlay.remove(); termsAsked = false; document.getElementById("logoutButton")?.click(); });
+}
+
 /* 友達のメニュー（チャット画面の「⋯」） */
 function openFriendMenu(friend) {
   if (!friend) return;
   const modal = openChatModal(`
     <h3>${escapeHTML(friend.friend)}</h3>
     <div class="friend-menu-actions">
+      <button class="modal-secondary" type="button" data-friend-report>🚩 通報する</button>
+      <button class="modal-danger" type="button" data-friend-block>🚫 ブロックする</button>
       <button class="modal-danger" type="button" data-friend-delete>友達を削除</button>
     </div>
     <div class="modal-buttons">
       <button class="modal-secondary" type="button" data-modal-close>閉じる</button>
     </div>`);
   modal?.querySelector("[data-friend-delete]")?.addEventListener("click", () => openDeleteFriendDialog(friend));
+  modal?.querySelector("[data-friend-report]")?.addEventListener("click", () => openReportModal({ kind: "user", name: friend.friend, label: `${friend.friend}さん` }));
+  modal?.querySelector("[data-friend-block]")?.addEventListener("click", async () => { if (await blockUser(friend.friend)) closeChatModal(); });
 }
+
+/* 🚩 通報とブロック（ユーザーが作る内容を扱うアプリに必要な機能）。通報は管理者が見る。ブロックすると、友達関係が解除され、相手は友達申請もできず、グループでも相手のメッセージは出ない */
+const REPORT_REASON_LABELS = { harassment: "いやがらせ・いじめ", inappropriate: "不適切な内容（暴力・性的・差別など）", spam: "迷惑・スパム", impersonation: "なりすまし", other: "その他" };
+function openReportModal({ kind, refId = "", name = "", label = "" }) {
+  const modal = openChatModal(`
+    <h3>🚩 通報する</h3>
+    <p class="group-modal-note">${escapeHTML(label || name)} を通報します。理由を選んでください。運営が確認します（相手には知らされません）。</p>
+    <div class="report-reasons">${Object.entries(REPORT_REASON_LABELS).map(([k, v], i) => `<label class="report-reason"><input type="radio" name="reportReason" value="${k}" ${i === 0 ? "checked" : ""}> ${escapeHTML(v)}</label>`).join("")}</div>
+    <textarea id="reportNote" class="report-note" maxlength="200" placeholder="くわしく（なくてもOK）"></textarea>
+    <div class="modal-buttons"><button class="modal-secondary" type="button" data-modal-close>キャンセル</button><button class="modal-danger" type="button" data-report-send>通報する</button></div>`);
+  modal?.querySelector("[data-report-send]")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget; button.disabled = true;
+    try {
+      await callFriendApi("report", { kind, refId, name, reason: modal.querySelector('input[name="reportReason"]:checked')?.value || "other", note: modal.querySelector("#reportNote")?.value || "" });
+      closeChatModal(); showAppToast("🚩 通報", "通報を受け付けました。ありがとうございます");
+    } catch (error) { button.disabled = false; alert(error.code === "too_many" ? "通報が多すぎます。しばらくしてから、お願いします。" : error.code === "gone" ? "対象が見つかりません。" : error.code === "self" ? "自分は通報できません。" : "通報できませんでした。時間をおいて、もう一度お試しください。"); }
+  });
+}
+async function blockUser(name) {
+  if (!confirm(`${name}さんをブロックしますか？\n友達関係は解除され、相手は友達申請もできなくなります。（マイページから解除できます）`)) return false;
+  try { await callFriendApi("block", { name }); showAppToast("🚫 ブロック", `${name}さんをブロックしました`); return true; }
+  catch (error) { alert(FRIEND_ERRORS[error.code] || "ブロックできませんでした。時間をおいて、もう一度お試しください。"); return false; }
+}
+let blockedList = [], blockedUids = new Set(), unsubscribeBlocks = null;
+function stopBlockListener() { if (unsubscribeBlocks) { unsubscribeBlocks(); unsubscribeBlocks = null; } blockedList = []; blockedUids = new Set(); renderBlockedList(); }
+function listenBlocks() {
+  stopBlockListener();
+  if (!currentUser) return;
+  unsubscribeBlocks = onSnapshot(query(collection(db, "blocks"), where("blockerUid", "==", currentUser.uid)), (snapshot) => {
+    blockedList = snapshot.docs.map((d) => d.data());
+    blockedUids = new Set(blockedList.map((b) => b.blockedUid));
+    renderBlockedList();
+  }, (error) => console.error("ブロックの監視エラー:", error));
+}
+function renderBlockedList() {
+  const box = document.getElementById("blockedList");
+  if (!box) return;
+  box.innerHTML = blockedList.length ? blockedList.map((b) => `<div class="blocked-row"><span>🚫 ${escapeHTML(b.blockedName || "")}</span><button type="button" data-unblock="${escapeHTML(b.blockedUid)}">解除</button></div>`).join("") : '<p class="blocked-none">ブロックしている人は、いません。</p>';
+}
+document.getElementById("blockedList")?.addEventListener("click", async (event) => {
+  const btn = event.target.closest("[data-unblock]"); if (!btn) return;
+  btn.disabled = true;
+  try { await callFriendApi("unblock", { uid: btn.dataset.unblock }); } catch (error) { btn.disabled = false; alert("解除できませんでした。"); }
+});
 
 /* 削除の確認（誤操作を防ぐため、必ずこの画面で「友達を削除」を押したときだけ消す） */
 function openDeleteFriendDialog(friend) {
@@ -2398,7 +2474,7 @@ messagesElement?.addEventListener("scroll", () => {
 function renderSelectedMessages(allMessages, { scrollMode = "bottom", olderState = null } = {}) {
   if (!messagesElement) return;
 
-  const messages = allMessages.filter(isMessageForSelectedChat);
+  const messages = allMessages.filter((m) => isMessageForSelectedChat(m) && !(m.senderUid && blockedUids.has(m.senderUid)));   // ブロックした人のメッセージは出さない
 
   /* 描き直す前に、見ていた位置（画面の一番上に見えているメッセージと、そのずれ）を覚えておく */
   const previousLastId = messagesElement.dataset.lastMessageId || "";
@@ -2549,6 +2625,14 @@ function renderMessage(message, readInfo = getSelectedChatReadInfo()) {
     reactionButton.addEventListener("click", () => addReaction(message));
 
     actions.append(replyButton, reactionButton);
+
+    if (!isMine && message.id) {
+      const reportButton = document.createElement("button");
+      reportButton.type = "button";
+      reportButton.textContent = "通報";
+      reportButton.addEventListener("click", () => openReportModal({ kind: "message", refId: message.id, name: message.sender || "", label: `${message.sender || "この人"}のメッセージ` }));
+      actions.appendChild(reportButton);
+    }
 
     if (isMine) {
       const deleteButton = document.createElement("button");
@@ -3969,8 +4053,9 @@ const stopYuWorldView = lazyCaller(lazyYuWorld, "stopYuWorldView");
 
 /* 📸 YuReal（いまは管理者だけ。公開の状態は、ログイン後に Worker に聞く。聞くのは1回だけ） */
 const yurealEndpoint = () => NOTIFY_ENDPOINT.replace(/\/notify$/, "/yureal");
-const lazyYureal = lazyModule("./yureal.js?v=20261111-sn1", (m) => m.initYureal({
+const lazyYureal = lazyModule("./yureal.js?v=20261111-sn2", (m) => m.initYureal({
   endpoint: yurealEndpoint(),
+  reportEndpoint: NOTIFY_ENDPOINT.replace(/\/notify$/, "/friend"),
   getToken: () => currentUser.getIdToken(),
   getUsername: () => username
 }));
@@ -4019,7 +4104,7 @@ const kakuWinnersReset = lazyCaller(lazyKakuWinners, "kakuWinnersReset");
 const lazyKeshiEnroll = lazyModule("./yukeshi-admin.js?v=20261026-ltd10", (m) => m.keshiEnrollInit(adminCfg()));
 const keshiEnrollOpen = lazyOpener(lazyKeshiEnroll, "keshiEnrollOpen", () => currentViewName === "usermanage");
 const keshiEnrollReset = lazyCaller(lazyKeshiEnroll, "keshiEnrollReset");
-const lazyEconomyAdmin = lazyModule("./yueconomy-admin.js?v=20261106-lottery1", (m) => m.economyAdminInit(adminCfg()));
+const lazyEconomyAdmin = lazyModule("./yueconomy-admin.js?v=20261111-rep1", (m) => m.economyAdminInit(adminCfg()));
 const economyAdminOpen = lazyOpener(lazyEconomyAdmin, "economyAdminOpen", () => currentViewName === "usermanage");
 const economyAdminReset = lazyCaller(lazyEconomyAdmin, "economyAdminReset");
 
@@ -4516,6 +4601,7 @@ function listenMyCoins() {
         return;
       }
       myLatestUserData = { ...data, docId: snap.id };
+      askTermsIfNeeded(data);
       updateCoinDisplays(data.coins);
       /* ログインボーナス（1日1回）は、追加ボーナスを受け取ったあとに行う（同じドキュメントへのトランザクションが重なって
          やり直しになり、読み書きが増えないように）。「💰 ゆう経済」の表示も、この購読で受け取った内容を使う（新しい読み取りは無い） */
