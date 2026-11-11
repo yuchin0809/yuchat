@@ -1,0 +1,11 @@
+{
+  "name": "yuchat-ios",
+  "private": true,
+  "version": "1.0.0",
+  "description": "ゆうChat の iPhone アプリ（Web版を包むだけ）。ビルドは .github/workflows/ios-build.yml",
+  "dependencies": {
+    "@capacitor/cli": "6.2.0",
+    "@capacitor/core": "6.2.0",
+    "@capacitor/ios": "6.2.0"
+  }
+}
