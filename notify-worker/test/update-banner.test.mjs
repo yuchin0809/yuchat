@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { htmlSig, needsUpdate, shouldCheck } from "../../yuupdate.js";
+import { htmlSig, needsUpdate, shouldCheck, decideOnOpen } from "../../yuupdate.js";
 
 const html = readFileSync(new URL("../../index.html", import.meta.url), "utf8");
 
@@ -36,4 +36,12 @@ test("調べる時間：日本時間の 8:00〜15:00 のあいだだけ、前か
   assert.equal(shouldCheck(jst(11), jst(9)), false, "2時間前に調べた");
   assert.equal(shouldCheck(jst(12, 1), jst(9)), true, "3時間以上たった");
   assert.equal(shouldCheck(jst(10), jst(11)), true, "時計が戻っていたら、調べる");
+});
+
+test("開いたとき：新しい版がなければ何もしない／あれば自動で読み込み直す／直したあともまだ古ければ画面の上に出す（くり返さない）", () => {
+  assert.equal(decideOnOpen("a", "a", ""), "none");
+  assert.equal(decideOnOpen("a", "b", ""), "reload");
+  assert.equal(decideOnOpen("a", "b", "b"), "banner", "同じ版のために、もう読み込み直した");
+  assert.equal(decideOnOpen("a", "c", "b"), "reload", "さらに新しい版なら、もう一度");
+  assert.equal(decideOnOpen("", "b", ""), "none");
 });
