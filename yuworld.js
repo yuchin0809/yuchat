@@ -17,6 +17,7 @@ import { renderLottery, stopLottery } from "./yulottery.js?v=20261027-draw1";
 /* 🎊 ゆう番くじ（発売前のお知らせの画面） */
 import { renderBankuji, stopBankuji, BANKUJI_SALE_MS } from "./yubankuji.js?v=20261027-pass1";
 import { renderYacht, stopYacht } from "./yuyacht.js?v=20261026-yacht6";
+import { renderBilliards, stopBilliards } from "./yubilliards.js?v=20261111-bl1";
 import { renderKeshi, stopKeshi } from "./yukeshi.js?v=20261106-fair1";
 import { eraserIcon, keshiLeagueTag } from "./yukeshi-core.js?v=20261106-fair1";
 /* 🌈 確変台のパネル（台の一覧の上）。抽選・先着・通知設定。Worker の kaku* アクションを呼んで表示するだけ */
@@ -62,7 +63,7 @@ function fxHigh() { return state.fxLevel === "high" && !reduced(); }
 const state = {
   kaku: false, kakuEnd: 0,
   screen: "loading",
-  published: false, yachtPublished: false, keshiPublished: false, isTopAdmin: false, open: true,
+  published: false, yachtPublished: false, keshiPublished: false, billiardsPublished: false, isTopAdmin: false, open: true,
   clockOffset: 0,
   session: null, machine: null,
   balance: 0, freeSpins: 0,
@@ -89,7 +90,7 @@ export function initYuWorld(options) {
 }
 export async function openYuWorldView() { if (!rootEl) return; if (state.screen !== "game") await loadConfigAndRender(); }
 export async function stopYuWorldView() {
-  stopFlushTimer(); stopFeverTimer(); stopLobbyTimer(); stopLottery(); stopBankuji(); stopYacht(); stopKeshi();
+  stopFlushTimer(); stopFeverTimer(); stopLobbyTimer(); stopLottery(); stopBankuji(); stopYacht(); stopKeshi(); stopBilliards();
   if (state.session) { try { await settle(); } catch (_) {} }
 }
 
@@ -122,6 +123,7 @@ async function loadConfigAndRender() {
   state.published = cfg.published === true;
   state.yachtPublished = cfg.yachtPublished === true;
   state.keshiPublished = cfg.keshiPublished === true;
+  state.billiardsPublished = cfg.billiardsPublished === true;
   state.isTopAdmin = cfg.isTopAdmin === true;
   state.open = cfg.open !== false;
   if (typeof cfg.serverNowMs === "number") state.clockOffset = cfg.serverNowMs - Date.now();
@@ -139,6 +141,7 @@ function render() {
     const first = state.keshiLeagueFirst === true; state.keshiLeagueFirst = false;   // 最強決定戦の札から来たときは、リーグの画面を開く
     return renderKeshi({ root: rootEl, api, esc, leagueFirst: first, openRooms: () => { if (typeof deps.openGame === "function") deps.openGame("keshi"); }, onBack: () => { state.screen = "shop"; render(); } });
   }
+  if (state.screen === "billiards") return renderBilliards({ root: rootEl, esc, adminNote: state.billiardsPublished ? "" : "管理者だけに見えています（一般ユーザーには「準備中」）。コインは使いません。", onBack: () => { state.screen = "shop"; render(); } });
   if (state.screen === "yacht") return renderYacht({ root: rootEl, api, esc, openRooms: () => { if (typeof deps.openGame === "function") deps.openGame("yacht"); }, onBack: () => { state.screen = "shop"; render(); } });
   if (state.screen === "lobby") return renderLobby();
   if (state.screen === "game") return renderGame();
@@ -195,7 +198,9 @@ function renderShop() {
     <div class="yw-admin"><span>管理者メニュー：ヨットの公開状態 <b>${state.yachtPublished ? "公開中" : "非公開（準備中）"}</b></span>
       <button type="button" id="ywToggleYacht" class="yw-btn yw-btn-sub">${state.yachtPublished ? "非公開にする" : "公開する"}</button></div>
     <div class="yw-admin"><span>管理者メニュー：消しバトの公開状態 <b>${state.keshiPublished ? "公開中" : "非公開（準備中）"}</b></span>
-      <button type="button" id="ywToggleKeshi" class="yw-btn yw-btn-sub">${state.keshiPublished ? "非公開にする" : "公開する"}</button></div>` : "";
+      <button type="button" id="ywToggleKeshi" class="yw-btn yw-btn-sub">${state.keshiPublished ? "非公開にする" : "公開する"}</button></div>
+    <div class="yw-admin"><span>管理者メニュー：ビリヤードの公開状態 <b>${state.billiardsPublished ? "公開中" : "非公開（準備中）"}</b></span>
+      <button type="button" id="ywToggleBilliards" class="yw-btn yw-btn-sub">${state.billiardsPublished ? "非公開にする" : "公開する"}</button></div>` : "";
   const invited = new Set(typeof deps.pendingInviteTypes === "function" ? deps.pendingInviteTypes() : []);
   const gameCards = GAME_SHOPS.map((g) => `<button type="button" class="yw-shop-card${g.soon ? " is-soon" : ""}" data-game="${g.id}">
         <div class="yw-shop-banner ${g.cls}"><span>${g.icon}</span></div>
@@ -227,6 +232,11 @@ function renderShop() {
         <div class="yw-shop-body"><div class="yw-shop-name">消しバト${state.keshiPublished ? "" : " <span class=\"yw-badge\">準備中</span>"}</div>
           <div class="yw-shop-desc">パーツで自分だけの最強の消しゴムを作って、机の上で戦わせよう。</div></div>
       </button>
+      <button type="button" class="yw-shop-card${state.billiardsPublished ? "" : " is-soon"}" id="ywOpenBilliards" ${state.billiardsPublished || state.isTopAdmin ? "" : "disabled"}>
+        <div class="yw-shop-banner yw-billiards-banner"><span>🎱</span></div>
+        <div class="yw-shop-body"><div class="yw-shop-name">ビリヤード${state.billiardsPublished ? "" : " <span class=\"yw-badge\">準備中</span>"}</div>
+          <div class="yw-shop-desc">15個の球を少ない打数で全部ポケットへ。コインは使わない、気軽な練習モード。</div></div>
+      </button>
     </div>`;
   $("#ywOpenSlot")?.addEventListener("click", () => { if (blocked) { state.screen = "preparing"; render(); return; } unlockAudio(); openLobby(); });
   $("#ywOpenLottery")?.addEventListener("click", () => { if (blocked) { state.screen = "preparing"; render(); return; } unlockAudio(); state.screen = "kujihub"; render(); });
@@ -237,6 +247,14 @@ function renderShop() {
   $("#ywToggle")?.addEventListener("click", onTogglePublish);
   $("#ywToggleYacht")?.addEventListener("click", onToggleYacht);
   $("#ywToggleKeshi")?.addEventListener("click", onToggleKeshi);
+  $("#ywOpenBilliards")?.addEventListener("click", () => { state.screen = "billiards"; render(); });
+  $("#ywToggleBilliards")?.addEventListener("click", onToggleBilliards);
+}
+async function onToggleBilliards() {
+  const next = !state.billiardsPublished;
+  if (!confirm(next ? "ビリヤードを公開しますか？（一般ユーザーも遊べるようになります）" : "ビリヤードを非公開にしますか？（一般ユーザーは遊べなくなります）")) return;
+  try { const r = await api("setConfig", { billiardsPublished: next }); state.billiardsPublished = r.billiardsPublished === true; render(); }
+  catch (e) { alert("変更できませんでした（" + (e.code || "エラー") + "）"); }
 }
 async function onToggleKeshi() {
   const next = !state.keshiPublished;
@@ -998,6 +1016,7 @@ function injectStyles() {
   .yw-lt-ico { font-size: 34px; } .yw-lt-body { flex: 1; min-width: 0; } .yw-lt-body b { display: block; font-size: 16px; color: #ffe08a; text-shadow: 0 1px 0 #7a4b00; } .yw-lt-body small { display: block; font-size: 12px; color: #e9e4ff; margin-top: 2px; }
   .yw-lt-go { background: linear-gradient(#ffb347, #e0701f); color: #fff; font-weight: 900; font-size: 13px; border-radius: 999px; padding: 6px 12px; box-shadow: 0 2px 0 #9a4b10; white-space: nowrap; }
   @media (prefers-reduced-motion: reduce) { .yw-league-top, .yw-lt-shine { animation: none !important; } }
+  .yw-billiards-banner { background: linear-gradient(135deg, #1f7a4d, #4cc38a); }
   .yw-keshi-banner { position: relative; background: linear-gradient(135deg, #2f6fe0, #7bb7ff); }
   .yw-league-ribbon { position: absolute; left: 0; right: 0; bottom: 0; text-align: center; font-style: normal; font-weight: 900; font-size: 12.5px; padding: 4px 6px; color: #5a3800; background: linear-gradient(90deg, #ffe9a0, #f0b92e, #ffe9a0); background-size: 200% 100%; animation: yw-ribbon 3s linear infinite; box-shadow: 0 -2px 8px rgba(0,0,0,.25); }
   @keyframes yw-ribbon { 0% { background-position: 0 0; } 100% { background-position: 200% 0; } }

@@ -3071,19 +3071,19 @@ function slotRandomHex(n = 16) {
 }
 
 /* ----- 公開設定（worldConfig/yuslot）。短時間キャッシュしてスピン中の読み取りを避ける ----- */
-let slotConfigCache = { value: null, yacht: false, keshi: false, at: 0 };
-export function resetYuslotCacheForTest() { slotConfigCache = { value: null, yacht: false, keshi: false, at: 0 }; slotSeatsCache = { at: 0, docs: null }; martCache = { at: 0, cur: null }; battleCancelPrefCache.clear(); yachtWeekCache = { at: 0, value: null }; }
-/* 公開設定：ゆうスロ（yuslotPublished）とヨット（yachtPublished）は同じ書類。1回の読み取りで両方わかる */
+let slotConfigCache = { value: null, yacht: false, keshi: false, billiards: false, at: 0 };
+export function resetYuslotCacheForTest() { slotConfigCache = { value: null, yacht: false, keshi: false, billiards: false, at: 0 }; slotSeatsCache = { at: 0, docs: null }; martCache = { at: 0, cur: null }; battleCancelPrefCache.clear(); yachtWeekCache = { at: 0, value: null }; }
+/* 公開設定：ゆうスロ（yuslotPublished）・ヨット（yachtPublished）・消しバト（keshiPublished）・ビリヤード（billiardsPublished）は同じ書類。1回の読み取りで全部わかる */
 async function slotGetConfig(deps, { maxAgeMs = 30000 } = {}) {
   const now = deps.now();
-  if (slotConfigCache.value !== null && now - slotConfigCache.at < maxAgeMs) return { published: slotConfigCache.value, yacht: slotConfigCache.yacht, keshi: slotConfigCache.keshi };
+  if (slotConfigCache.value !== null && now - slotConfigCache.at < maxAgeMs) return { published: slotConfigCache.value, yacht: slotConfigCache.yacht, keshi: slotConfigCache.keshi, billiards: slotConfigCache.billiards };
   try {
     const doc = await deps.firestore.get("worldConfig/yuslot");
-    slotConfigCache = { value: doc?.yuslotPublished === true, yacht: doc?.yachtPublished === true, keshi: doc?.keshiPublished === true, at: now };
-    return { published: slotConfigCache.value, yacht: slotConfigCache.yacht, keshi: slotConfigCache.keshi };
+    slotConfigCache = { value: doc?.yuslotPublished === true, yacht: doc?.yachtPublished === true, keshi: doc?.keshiPublished === true, billiards: doc?.billiardsPublished === true, at: now };
+    return { published: slotConfigCache.value, yacht: slotConfigCache.yacht, keshi: slotConfigCache.keshi, billiards: slotConfigCache.billiards };
   } catch (error) {
     console.warn("yuslot config read failed", String(error?.message || error).slice(0, 120));
-    return { published: false, yacht: false, keshi: false }; // 取得失敗は非公開扱い
+    return { published: false, yacht: false, keshi: false, billiards: false }; // 取得失敗は非公開扱い
   }
 }
 async function slotGetPublished(deps, opts) { return (await slotGetConfig(deps, opts)).published; }
@@ -3169,8 +3169,8 @@ export async function handleYuslotAction(deps, uid, body) {
 }
 
 async function yuslotConfig(deps, uid) {
-  const { published, yacht, keshi } = await slotGetConfig(deps);
-  return { ok: true, published, yachtPublished: yacht, keshiPublished: keshi, isTopAdmin: slotIsTopAdmin(deps, uid), open: slotBusinessOpen(deps.now()), serverNowMs: deps.now(), day: slotBusinessDay(deps.now()) };
+  const { published, yacht, keshi, billiards } = await slotGetConfig(deps);
+  return { ok: true, published, yachtPublished: yacht, keshiPublished: keshi, billiardsPublished: billiards, isTopAdmin: slotIsTopAdmin(deps, uid), open: slotBusinessOpen(deps.now()), serverNowMs: deps.now(), day: slotBusinessDay(deps.now()) };
 }
 
 async function yuslotSetConfig(deps, uid, body) {
@@ -3178,13 +3178,14 @@ async function yuslotSetConfig(deps, uid, body) {
   const cur = await slotGetConfig(deps, { maxAgeMs: 0 });
   const fields = { updatedAtMs: { integerValue: String(deps.now()) }, updatedByUid: { stringValue: uid } };
   const mask = ["updatedAtMs", "updatedByUid"];
-  let { published, yacht, keshi } = cur;
+  let { published, yacht, keshi, billiards } = cur;
   if (typeof body?.yachtPublished === "boolean") { yacht = body.yachtPublished; fields.yachtPublished = { booleanValue: yacht }; mask.push("yachtPublished"); }
   if (typeof body?.keshiPublished === "boolean") { keshi = body.keshiPublished; fields.keshiPublished = { booleanValue: keshi }; mask.push("keshiPublished"); }
-  if (typeof body?.published === "boolean" || (typeof body?.yachtPublished !== "boolean" && typeof body?.keshiPublished !== "boolean")) { published = body?.published === true; fields.yuslotPublished = { booleanValue: published }; mask.push("yuslotPublished"); }
+  if (typeof body?.billiardsPublished === "boolean") { billiards = body.billiardsPublished; fields.billiardsPublished = { booleanValue: billiards }; mask.push("billiardsPublished"); }
+  if (typeof body?.published === "boolean" || (typeof body?.yachtPublished !== "boolean" && typeof body?.keshiPublished !== "boolean" && typeof body?.billiardsPublished !== "boolean")) { published = body?.published === true; fields.yuslotPublished = { booleanValue: published }; mask.push("yuslotPublished"); }
   await deps.firestore.commit([{ update: { name: deps.firestore.docName("worldConfig/yuslot"), fields }, updateMask: { fieldPaths: mask } }]);
-  slotConfigCache = { value: published, yacht, keshi, at: deps.now() };
-  return { ok: true, published, yachtPublished: yacht, keshiPublished: keshi };
+  slotConfigCache = { value: published, yacht, keshi, billiards, at: deps.now() };
+  return { ok: true, published, yachtPublished: yacht, keshiPublished: keshi, billiardsPublished: billiards };
 }
 
 /* ----- 🗓 予約公開 -----
@@ -3213,7 +3214,7 @@ export async function runScheduledPublishTick(env = {}, scheduledTime = Date.now
       await fs.commit([{ update: { name: fs.docName("worldConfig/yuslot"), fields: encodeFields(fields) }, updateMask: { fieldPaths: Object.keys(fields) }, currentDocument: raw ? { updateTime: raw.updateTime } : { exists: false } }]);
     } catch (error) { if (isRetryableCommitError(error)) continue; throw error; }
     todo.forEach((x) => { scheduledPublishDone.add(x.id); ran.push(x.id); });
-    slotConfigCache = { value: null, yacht: false, keshi: false, at: 0 };   // 公開の状態を、すぐ読み直す
+    slotConfigCache = { value: null, yacht: false, keshi: false, billiards: false, at: 0 };   // 公開の状態を、すぐ読み直す
   }
   return { ran };
 }
