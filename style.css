@@ -7200,3 +7200,13 @@ html.app-mode #notificationButton:not([data-state="on"]):not([data-state="denied
     html.app-mode #playView.active { flex-direction: column; }
     html.app-mode .play-side { width: 100%; }
 }
+
+
+/* 👥 友達申請（友達一覧の上） */
+.friend-req-box { display: flex; flex-direction: column; gap: 6px; margin: 0 0 10px; }
+.friend-req-box.hidden { display: none; }
+.friend-req { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 12px; background: #eef3ff; border: 1px solid #cdd9f7; font-size: 13.5px; }
+.friend-req.out { background: #f5f6f8; border-color: #e1e4e8; color: #667089; }
+.friend-req span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.friend-req button { min-height: 34px; padding: 0 12px; border-radius: 10px; border: 1px solid #d6dbe6; background: #fff; font-size: 13px; font-weight: 700; }
+.friend-req button.friend-req-yes { background: #2f6bff; border-color: #2f6bff; color: #fff; }

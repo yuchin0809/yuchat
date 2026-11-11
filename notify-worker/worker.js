@@ -154,6 +154,10 @@ export async function handleRequest(request, env = {}, deps = createDefaultDeps(
       return jsonResponse(result, result.status || 200, cors);
     }
     /* 🎰 ゆうワールド「ゆうスロ」：着席・スピン・精算・公開設定（残高・抽選・精算はサーバーが確定） */
+    if (new URL(request.url).pathname.replace(/\/+$/, "") === "/friend") {
+      const result = await handleFriendAction(deps, uid, body);
+      return jsonResponse(result, result.status || 200, cors);
+    }
     if (new URL(request.url).pathname.replace(/\/+$/, "") === "/yureal") {
       const result = await handleYurealAction(deps, uid, body);
       return jsonResponse(result, result.status || 200, cors);
@@ -3446,6 +3450,79 @@ export async function runYurealTick(env = {}, scheduledTime = Date.now(), deps =
     out.pruned = n;
   }
   return out;
+}
+
+/* =========================================================
+   👥 友達申請（名前を入れるだけで友達になれて危険だったので、相手の承認が必要にした）
+   ・申請（request）：相手の名前を入れる。相手が承認（respond）するまで、友達にはならない。お互いに申請していたら、そのまま友達になる
+   ・友達の書類（friends/{id}）を作れるのは、この Worker だけ（ブラウザからは作れない。Firestore ルールで閉じてある）
+   ・申請の保存：friendRequests/{申請した人のuid}_{された人のuid}。当事者だけがブラウザから読める（読むだけ。書くのは Worker だけ）
+   ・ブロックされている相手には、申請できない（「見つかりません」と同じ見え方にする）。1人の未承認の申請は30件まで
+   ・友達の書類の形は、これまでブラウザが作っていたものと同じ（user1/user2・uid・プロフィール画像） */
+const FRIEND_REQ_MAX = 30;
+const friendDocId = (a, b) => [a, b].sort((x, y) => x.localeCompare(y)).join("_");
+async function friendDocExists(fs, a, b) {
+  for (const id of new Set([friendDocId(a, b), `${a}_${b}`, `${b}_${a}`])) if (await fs.get(`friends/${id}`)) return true;
+  return false;
+}
+async function friendCreate(deps, me, other) {   // me / other：{ name, uid, photo }
+  const isUser1 = me.name < other.name;   // これまでの画面と同じ決め方（文字の大小）
+  const [u1, u2] = isUser1 ? [me, other] : [other, me];
+  const at = new Date(deps.now());
+  await deps.firestore.createIfAbsent(`friends/${friendDocId(me.name, other.name)}`, { user1: u1.name, user2: u2.name, user1Uid: u1.uid, user2Uid: u2.uid, user1Photo: u1.photo || "", user2Photo: u2.photo || "", createdAt: at, updatedAt: at });
+}
+const FRIEND_REQ_ID = /^[A-Za-z0-9_-]{3,300}$/;
+export async function handleFriendAction(deps, uid, body) {
+  const fs = deps.firestore, action = typeof body?.action === "string" ? body.action : "";
+  try {
+    const me = await loadMyUser(fs, uid, body?.username);
+    if (me.error) return me.error;
+    const mine = { name: me.name, uid, photo: String(decodeFields(me.raw.fields).profileImage || "") };
+    if (action === "request") {
+      const name = String(body?.name || "").trim();
+      if (!name || name.length > 100 || name.includes("/")) return { status: 400, error: "bad_name" };
+      if (name === me.name) return { status: 400, error: "self" };
+      const raw = await fs.getRaw(`users/${name}`);
+      const t = raw ? decodeFields(raw.fields) : null;
+      if (!t || typeof t.uid !== "string" || !t.uid) return { status: 404, error: "not_found" };
+      const other = { name, uid: t.uid, photo: String(t.profileImage || "") };
+      if (await fs.get(`blocks/${other.uid}_${uid}`)) return { status: 404, error: "not_found" };   // 相手にブロックされている：見つからない扱い
+      if (await fs.get(`blocks/${uid}_${other.uid}`)) return { status: 409, error: "you_blocked" };
+      if (await friendDocExists(fs, me.name, name)) return { status: 409, error: "already_friends" };
+      if (await fs.get(`friendRequests/${other.uid}_${uid}`)) {   // 相手からも申請が来ている：そのまま友達にする
+        await friendCreate(deps, mine, other); await fs.delete(`friendRequests/${other.uid}_${uid}`);
+        return { ok: true, accepted: true, name };
+      }
+      if (await fs.get(`friendRequests/${uid}_${other.uid}`)) return { status: 409, error: "already_requested" };
+      if ((await fs.query("friendRequests", [["fromUid", "EQUAL", uid]], { select: ["toUid"] })).length >= FRIEND_REQ_MAX) return { status: 429, error: "too_many" };
+      await fs.createIfAbsent(`friendRequests/${uid}_${other.uid}`, { fromUid: uid, fromName: me.name, toUid: other.uid, toName: name, createdAt: new Date(deps.now()) });
+      await sendPushToUids(deps, `friend-req-${uid}-${other.uid}-${deps.now()}`, [other.uid], { kind: "friend", title: "👋 友達申請が届きました", body: `${me.name}さんから、友達申請が届きました`, link: "./?open=chat", tag: `friend-req-${uid}` }).catch(() => {});
+      return { ok: true, requested: true, name };
+    }
+    const id = String(body?.id || "");
+    if (!FRIEND_REQ_ID.test(id)) return { status: 400, error: "bad_request" };
+    const req = await fs.get(`friendRequests/${id}`);
+    if (action === "cancel") {   // 自分が送った申請を取り消す
+      if (!req || req.fromUid !== uid) return { status: 404, error: "gone" };
+      await fs.delete(`friendRequests/${id}`);
+      return { ok: true };
+    }
+    if (action === "respond") {   // 来た申請に、承認（accept: true）か、断る（false）
+      if (!req || req.toUid !== uid) return { status: 404, error: "gone" };
+      if (body?.accept !== true) { await fs.delete(`friendRequests/${id}`); return { ok: true, accepted: false }; }
+      const raw = await fs.getRaw(`users/${req.fromName}`);
+      const t = raw ? decodeFields(raw.fields) : null;
+      if (!t || t.uid !== req.fromUid) { await fs.delete(`friendRequests/${id}`); return { status: 404, error: "gone" }; }   // 相手がいなくなった／名前が変わった
+      if ((await fs.get(`blocks/${req.fromUid}_${uid}`)) || (await fs.get(`blocks/${uid}_${req.fromUid}`))) { await fs.delete(`friendRequests/${id}`); return { status: 409, error: "blocked" }; }
+      await friendCreate(deps, mine, { name: req.fromName, uid: req.fromUid, photo: String(t.profileImage || "") });
+      await fs.delete(`friendRequests/${id}`);
+      return { ok: true, accepted: true, name: req.fromName };
+    }
+    return { status: 400, error: "unknown_action" };
+  } catch (error) {
+    console.error("friend error", String(error?.message || error).slice(0, 300));
+    return { status: 500, error: "internal_error" };
+  }
 }
 
 /* ロビーの席の一覧。6台を1台ずつ読まず、yuslotSeats を1回の問い合わせで読む（読み取り＝席に座っている台の数だけ）。

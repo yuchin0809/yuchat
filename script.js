@@ -1372,6 +1372,7 @@ let friendDocsAsUser1 = null;
 let friendDocsAsUser2 = null;
 
 function stopFriendListeners() {
+  stopFriendRequestListeners();
   if (unsubscribeFriends) { unsubscribeFriends(); unsubscribeFriends = null; }
   if (unsubscribeFriendsAsUser2) { unsubscribeFriendsAsUser2(); unsubscribeFriendsAsUser2 = null; }
   friendDocsAsUser1 = null;
@@ -1405,6 +1406,7 @@ function toFriendEntry(item, meIsUser1) {
 function listenFriends() {
   if (!username) return;
   stopFriendListeners();
+  listenFriendRequests();
 
   const rebuild = () => {
     if (!friendDocsAsUser1 || !friendDocsAsUser2) return; /* 両方そろってから表示する */
@@ -1517,43 +1519,78 @@ function renderFriends() {
   }
 }
 
+/* 👥 友達申請：名前を入れると、相手に申請が届く。相手が承認すると友達になる（名前を入れるだけでは友達にならない）。
+   友達の書類を作るのは通知 Worker だけ（/friend）。申請は、友達一覧の上に出る */
+async function callFriendApi(action, payload = {}) {
+  if (!currentUser || !username) throw Object.assign(new Error("not_logged_in"), { code: "not_logged_in" });
+  const token = await currentUser.getIdToken();
+  const res = await fetch(NOTIFY_ENDPOINT.replace(/\/notify$/, "/friend"), { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ action, username, ...payload }) });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || json.ok === false) throw Object.assign(new Error(json.error || `http_${res.status}`), { code: json.error || `http_${res.status}` });
+  return json;
+}
+const FRIEND_ERRORS = {
+  not_found: "そのユーザーは見つかりません。", self: "自分自身は追加できません。", already_friends: "すでに友達です。", already_requested: "すでに申請ずみです。相手の承認を待っています。",
+  too_many: "申請が多すぎます。承認されていない申請を取り消してからにしてください。", you_blocked: "その人はブロックしています。", blocked: "友達になれませんでした。", gone: "その申請は、もうありません。", bad_name: "名前を確かめてください。"
+};
 addFriendButton?.addEventListener("click", async () => {
-  const friendName = prompt("追加したい友達の名前を入力してください。");
+  const friendName = prompt("友達申請したい人の名前を入力してください。\n（相手が承認すると、友達になります）");
   if (friendName === null) return;
-
   const trimmed = friendName.trim();
   if (!trimmed) return alert("名前を入力してください。");
   if (trimmed === username) return alert("自分自身は追加できません。");
-
   try {
-    const userDoc = await getDoc(doc(db, "users", trimmed));
-    if (!userDoc.exists()) return alert("そのユーザーは見つかりません。");
-
-    const userData = userDoc.data();
-    const friendshipId = createFriendshipId(username, trimmed);
-    const friendshipRef = doc(db, "friends", friendshipId);
-    const existing = await getDoc(friendshipRef);
-    if (existing.exists()) return alert("すでに友達です。");
-
-    const myImage = getMyProfileImage();
-    const isUser1 = username < trimmed;
-
-    await setDoc(friendshipRef, {
-      user1: isUser1 ? username : trimmed,
-      user2: isUser1 ? trimmed : username,
-      user1Uid: isUser1 ? currentUser.uid : userData.uid,
-      user2Uid: isUser1 ? userData.uid : currentUser.uid,
-      user1Photo: isUser1 ? myImage : (userData.profileImage || ""),
-      user2Photo: isUser1 ? (userData.profileImage || "") : myImage,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp()
-    });
-
-    alert(`${trimmed}を友達に追加しました。`);
+    const r = await callFriendApi("request", { name: trimmed });
+    alert(r.accepted ? `${trimmed}さんも申請してくれていたので、友達になりました。` : `${trimmed}さんに友達申請を送りました。承認されると、友達になります。`);
   } catch (error) {
-    console.error("友達追加エラー:", error);
-    alert("友達追加に失敗しました。");
+    if (!FRIEND_ERRORS[error.code]) console.error("友達申請エラー:", error);
+    alert(FRIEND_ERRORS[error.code] || "友達申請に失敗しました。時間をおいて、もう一度お試しください。");
   }
+});
+
+let friendReqIn = [], friendReqOut = [], friendReqInSeen = null, unsubscribeReqIn = null, unsubscribeReqOut = null;
+function stopFriendRequestListeners() {
+  if (unsubscribeReqIn) { unsubscribeReqIn(); unsubscribeReqIn = null; }
+  if (unsubscribeReqOut) { unsubscribeReqOut(); unsubscribeReqOut = null; }
+  friendReqIn = []; friendReqOut = []; friendReqInSeen = null;
+  renderFriendRequests();
+}
+function listenFriendRequests() {
+  stopFriendRequestListeners();
+  if (!currentUser) return;
+  const onError = (error) => console.error("友達申請の監視エラー:", error);
+  unsubscribeReqIn = onSnapshot(query(collection(db, "friendRequests"), where("toUid", "==", currentUser.uid)), (snapshot) => {
+    friendReqIn = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+    if (friendReqInSeen) friendReqIn.filter((r) => !friendReqInSeen.has(r.id)).forEach((r) => showAppToast("👋 友達申請", `${r.fromName}さんから友達申請が届きました`));
+    friendReqInSeen = new Set(friendReqIn.map((r) => r.id));
+    renderFriendRequests();
+  }, onError);
+  unsubscribeReqOut = onSnapshot(query(collection(db, "friendRequests"), where("fromUid", "==", currentUser.uid)), (snapshot) => {
+    friendReqOut = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+    renderFriendRequests();
+  }, onError);
+}
+function renderFriendRequests() {
+  const box = document.getElementById("friendRequestsBox");
+  if (!box) return;
+  if (!friendReqIn.length && !friendReqOut.length) { box.innerHTML = ""; box.classList.add("hidden"); return; }
+  box.classList.remove("hidden");
+  box.innerHTML = [
+    ...friendReqIn.map((r) => `<div class="friend-req"><span>👋 <b>${escapeHTML(r.fromName || "")}</b>さんから友達申請</span><button type="button" class="friend-req-yes" data-req-accept="${escapeHTML(r.id)}">承認</button><button type="button" class="friend-req-no" data-req-decline="${escapeHTML(r.id)}">断る</button></div>`),
+    ...friendReqOut.map((r) => `<div class="friend-req out"><span>申請中：<b>${escapeHTML(r.toName || "")}</b>さん</span><button type="button" class="friend-req-no" data-req-cancel="${escapeHTML(r.id)}">取り消す</button></div>`)
+  ].join("");
+}
+document.getElementById("friendRequestsBox")?.addEventListener("click", async (event) => {
+  const btn = event.target.closest("button"); if (!btn) return;
+  const id = btn.dataset.reqAccept || btn.dataset.reqDecline || btn.dataset.reqCancel; if (!id) return;
+  btn.disabled = true;
+  try {
+    if (btn.dataset.reqCancel) await callFriendApi("cancel", { id });
+    else {
+      const r = await callFriendApi("respond", { id, accept: !!btn.dataset.reqAccept });
+      if (r.accepted) showAppToast("👥 友達", `${r.name}さんと友達になりました`);
+    }
+  } catch (error) { btn.disabled = false; alert(FRIEND_ERRORS[error.code] || "処理できませんでした。時間をおいて、もう一度お試しください。"); }
 });
 
 /* 友達関係の解除：friends/{friendshipId} だけを消す（自分と相手の両方の友達一覧から消える）
