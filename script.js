@@ -232,6 +232,9 @@ const economyView = document.getElementById("economyView");
 const economyContent = document.getElementById("economyContent");
 const yuworldView = document.getElementById("yuworldView");
 const martView = document.getElementById("martView");
+const yurealView = document.getElementById("yurealView");
+const yurealTabButton = document.getElementById("yurealTabButton");
+let yurealAllowed = false, yurealLoadedFor = null;   // 📸 YuReal を見せてよいか（Worker が決める）
 
 const derbyCountdown = document.getElementById("derbyCountdown");
 const raceTrack = document.getElementById("raceTrack");
@@ -3611,7 +3614,7 @@ function parseNotificationTarget(search) {
     const params = new URLSearchParams(search || "");
     const open = params.get("open");
     /* 🏇 ゆうダービー開始前・📢 新しいお知らせの通知は、その画面を開く */
-    if (open === "derby" || open === "announcements" || open === "games" || open === "economy") return { open };   // games：ゲームの招待の通知（招待のバナーが出る画面）
+    if (open === "derby" || open === "announcements" || open === "games" || open === "economy" || open === "yureal") return { open };   // games：ゲームの招待の通知（招待のバナーが出る画面）
     if (open !== "chat") return null;
     return { open: "chat", friendship: params.get("friendship") || null, group: params.get("group") || null };
   } catch (error) {
@@ -3803,7 +3806,7 @@ tabButtons.forEach((button) => {
 
 /* アプリ版（スマホ）：「あそぶ」の中の画面と、ヘッダーに出す画面の名前 */
 const APP_PLAY_VIEWS = ["derby", "yuworld", "economy", "games"];
-const APP_VIEW_TITLES = { chat: "チャット", play: "あそぶ", derby: "ゆうダービー", yuworld: "ゆうワールド", games: "ゆうワールド", economy: "ゆう経済", mart: "ゆうマート", announcements: "お知らせ", mypage: "マイページ", usermanage: "ユーザー管理" };
+const APP_VIEW_TITLES = { chat: "チャット", play: "あそぶ", derby: "ゆうダービー", yuworld: "ゆうワールド", games: "ゆうワールド", economy: "ゆう経済", mart: "ゆうマート", yureal: "YuReal", announcements: "お知らせ", mypage: "マイページ", usermanage: "ユーザー管理" };
 const appHeaderTitle = document.getElementById("appHeaderTitle");
 const appPlusMenu = document.getElementById("appPlusMenu");
 document.body.dataset.view = "chat";
@@ -3834,8 +3837,9 @@ function syncAppProfile() {
 function switchView(view) {
   /* 👤 ユーザー管理は管理者だけ（タブも管理者にだけ表示） */
   if (view === "usermanage" && !isAdminUser()) view = "chat";
+  if (view === "yureal" && !yurealAllowed) view = "chat";   /* 📸 YuReal は、公開されるまで管理者だけ */
   currentViewName = view;
-  const views = { chat: chatView, play: playView, derby: derbyView, economy: economyView, games: gamesView, yuworld: yuworldView, mart: martView, announcements: announcementsView, mypage: mypageView, usermanage: userManageView };
+  const views = { chat: chatView, play: playView, derby: derbyView, economy: economyView, games: gamesView, yuworld: yuworldView, mart: martView, yureal: yurealView, announcements: announcementsView, mypage: mypageView, usermanage: userManageView };
 
   Object.entries(views).forEach(([name, element]) => {
     if (!element) return;
@@ -3865,6 +3869,8 @@ function switchView(view) {
   else stopYuWorldView();
   if (view === "mart") openYuMartView();
   else stopYuMartView();
+  if (view === "yureal") openYurealView();
+  else stopYurealView();
   if (view === "announcements") openAnnouncementsView();
   else stopAnnouncementsSubscription();
   if (view === "usermanage") openUserManageView();
@@ -3923,6 +3929,27 @@ function showLazyPlaceholder(id) {
 }
 const openYuWorldView = () => { showLazyPlaceholder("yuworldRoot"); return lazyOpener(lazyYuWorld, "openYuWorldView", () => currentViewName === "yuworld")(); };
 const stopYuWorldView = lazyCaller(lazyYuWorld, "stopYuWorldView");
+
+/* 📸 YuReal（いまは管理者だけ。公開の状態は、ログイン後に Worker に聞く。聞くのは1回だけ） */
+const yurealEndpoint = () => NOTIFY_ENDPOINT.replace(/\/notify$/, "/yureal");
+const lazyYureal = lazyModule("./yureal.js?v=20261111-yr1", (m) => m.initYureal({
+  endpoint: yurealEndpoint(),
+  getToken: () => currentUser.getIdToken(),
+  getUsername: () => username
+}));
+const openYurealView = () => { showLazyPlaceholder("yurealRoot"); return lazyOpener(lazyYureal, "openYurealView", () => currentViewName === "yureal")(); };
+const stopYurealView = lazyCaller(lazyYureal, "stopYurealView");
+async function loadYurealConfig() {
+  if (!currentUser || yurealLoadedFor === currentUser.uid) return;
+  yurealLoadedFor = currentUser.uid;
+  try {
+    const token = await currentUser.getIdToken();
+    const res = await fetch(yurealEndpoint(), { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ action: "config", username }) });
+    const json = await res.json().catch(() => ({}));
+    yurealAllowed = res.ok && json.allowed === true;
+  } catch (error) { yurealAllowed = false; }
+  yurealTabButton?.classList.toggle("hidden", !yurealAllowed);
+}
 
 /* 🏪 ゆうマート */
 const lazyYuMart = lazyModule("./yumart.js?v=20261105-ef1", (m) => m.initYuMart({
@@ -6132,6 +6159,7 @@ function updateAdminVisibility() {
   document.getElementById("derbyAdminPanel")?.classList.toggle("hidden", !admin);
   document.getElementById("announcementAdminPanel")?.classList.toggle("hidden", !admin);
   updateUserManageVisibility();
+  loadYurealConfig();
   if (admin) renderManualRaceAdminList();
 }
 
@@ -6386,6 +6414,7 @@ function resetUserManageState() {
   userManageAuthOnlyEl?.classList.add("hidden");
   if (userManageStatusEl) userManageStatusEl.textContent = "";
   userManageTabButton?.classList.add("hidden");
+  yurealAllowed = false; yurealLoadedFor = null; yurealTabButton?.classList.add("hidden");
 }
 
 function formatUmDate(value) {
