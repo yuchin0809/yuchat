@@ -252,7 +252,10 @@ const TEST_CASES = [
   testCase("DENY", "users：管理者でも他人の users を直接は書き換えられない（名前の強制変更以外）", admin, "update", "users/bob", { data: { uid: "bob", coins: 1 }, existing: { uid: "bob", coins: 1000 } }),
   testCase("ALLOW", "users：自分の名前で新規登録（経済項目なし）", userA, "create", "users/alice2", { data: { uid: userA.uid, name: "alice2" } }),
   testCase("DENY", "users：新規登録で経済項目（コイン）を入れる", userA, "create", "users/alice3", { data: { uid: userA.uid, name: "alice3", coins: 1000000 } }),
-  testCase("ALLOW", "friends：友達追加", userA, "create", "friends/alice_bob", { data: { user1: "alice", user2: "bob" } }),
+  testCase("DENY", "friends：友達の書類をブラウザから作る（友達申請を通さない）", userA, "create", "friends/alice_bob", { data: { user1: "alice", user2: "bob" } }),
+  testCase("DENY", "supporterIndex：ブラウザから書く（自分をサポーターにする）", userA, "update", "supporterIndex/all", { data: { byUid: {} }, existing: { byUid: {} } }),
+  testCase("DENY", "inviteCodes：ブラウザから読む", userA, "get", "inviteCodes/abc", { existing: { n: 1 } }),
+  testCase("DENY", "yurealImages：ブラウザから直接読む", userA, "get", "yurealImages/20261111_x", { existing: { img: "x" } }),
   // ===== 第2段階：チャット・通知（名前クレームで本人確認） =====
   testCase("ALLOW", "groups：メンバーが自分のグループを読む", userAlice, "get", "groups/g1", { existing: { name: "g", owner: "alice", ownerUid: userAlice.uid, members: ["alice", "bob"] } }),
   testCase("DENY", "groups：非メンバーが他人のグループを覗く", userCarol, "get", "groups/g1", { existing: { name: "g", owner: "alice", ownerUid: userAlice.uid, members: ["alice", "bob"] } }),
@@ -308,7 +311,8 @@ const TEST_CASES = [
   // 友達関係の解除（friends の削除）は当事者だけ。作成・更新は今まで通り
   testCase("ALLOW", "friends：当事者が友達関係を解除", userA, "delete", "friends/alice_bob", { existing: { user1: "alice", user2: "bob", user1Uid: userA.uid, user2Uid: "someoneElse" } }),
   testCase("DENY", "friends：当事者でない人が友達関係を解除", userA, "delete", "friends/bob_carol", { existing: { user1: "bob", user2: "carol", user1Uid: "someoneElse", user2Uid: "anotherOne" } }),
-  testCase("ALLOW", "friends：最新メッセージ・既読の更新（今まで通り）", userA, "update", "friends/bob_carol", { data: { user1: "bob", user2: "carol", lastMessagePreview: "x" }, existing: { user1: "bob", user2: "carol" } })
+  testCase("DENY", "friends：当事者でない人が友達関係を書き換える", userA, "update", "friends/bob_carol", { data: { user1: "bob", user2: "carol", lastMessagePreview: "x" }, existing: { user1: "bob", user2: "carol" } }),
+  testCase("ALLOW", "friends：当事者が最新メッセージ・既読を更新（今まで通り）", userA, "update", "friends/alice_bob", { data: { user1: "alice", user2: "bob", user1Uid: userA.uid, lastMessagePreview: "x" }, existing: { user1: "alice", user2: "bob", user1Uid: userA.uid } })
 ];
 
 async function runProductionEngineTests(api, projectId, source) {

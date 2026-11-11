@@ -61,7 +61,7 @@ service cloud.firestore {
     //   gameInvites：送った人・送られた人だけ／fcmTokens：アプリからは読まない（通知サーバーだけが読む）
     //   gameRooms・gameRoomOwners：専用のルールで判定（gameRooms はロビー表示のため読み取りは今まで通り許可）
     function hasDedicatedReadRules(collection) {
-      return collection in ['messages', 'groups', 'fcmTokens', 'gameInvites', 'gameRooms', 'gameRoomOwners', 'yuslotSeats', 'lotteryEntries', 'lotteryRounds', 'bankujiRounds', 'bankujiEntries', 'bankujiPasses', 'bankujiApply', 'economyStats', 'martIndex', 'yuslotKaku', 'yuslotPrefs', 'coinTransfers', 'yuslotRank', 'yuslotBattle', 'yuslotYacht', 'yuslotKeshi', 'yuslotKeshiLeague'];
+      return collection in ['supporters', 'supporterIndex', 'featureRequests', 'inviteCodes', 'inviteRedeems', 'yurealPosts', 'yurealImages', 'friendRequests', 'blocks', 'reports', 'messages', 'groups', 'fcmTokens', 'gameInvites', 'gameRooms', 'gameRoomOwners', 'yuslotSeats', 'lotteryEntries', 'lotteryRounds', 'bankujiRounds', 'bankujiEntries', 'bankujiPasses', 'bankujiApply', 'economyStats', 'martIndex', 'yuslotKaku', 'yuslotPrefs', 'coinTransfers', 'yuslotRank', 'yuslotBattle', 'yuslotYacht', 'yuslotKeshi', 'yuslotKeshiLeague'];
     }
 
     // 下のコレクションは管理者だけが読める
@@ -103,12 +103,15 @@ service cloud.firestore {
         // 🧽 消しバト：1人ひとりの消しゴム（買ったパーツ・付けているパーツ・色）は通知 Worker（サービスアカウント）だけが書く
         'yuslotKeshi',
         // 🏆 消しバトのリーグ戦：週の戦績（yuslotKeshiLeague）は通知 Worker（サービスアカウント）だけが書く
-        'yuslotKeshiLeague'];
+        'yuslotKeshiLeague',
+        // ⭐ サポーター（supporters・supporterIndex・featureRequests）・🎟 招待コード（inviteCodes・inviteRedeems）・📸 YuSnap の写真（yurealPosts・yurealImages）・👥 友達申請（friendRequests）・ブロック（blocks）・通報（reports）は Worker だけが書く
+        'supporters', 'supporterIndex', 'featureRequests', 'inviteCodes', 'inviteRedeems', 'yurealPosts', 'yurealImages', 'friendRequests', 'blocks', 'reports'];
     }
 
     // ===== もとのルール（管理者用・自動処理用・廃止したコレクション・専用ルールのあるコレクション以外は今まで通り） =====
     match /{collection}/{document=**} {
-      allow read: if signedIn() && !isRetiredCollection(collection) && !isAdminOnlyReadCollection(collection) && !hasDedicatedReadRules(collection);
+      allow read: if signedIn() && !isRetiredCollection(collection) && !isAdminOnlyReadCollection(collection) && !hasDedicatedReadRules(collection)
+        && !(collection == 'users' && string(document).matches('.*/.*'));   // users の下のデータ（サブコレクション）は、専用のルール（本人だけ）で判定する
       allow write: if signedIn() && !isAdminManagedCollection(collection) && !isServerOnlyCollection(collection) && !isRetiredCollection(collection) && !hasDedicatedWriteRules(collection);
     }
 
@@ -237,16 +240,21 @@ service cloud.firestore {
     }
 
     // users の下のデータ（サブコレクション）は今まで通り（{rest=**} は 0 階層にも一致するので、1階層目を {sub} で受ける）
+    // ただし、本人のものだけ（ほかの人の下のデータは読み書きできない。いまのアプリは、この下のデータを使っていない）
     match /users/{userName}/{sub}/{rest=**} {
-      allow read, write: if signedIn();
+      allow read, write: if signedIn()
+        && get(/databases/$(database)/documents/users/$(userName)).data.get('uid', '') == request.auth.uid;
     }
 
     // ===== 友達関係（friends/{friendshipId}） =====
     // 作成・更新（友達追加・最新メッセージ・既読・プロフィール画像・名前変更の引き継ぎ）：今まで通りログイン済みなら可
     // 削除（友達関係の解除）：その友達関係の当事者（user1 / user2）だけ。メッセージ（messages）は消さない
     //   当事者かどうかは uid の項目（user1Uid / user2Uid）で判定し、uid の項目が無い古い友達関係は、名前から users の uid を見て判定する
+    // 作成：ブラウザからはできない（友達申請を相手が承認したとき、通知 Worker だけが作る。名前を入れるだけで友達になれないように）
+    // 更新：友達関係の当事者だけ
     match /friends/{friendshipId} {
-      allow create, update: if signedIn();
+      allow create: if false;
+      allow update: if signedIn() && isFriendshipMember(resource.data);
       allow delete: if signedIn() && isFriendshipMember(resource.data);
 
       function isFriendshipMember(data) {
@@ -261,6 +269,15 @@ service cloud.firestore {
           && exists(/databases/$(database)/documents/users/$(name))
           && get(/databases/$(database)/documents/users/$(name)).data.get('uid', '') == request.auth.uid;
       }
+    }
+
+    // ===== 友達申請（friendRequests/{申請した人のuid}_{された人のuid}）・ブロック（blocks/{ブロックした人のuid}_{された人のuid}） =====
+    // 読み取り：当事者だけ（申請を出した人・受けた人／ブロックした人）。書き込みは Worker だけ（isServerOnlyCollection）
+    match /friendRequests/{requestId} {
+      allow read: if signedIn() && (resource.data.get('toUid', '') == request.auth.uid || resource.data.get('fromUid', '') == request.auth.uid);
+    }
+    match /blocks/{blockId} {
+      allow read: if signedIn() && resource.data.get('blockerUid', '') == request.auth.uid;
     }
 
     // ===== 管理者による名前の強制変更の記録（adminNameChanges/{古い名前}） =====

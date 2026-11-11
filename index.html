@@ -31,7 +31,7 @@
 
     <link
         rel="stylesheet"
-        href="./style.css?v=20261111-ipad2"
+        href="./style.css?v=20261111-fr1"
     >
 
     <!-- 起動を早くするため、アプリ本体の読み込みと並べて Firebase の部品と接続先を先に準備する -->
@@ -757,6 +757,9 @@
                 友達
             </div>
 
+
+            <!-- 👥 友達申請（来た申請の承認・断る／送った申請の取り消し）。申請がないときは隠れている -->
+            <div id="friendRequestsBox" class="friend-req-box hidden"></div>
 
             <div
                 id="friendsList"
@@ -1759,7 +1762,7 @@
      OFF のとき（とテスト環境）は、data-app-src のアプリ本体を読み込む -->
 <script
     src="./maintenance.js?v=20261009-maint-quota"
-    data-app-src="./script.js?v=20261111-sn1"
+    data-app-src="./script.js?v=20261111-fr1"
 ></script>
 <!-- 🔄 サイトが新しくなったら、画面の上に「アップデート」を出す（yuupdate.js） -->
 <script type="module" src="./yuupdate.js?v=20261111-up3"></script>
