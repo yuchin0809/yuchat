@@ -2,9 +2,12 @@
    ・サイトが新しくなったら、画面の上に「新しいバージョンがあります［アップデート］」を出す（自動では読み込み直さない。入力の途中で消えないように、押したときだけ）
    ・調べ方：開いているページが読み込んだ部品の版（?v=…）と、いまサイトにある index.html の版を比べる。ちがえば、新しい版がある
      （サイトを更新するときは、index.html の版の文字列を上げる決まり。部品を変えたら、index.html の版も上げる）
-   ・調べるタイミング：開いたあと・ほかの画面から戻ってきたとき・開いている間は5分おき。index.html を1回読むだけ（Firebase にはさわらない）
+   ・調べるタイミング：日本時間の 8:00〜15:00 のあいだだけ、前に調べてから3時間以上たっているとき（開いたあと・ほかの画面から戻ってきたとき・開いている間は10分おきに「調べる時間か」を見るだけ）。調べるのは index.html を1回読むだけ（Firebase にはさわらない）。前に調べた時刻は、この端末に残す
    ・アプリ版（Capacitor）は、アプリの中の部品を使うので、出さない */
-const CHECK_MS = 5 * 60 * 1000;
+const TICK_MS = 10 * 60 * 1000;           // 「調べる時間か」を見る間隔（見るだけ。通信はしない）
+const EVERY_MS = 3 * 60 * 60 * 1000;      // 調べるのは、3時間に1回まで
+const START_HOUR = 8, END_HOUR = 15;      // 日本時間の 8:00〜15:00 のあいだだけ
+const LAST_KEY = "yuUpdateLast";
 const SNOOZE_MS = 30 * 60 * 1000;
 
 const sigOf = (list) => [...new Set(list)].sort().join("|");
@@ -24,6 +27,15 @@ export function htmlSig(text) {
 }
 /* 新しい版があるか（どちらかの版の一覧が空のときは、判断しない） */
 export function needsUpdate(running, latest) { return !!running && !!latest && running !== latest; }
+
+/* 調べる時間か：日本時間の 8:00〜15:00 のあいだで、前に調べてから3時間以上たっている */
+export function shouldCheck(nowMs, lastMs) {
+  const hour = Number(new Date(nowMs + 9 * 3600000).getUTCHours());
+  if (hour < START_HOUR || hour >= END_HOUR) return false;
+  return !Number.isFinite(lastMs) || nowMs - lastMs >= EVERY_MS || nowMs < lastMs;
+}
+const readLast = () => { try { return Number(localStorage.getItem(LAST_KEY)); } catch (_) { return NaN; } };
+const writeLast = (ms) => { try { localStorage.setItem(LAST_KEY, String(ms)); } catch (_) { /* 残せなくても動く */ } };
 
 function ensureBanner() {
   let el = document.getElementById("yuUpdateBanner");
@@ -50,7 +62,8 @@ function ensureBanner() {
 let snoozeUntil = 0, busy = false;
 async function check() {
   if (busy || document.hidden || Date.now() < snoozeUntil || document.getElementById("yuUpdateBanner")) return;
-  busy = true;
+  if (!shouldCheck(Date.now(), readLast())) return;
+  busy = true; writeLast(Date.now());
   try {
     // 分ごとに変わる文字を付けて、途中のキャッシュに古いものが残っていても、1分以内に新しいものが届くようにする（同じ分の人どうしは、同じものを使う）
     const url = `${location.pathname}?_u=${Math.floor(Date.now() / 60000)}`;
@@ -66,7 +79,7 @@ function start() {
   if (!/^https?:$/.test(location.protocol)) return;
   if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) return;
   setTimeout(check, 8000);
-  setInterval(check, CHECK_MS);
+  setInterval(check, TICK_MS);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) check(); });
   window.addEventListener("online", check);
 }
