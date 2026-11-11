@@ -3,8 +3,8 @@
    ・打ち方：白い球から、指を引っぱって離す（引いた向きの反対へ飛ぶ。長く引くほど強い）。押し・引きも選べる
    ・球の動きは yubilliards-core.js（決まった計算）。CPUは yubilliards-ai.js。通信はしない
    ・ベストの記録（練習）は、この端末だけに残す */
-import { TABLE, POCKETS, POCKET_R, BALL_COLORS, HEAD_SPOT, FOOT_SPOT, groupLeft, lowestBall, groupOf, restore, newGame, shoot, step, isRest, settle, endShot, remaining, isCleared, cueBall, aimLine, canPlace, placeCue } from "./yubilliards-core.js?v=20261111-bl6";
-import { chooseShot, choosePlacement, bestShot } from "./yubilliards-ai.js?v=20261111-bl6";
+import { TABLE, POCKETS, POCKET_R, BALL_COLORS, HEAD_SPOT, FOOT_SPOT, groupLeft, lowestBall, groupOf, restore, newGame, shoot, step, isRest, settle, endShot, remaining, isCleared, cueBall, aimLine, canPlace, placeCue } from "./yubilliards-core.js?v=20261111-bl7";
+import { chooseShot, choosePlacement, bestShot } from "./yubilliards-ai.js?v=20261111-bl7";
 
 const M = 40;                          // 台の木の縁の幅（台の単位）
 const BEST_KEY = "yuBilliardsBest";
@@ -615,9 +615,10 @@ export function renderBilliards({ root, esc = (s) => String(s), onBack, adminNot
   canvas.addEventListener("pointermove", onMove);
   canvas.addEventListener("pointerup", onUp);
   canvas.addEventListener("pointercancel", () => { pulling = false; dragCue = false; aim = null; draw(); });
-  stage.addEventListener("touchstart", stopScroll, { passive: false });
-  stage.addEventListener("touchmove", stopScroll, { passive: false });
-  stage.addEventListener("contextmenu", stopScroll);
+  // 台の上の引っぱりでは、画面が動かないようにする。台の上だけに付ける（ルール選び・「もう一度」のボタンは、台の上に重ねてあるので、ここに付けると、スマホでタップが効かなくなる）
+  canvas.addEventListener("touchstart", stopScroll, { passive: false });
+  canvas.addEventListener("touchmove", stopScroll, { passive: false });
+  canvas.addEventListener("contextmenu", stopScroll);
   $("#blBack")?.addEventListener("click", () => { stopBilliards(); if (onBack) onBack(); });
   $("#blReset")?.addEventListener("click", reset);
   $("#blAgain").addEventListener("click", () => { if (ON) rematch(); else reset(); });
