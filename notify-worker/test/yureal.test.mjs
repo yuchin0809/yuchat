@@ -1,7 +1,7 @@
 /* 📸 YuReal（worker.js の handleYurealAction・runYurealTick）のテスト */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { handleYurealAction, resetYurealCacheForTest, resetYurealTickForTest, runYurealTick, yurealTimeFor, yurealDateKey } from "../worker.js";
+import { runYurealLaunchTick, resetYurealLaunchForTest, YUREAL_LAUNCH_MS, YUREAL_ANNOUNCE_ID, handleYurealAction, resetYurealCacheForTest, resetYurealTickForTest, runYurealTick, yurealTimeFor, yurealDateKey } from "../worker.js";
 
 console.warn = () => {};
 
@@ -176,3 +176,19 @@ test("古い写真の掃除：毎日3:10〜3:20に、2日より古い分（2〜3
   assert.equal(c.fs.plain(`yurealPosts/${dk(2)}_c`), null); assert.equal(c.fs.plain(`yurealImages/${dk(3)}_d`), null);
 });
 function jst310(atMs) { const key = yurealDateKey(atMs); return Date.UTC(Number(key.slice(0, 4)), Number(key.slice(4, 6)) - 1, Number(key.slice(6, 8))) - 9 * 3600000 + (3 * 60 + 12) * 60000; }
+
+test("公開とお知らせ：決まった時刻に、公開のスイッチが入り、お知らせが1回だけ作られ、通知が1回だけ全員へ送られる。あとから非公開に戻しても、入れ直さない", async () => {
+  const c = setup(); resetYurealLaunchForTest();
+  c.fs.put("fcmTokens/t0", encF({ uid: "id0" })); c.fs.put("fcmTokens/t1", encF({ uid: "id1" }));
+  assert.equal((await runYurealLaunchTick({}, YUREAL_LAUNCH_MS - 60000, c.deps)).skipped, "outside");
+  const out = await runYurealLaunchTick({}, YUREAL_LAUNCH_MS + 60000, c.deps);
+  assert.equal(out.sent, 2);
+  assert.equal(c.fs.plain("worldConfig/yureal").published, true);
+  const a = c.fs.plain(`announcements/${YUREAL_ANNOUNCE_ID}`);
+  assert.ok(a.title.includes("ベータ版")); assert.ok(!/\d{1,2}[:：時]\d{2}/.test(a.body), "お知らせに、通知の時刻は書かない");
+  assert.equal((await runYurealLaunchTick({}, YUREAL_LAUNCH_MS + 120000, c.deps)).skipped, "done");
+  resetYurealLaunchForTest(); resetYurealCacheForTest();
+  await handleYurealAction(c.deps, ADMIN, { action: "setPublished", published: false });
+  assert.equal((await runYurealLaunchTick({}, YUREAL_LAUNCH_MS + 180000, c.deps)).skipped, "duplicate");
+  assert.equal(c.fs.plain("worldConfig/yureal").published, false, "管理者が戻したあとは、入れ直さない");
+});

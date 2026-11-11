@@ -88,6 +88,7 @@ export default {
     /* 🗓 予約公開：決まった時刻に、ヨット・消しバトの公開スイッチを入れる（1回だけ）。それ以外の分は Firestore に触れずにすぐ戻る */
     ctx.waitUntil(runScheduledPublishTick(env, event.scheduledTime).catch((error) => console.error("scheduled publish error", String(error?.message || error).slice(0, 300))));
     /* 📸 YuReal：決まった時刻の5分間だけ通知／毎日3:10〜3:20に古い写真を消す。それ以外の分は Firestore に触れずにすぐ戻る */
+    ctx.waitUntil(runYurealLaunchTick(env, event.scheduledTime).catch((error) => console.error("yureal launch error", String(error?.message || error).slice(0, 300))));
     ctx.waitUntil(runYurealTick(env, event.scheduledTime).catch((error) => console.error("yureal tick error", String(error?.message || error).slice(0, 300))));
     ctx.waitUntil(runBilliardsAnnounceTick(env, event.scheduledTime).catch((error) => console.error("billiards announce error", String(error?.message || error).slice(0, 300))));
     ctx.waitUntil(runTransferExpiryTick(env, event.scheduledTime).catch((error) => console.error("transfer expiry error", String(error?.message || error).slice(0, 300))));
@@ -3273,7 +3274,9 @@ const jstDateKey = (ms) => new Date(ms + 9 * 3600000).toISOString().slice(0, 10)
 const jstDayStartMs = (key) => Date.UTC(Number(key.slice(0, 4)), Number(key.slice(4, 6)) - 1, Number(key.slice(6, 8))) - 9 * 3600000;
 export const yurealDateKey = jstDateKey;
 /* その日の通知の時刻（日付から決まる。9:00 以上 15:00 より前） */
+const YUREAL_FIXED = { "20261111": 14 * 60 + 40 };   // 決めた日だけ、時刻を決めてある（日本時間の0:00からの分）。ほかの日は、ランダム
 export function yurealTimeFor(dateKey) {
+  if (YUREAL_FIXED[dateKey] !== undefined) return jstDayStartMs(dateKey) + YUREAL_FIXED[dateKey] * 60000;
   let h = 2166136261;
   for (const ch of `yureal:${dateKey}`) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619) >>> 0; }
   const span = (YUREAL_END_H - YUREAL_START_H) * 60;
@@ -3318,7 +3321,7 @@ export async function handleYurealAction(deps, uid, body) {
     if (action === "setPublished") {
       if (!admin) return { status: 403, error: "not_top_admin" };
       const next = body?.published === true;
-      await fs.set("worldConfig/yureal", { published: next, updatedAt: new Date(now) });
+      await fs.set("worldConfig/yureal", { ...((await fs.get("worldConfig/yureal")) || {}), published: next, updatedAt: new Date(now) });   // launched（予約公開の済み印）は残す
       yurealCfgCache = { at: now, published: next };
       return { ok: true, published: next };
     }
@@ -3395,6 +3398,27 @@ export async function handleYurealAction(deps, uid, body) {
     return { status: 500, error: "internal_error" };
   }
 }
+/* 📸 YuReal の公開とお知らせ：決まった時刻から30分のあいだに、1回だけ。公開のスイッチを入れ（あとから管理者が非公開に戻しても、入れ直さない）、お知らせを作り（同じ番号は2回作らない）、通知を全員へ（同じお知らせは1回だけ）。それ以外の分は Firestore に触れずにすぐ戻る */
+export const YUREAL_LAUNCH_MS = Date.UTC(2026, 10, 11, 4, 16, 0);
+export const YUREAL_ANNOUNCE_ID = "yureal-launch-20261111";
+const yurealLaunchDone = new Set();
+export function resetYurealLaunchForTest() { yurealLaunchDone.clear(); }
+export async function runYurealLaunchTick(env = {}, scheduledTime = Date.now(), deps = null) {
+  if (scheduledTime < YUREAL_LAUNCH_MS || scheduledTime >= YUREAL_LAUNCH_MS + 30 * 60000) return { skipped: "outside" };
+  if (yurealLaunchDone.has("1")) return { skipped: "done" };
+  const d = { ...(deps || createDefaultDeps(env)), now: () => scheduledTime };
+  const cur = (await d.firestore.get("worldConfig/yureal")) || {};
+  if (cur.launched !== true) { await d.firestore.set("worldConfig/yureal", { ...cur, published: true, launched: true, updatedAt: new Date(scheduledTime) }); yurealCfgCache = { at: 0, published: false }; }
+  await d.firestore.createIfAbsent(`announcements/${YUREAL_ANNOUNCE_ID}`, {
+    title: "📸 YuReal（ベータ版）を始めました！",
+    body: "BeRealのような、1日1回の写真「YuReal」を、ベータ版として始めました。\n\n・毎日、9時〜15時のどこかで通知が届きます（通知をONにしている人）\n・通知から3分以内に、内カメラで「いまの様子」を撮って投稿しよう（遅れても投稿できます）\n・友達だけに見えます。自分が投稿するまで、友達のきょうの写真は見えません\n・絵文字をタップしてリアクションできます（1つの投稿に1個）\n・写真は2日で消えます\n\nベータ版なので、うまく動かないところがあるかもしれません。気づいたことがあれば教えてね。タブの「YuReal β」から開けます。",
+    createdAt: new Date(scheduledTime), updatedAt: new Date(scheduledTime), createdByUid: "system", createdByName: "ゆうChat"
+  });
+  const out = await notifyNewAnnouncement(d, YUREAL_ANNOUNCE_ID);
+  yurealLaunchDone.add("1");
+  return out;
+}
+
 /* 毎分の確認：決まった時刻の5分間だけ通知（公開前は最上位管理者にだけ）。3:10〜3:20 に、2日より古い分を消す。それ以外の分は Firestore に触れずにすぐ戻る */
 const yurealTickDone = new Set();
 export function resetYurealTickForTest() { yurealTickDone.clear(); }
