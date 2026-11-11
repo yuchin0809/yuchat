@@ -62,8 +62,22 @@ async function ng(n, p) { try { await assertFails(p); pass++; logs.push("PASS �
   });
 
   logs.push("--- ① ゲームルーム：読み取りはロビー公開、作成は作成者が自分");
-  await ok("ログイン済みならロビー（gameRooms 一覧）を読める", getDocs(collection(alice, "gameRooms")));
+  await ok("自分が参加しているルームの一覧は読める", getDocs(query(collection(alice, "gameRooms"), where("memberUids", "array-contains", "uidA"))));
+  await ng("知らない人のルームも含む、全ルームの一覧は読めない", getDocs(collection(alice, "gameRooms")));
+  await ng("他人（uidA）が参加しているルームを、一覧で探す", getDocs(query(collection(carol, "gameRooms"), where("memberUids", "array-contains", "uidA"))));
+  await ok("ルームを1件ずつ（番号から）読むのは、ログイン済みならできる", getDoc(doc(carol, "gameRooms/room1")));
   await ng("未ログインはロビーを読めない", getDocs(collection(anon, "gameRooms")));
+  await ng("未ログインはルームを読めない", getDoc(doc(anon, "gameRooms/room1")));
+  await ok("alice がルーム番号 12345 を登録（自分のルーム）", setDoc(doc(alice, "gameRoomCodes/12345"), { roomId: "room1", ownerUid: "uidA", gameType: "othello" }));
+  await ok("ログイン済みなら、番号を1件ずつ読める", getDoc(doc(carol, "gameRoomCodes/12345")));
+  await ng("番号の一覧は読めない", getDocs(collection(carol, "gameRoomCodes")));
+  await ng("未ログインは番号を読めない", getDoc(doc(anon, "gameRoomCodes/12345")));
+  await ng("5桁ではない番号は作れない", setDoc(doc(alice, "gameRoomCodes/1234"), { roomId: "room1", ownerUid: "uidA" }));
+  await ng("他人（uidA）の名前で番号を作る", setDoc(doc(carol, "gameRoomCodes/22222"), { roomId: "room1", ownerUid: "uidA" }));
+  await ng("ルームがまだ残っている番号を、他人が上書きする", setDoc(doc(carol, "gameRoomCodes/12345"), { roomId: "roomX", ownerUid: "uidC" }));
+  await ok("ルームが無くなった番号は、他人が使い回せる", (async () => { await env.withSecurityRulesDisabled(async (ctx) => { await setDoc(doc(ctx.firestore(), "gameRoomCodes/33333"), { roomId: "gone", ownerUid: "uidA" }); }); await setDoc(doc(carol, "gameRoomCodes/33333"), { roomId: "roomC", ownerUid: "uidC" }); })());
+  await ng("他人が番号の記録を消す", deleteDoc(doc(carol, "gameRoomCodes/12345")));
+  await ok("作った人は、番号の記録を消せる", deleteDoc(doc(alice, "gameRoomCodes/12345")));
   await ok("alice が部屋を作る（ownerUid が自分・memberUids が自分だけ）", setDoc(doc(alice, "gameRooms/newA"), { gameType: "othello", owner: "alice", ownerUid: "uidA", members: ["alice"], memberUids: ["uidA"], status: "waiting", createdAt: serverTimestamp() }));
   await ng("alice が ownerUid を他人にして部屋を作る", setDoc(doc(alice, "gameRooms/evil1"), { gameType: "othello", ownerUid: "uidB", members: ["bob"], memberUids: ["uidB"], status: "waiting" }));
   await ng("alice が最初から他人を入れて部屋を作る", setDoc(doc(alice, "gameRooms/evil2"), { gameType: "othello", ownerUid: "uidA", members: ["alice", "bob"], memberUids: ["uidA", "uidB"], status: "waiting" }));

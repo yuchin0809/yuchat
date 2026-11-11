@@ -277,7 +277,7 @@ const TEST_CASES = [
   // ===== 第3段階：ゲーム・ユーザー作成 =====
   testCase("ALLOW", "gameRooms：作成者が自分で部屋を作る", userAlice, "create", "gameRooms/r1", { data: { gameType: "othello", owner: "alice", ownerUid: userAlice.uid, members: ["alice"], memberUids: [userAlice.uid], status: "waiting" } }),
   testCase("DENY", "gameRooms：ownerUid を他人にして部屋を作る", userAlice, "create", "gameRooms/r2", { data: { gameType: "othello", ownerUid: "someoneElse", members: ["x"], memberUids: ["someoneElse"], status: "waiting" } }),
-  testCase("ALLOW", "gameRooms：ロビーの読み取り（ログイン済み）", userAlice, "get", "gameRooms/r1", { existing: { gameType: "othello", ownerUid: userAlice.uid, members: ["alice"], memberUids: [userAlice.uid] } }),
+  testCase("ALLOW", "gameRooms：ルームを1件ずつ読む（番号で入る・ログイン済み）", userAlice, "get", "gameRooms/r1", { existing: { gameType: "othello", ownerUid: userAlice.uid, members: ["alice"], memberUids: [userAlice.uid] } }),
   testCase("DENY", "gameRooms：非参加者が盤面を書き換える", userCarol, "update", "gameRooms/r1", { data: { gameType: "othello", ownerUid: userAlice.uid, members: ["alice"], memberUids: [userAlice.uid], gameState: { x: 1 } }, existing: { gameType: "othello", ownerUid: userAlice.uid, members: ["alice"], memberUids: [userAlice.uid] } }),
   testCase("ALLOW", "gameInvites：送り主が自分で招待を作る", userAlice, "create", "gameInvites/r1_b", { data: { roomId: "r1", fromUid: userAlice.uid, from: "alice", toUid: "uidBob", to: "bob", status: "pending" } }),
   testCase("DENY", "gameInvites：送り主を偽装して招待を作る", userAlice, "create", "gameInvites/r1_c", { data: { roomId: "r1", fromUid: "someoneElse", toUid: "uidCarol", status: "pending" } }),
