@@ -53,7 +53,7 @@ service cloud.firestore {
     //   第3段階（ゲーム・ユーザー作成）：gameRooms・gameInvites・gameRoomOwners（参加者・当事者だけ）
     function hasDedicatedWriteRules(collection) {
       return collection in ['users', 'adminNameChanges', 'friends',
-        'messages', 'groups', 'fcmTokens', 'gameRooms', 'gameInvites', 'gameRoomOwners'];
+        'messages', 'groups', 'fcmTokens', 'gameRooms', 'gameInvites', 'gameRoomOwners', 'gameRoomCodes'];
     }
 
     // 下のコレクションは、読み取りも専用のルールで判定する（もとの「ログイン済みなら誰でも読める」から外す）。
@@ -61,7 +61,7 @@ service cloud.firestore {
     //   gameInvites：送った人・送られた人だけ／fcmTokens：アプリからは読まない（通知サーバーだけが読む）
     //   gameRooms・gameRoomOwners：専用のルールで判定（gameRooms はロビー表示のため読み取りは今まで通り許可）
     function hasDedicatedReadRules(collection) {
-      return collection in ['yuIds', 'supporters', 'supporterIndex', 'featureRequests', 'inviteCodes', 'inviteRedeems', 'yurealPosts', 'yurealImages', 'friendRequests', 'blocks', 'reports', 'messages', 'groups', 'fcmTokens', 'gameInvites', 'gameRooms', 'gameRoomOwners', 'yuslotSeats', 'lotteryEntries', 'lotteryRounds', 'bankujiRounds', 'bankujiEntries', 'bankujiPasses', 'bankujiApply', 'economyStats', 'martIndex', 'yuslotKaku', 'yuslotPrefs', 'coinTransfers', 'yuslotRank', 'yuslotBattle', 'yuslotYacht', 'yuslotKeshi', 'yuslotKeshiLeague'];
+      return collection in ['yuIds', 'supporters', 'supporterIndex', 'featureRequests', 'inviteCodes', 'inviteRedeems', 'yurealPosts', 'yurealImages', 'friendRequests', 'blocks', 'reports', 'messages', 'groups', 'fcmTokens', 'gameInvites', 'gameRooms', 'gameRoomOwners', 'gameRoomCodes', 'yuslotSeats', 'lotteryEntries', 'lotteryRounds', 'bankujiRounds', 'bankujiEntries', 'bankujiPasses', 'bankujiApply', 'economyStats', 'martIndex', 'yuslotKaku', 'yuslotPrefs', 'coinTransfers', 'yuslotRank', 'yuslotBattle', 'yuslotYacht', 'yuslotKeshi', 'yuslotKeshiLeague'];
     }
 
     // 下のコレクションは管理者だけが読める
@@ -533,13 +533,15 @@ service cloud.firestore {
     // ============================================================
 
     // ===== ゲームルーム（gameRooms/{roomId}） =====
-    // 読み取り：ログイン済みなら誰でも（ロビー表示・観戦）
+    // 読み取り：1件ずつ（get）はログイン済みなら誰でも（ルーム番号で入る・招待から開く）。一覧（list）は、自分が参加しているルームだけ
+    //   （知らない人のルームが、ロビーに見えてしまわないように）
     // 作成：作成者が自分（ownerUid が自分・memberUids が自分だけ）
     // 更新：参加者（memberUids に自分）／新しく参加する人（自分を memberUids に加える）／
     //       招待された人が invitedUsers から自分だけを外す（辞退・参加の後始末）
     // 削除：作成者、または最後の1人（memberUids が自分だけ）のとき
     match /gameRooms/{roomId} {
-      allow read: if signedIn();
+      allow get: if signedIn();
+      allow list: if signedIn() && request.auth.uid in resource.data.get('memberUids', []);
 
       allow create: if signedIn()
         && request.resource.data.get('ownerUid', '') == request.auth.uid
@@ -581,6 +583,20 @@ service cloud.firestore {
           && myName() != '' && myName() in resource.data.get('invitedUsers', [])
           && !(myName() in request.resource.data.get('invitedUsers', []))
           && resource.data.get('invitedUsers', []).hasAll(request.resource.data.get('invitedUsers', []));
+      }
+    }
+
+    // ===== ルーム番号（gameRoomCodes/{5桁の数字}） =====
+    // 5桁の番号 → ルームの対応表。番号を知っている人だけが、1件ずつ読んで入れる（一覧は読めない）。
+    // 作成・更新：作成者が自分。同じ番号の古い記録は、そのルームがもう無いときだけ上書きできる（片づけ不要）
+    match /gameRoomCodes/{code} {
+      allow get: if signedIn() && code.matches('^[0-9]{5}$');
+      allow create: if signedIn() && code.matches('^[0-9]{5}$') && validRoomCode(request.resource.data);
+      allow update: if signedIn() && code.matches('^[0-9]{5}$') && validRoomCode(request.resource.data)
+        && !exists(/databases/$(database)/documents/gameRooms/$(resource.data.get('roomId', 'none')));
+      allow delete: if signedIn() && resource.data.get('ownerUid', '') == request.auth.uid;
+      function validRoomCode(d) {
+        return d.get('ownerUid', '') == request.auth.uid && d.get('roomId', '') is string && d.get('roomId', '') != '';
       }
     }
 

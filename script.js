@@ -7971,12 +7971,11 @@ function loadGameRooms() {
   if (unsubscribeGameRooms) { unsubscribeGameRooms(); unsubscribeGameRooms = null; }
   if (!currentUser) return;
 
-  const parts = { recent: null, mine: null };
+  /* 知らない人のルームは出さない（ルーム番号を入れた人だけが入れる）。見えるのは、自分が入っているルームだけ */
+  const parts = { mine: null };
   const update = () => {
-    if (!parts.recent || !parts.mine) return;
-    const merged = new Map();
-    [...parts.recent, ...parts.mine].forEach((room) => merged.set(room.id, room));
-    latestGameRooms = [...merged.values()].sort((a, b) => timestampMillis(b.createdAt) - timestampMillis(a.createdAt));
+    if (!parts.mine) return;
+    latestGameRooms = [...parts.mine].sort((a, b) => timestampMillis(b.createdAt) - timestampMillis(a.createdAt));
     renderGameRooms(latestGameRooms);
   };
   const onError = (error) => {
@@ -7986,7 +7985,6 @@ function loadGameRooms() {
   const toRooms = (snapshot) => snapshot.docs.map((item) => ({ id: item.id, ...item.data() }));
 
   const unsubscribers = [
-    onSnapshot(query(collection(db, "gameRooms"), orderBy("createdAt", "desc"), limit(GAME_ROOM_LIST_LIMIT)), (snapshot) => { parts.recent = toRooms(snapshot); update(); }, onError),
     onSnapshot(query(collection(db, "gameRooms"), where("memberUids", "array-contains", currentUser.uid)), (snapshot) => { parts.mine = toRooms(snapshot); update(); }, onError)
   ];
   unsubscribeGameRooms = () => unsubscribers.forEach((u) => u());
@@ -8029,7 +8027,7 @@ function renderGameRooms(allRooms) {
   const rooms = (allRooms || []).filter((room) => room.gameType === currentGameType);
 
   if (rooms.length === 0) {
-    gameRoomsEl.innerHTML = `<div class="empty-state">参加できる${escapeHTML(getGameTypeName(currentGameType))}のルームはありません</div>`;
+    gameRoomsEl.innerHTML = `<div class="empty-state">${escapeHTML(getGameTypeName(currentGameType))}のルームはありません。ルームを作るか、友達から聞いた「ルーム番号」を入れて参加しよう</div>`;
     return;
   }
 
@@ -8040,6 +8038,7 @@ function renderGameRooms(allRooms) {
     card.innerHTML = `
       <div class="room-title">${escapeHTML(getGameTypeName(room.gameType))}</div>
       <div class="room-owner">作成者：${escapeHTML(room.owner || "不明")}</div>
+      ${room.roomCode ? `<div class="room-code">ルーム番号：<b>${escapeHTML(room.roomCode)}</b>（友達に教えると、入れます）</div>` : ""}
       <div class="room-members">参加者 ${members.length}/${getMaxGamePlayers(room.gameType)}人</div>
       <div class="room-status">${room.status === "playing" ? "プレイ中" : "参加者募集中"}</div>`;
 
@@ -8100,7 +8099,17 @@ createGameRoomButton?.addEventListener("click", async () => {
 
     const roomRef = doc(collection(db, "gameRooms"));
     const lockRef = doc(db, "gameRoomOwners", `${currentUser.uid}_${type}`);
-    await runTransaction(db, async (transaction) => {
+    let roomCode = "";
+    for (let attempt = 0; attempt < 8; attempt++) {   // 5桁の番号が、ほかのルームとかぶったら、番号を変えてやり直す
+      roomCode = String(Math.floor(Math.random() * 100000)).padStart(5, "0");
+      try {
+        await runTransaction(db, async (transaction) => {
+      const codeRef = doc(db, "gameRoomCodes", roomCode);
+      const codeSnap = await transaction.get(codeRef);   // 読み取りは、書き込みより先にする
+      if (codeSnap.exists()) {
+        const holder = await transaction.get(doc(db, "gameRooms", String(codeSnap.data().roomId || "none")));
+        if (holder.exists()) throw new Error("CODE_TAKEN");
+      }
       const lockSnap = await transaction.get(lockRef);
       const previousRoomId = lockSnap.exists() ? lockSnap.data().roomId : null;
       if (previousRoomId) {
@@ -8120,12 +8129,19 @@ createGameRoomButton?.addEventListener("click", async () => {
         maxPlayers: getMaxGamePlayers(type),
         status: "waiting",
         gameState: gameStateToFirestore(type, createInitialGameState(type)),
+        roomCode,
         ...(type === "daifugo" ? { rules: { ...DAIFUGO_DEFAULT_RULES } } : {}),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       });
       transaction.set(lockRef, { uid: currentUser.uid, gameType: type, roomId: roomRef.id, updatedAt: serverTimestamp() });
-    });
+      transaction.set(codeRef, { roomId: roomRef.id, ownerUid: currentUser.uid, gameType: type, createdAt: serverTimestamp() });
+        });
+        break;
+      } catch (error) {
+        if (error.message !== "CODE_TAKEN" || attempt === 7) throw error;
+      }
+    }
 
     joinGameRoom({ id: roomRef.id, gameType: type, members: [username], memberUids: [currentUser.uid] });
   } catch (error) {
@@ -8137,6 +8153,24 @@ createGameRoomButton?.addEventListener("click", async () => {
     alert(`ゲームルームを作成できませんでした。（${gameName} / ${error.code || error.message || "不明なエラー"}）`);
   } finally {
     createGameRoomButton.disabled = false;
+  }
+});
+
+/* ルーム番号（5桁）で参加する。番号を知っている人だけが入れる（一覧では、他人のルームは見えない） */
+document.getElementById("joinByCodeButton")?.addEventListener("click", async () => {
+  const input = document.getElementById("roomCodeInput");
+  const code = String(input?.value || "").normalize("NFKC").replace(/\D/g, "");
+  if (!/^\d{5}$/.test(code)) { alert("ルーム番号は、5桁の数字です。"); return; }
+  if (!currentUser || !username) return;
+  try {
+    const codeSnap = await getDoc(doc(db, "gameRoomCodes", code));
+    const roomId = codeSnap.exists() ? String(codeSnap.data().roomId || "") : "";
+    const roomSnap = roomId ? await getDoc(doc(db, "gameRooms", roomId)) : null;
+    if (!roomSnap || !roomSnap.exists() || roomSnap.data().roomCode !== code) { alert("その番号のルームは見つかりません。番号を確かめてください。"); return; }
+    if (await joinGameRoom({ id: roomSnap.id, ...roomSnap.data() })) { if (input) input.value = ""; }
+  } catch (error) {
+    console.error("ルーム番号で参加エラー:", error);
+    alert("ルームに入れませんでした。時間をおいて、もう一度お試しください。");
   }
 });
 

@@ -40,7 +40,7 @@
 
     <link
         rel="stylesheet"
-        href="./style.css?v=20261111-ng3"
+        href="./style.css?v=20261111-room1"
     >
 
     <!-- 起動を早くするため、アプリ本体の読み込みと並べて Firebase の部品と接続先を先に準備する -->
@@ -1351,6 +1351,12 @@
                             ＋ ルーム作成
                         </button>
 
+                        <!-- 友達から聞いた5桁の「ルーム番号」で、ルームに入る -->
+                        <div class="room-code-join">
+                            <input id="roomCodeInput" type="text" inputmode="numeric" maxlength="5" placeholder="ルーム番号（5桁）" autocomplete="off">
+                            <button id="joinByCodeButton" type="button">番号で参加</button>
+                        </div>
+
                     </div>
 
 
@@ -1780,7 +1786,7 @@
      OFF のとき（とテスト環境）は、data-app-src のアプリ本体を読み込む -->
 <script
     src="./maintenance.js?v=20261009-maint-quota"
-    data-app-src="./script.js?v=20261111-ng3"
+    data-app-src="./script.js?v=20261111-room1"
 ></script>
 <!-- 🔄 サイトが新しくなったら、画面の上に「アップデート」を出す（yuupdate.js） -->
 <script type="module" src="./yuupdate.js?v=20261111-up3"></script>
