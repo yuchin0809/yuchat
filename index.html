@@ -6,7 +6,7 @@
 
     <meta
         name="viewport"
-        content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
     >
 
     <title>web</title>
@@ -25,6 +25,10 @@
     >
 
     <script>
+        /* 画面の拡大・縮小（ピンチ・ダブルタップ）はしない */
+        ["gesturestart", "gesturechange", "gestureend"].forEach(function (t) { document.addEventListener(t, function (e) { e.preventDefault(); }); });
+    </script>
+    <script>
         /* iPhone アプリ（Web版を包んだもの）の目印。Google ログインは、アプリの中では使えない（Google が断る）ので隠す */
         if (/YuChatApp/.test(navigator.userAgent)) document.documentElement.classList.add("native-app");
     </script>
@@ -36,7 +40,7 @@
 
     <link
         rel="stylesheet"
-        href="./style.css?v=20261111-app1"
+        href="./style.css?v=20261111-app2"
     >
 
     <!-- 起動を早くするため、アプリ本体の読み込みと並べて Firebase の部品と接続先を先に準備する -->
@@ -1776,7 +1780,7 @@
      OFF のとき（とテスト環境）は、data-app-src のアプリ本体を読み込む -->
 <script
     src="./maintenance.js?v=20261009-maint-quota"
-    data-app-src="./script.js?v=20261111-app1"
+    data-app-src="./script.js?v=20261111-app2"
 ></script>
 <!-- 🔄 サイトが新しくなったら、画面の上に「アップデート」を出す（yuupdate.js） -->
 <script type="module" src="./yuupdate.js?v=20261111-up3"></script>

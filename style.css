@@ -7230,3 +7230,6 @@ html.app-mode #notificationButton:not([data-state="on"]):not([data-state="denied
 /* iPhone アプリの中：Google ログインは出さない（Google が埋め込み画面でのログインを断るため） */
 .native-app #googleLoginButton { display: none !important; }
 .supporter-card[hidden] { display: none; }
+html { touch-action: manipulation; }   /* ダブルタップでの拡大をしない */
+/* iPhone アプリの中：Google ログイン（アカウントを探す画面も）と、招待コードは出さない。招待コードは、Web版で新しい人が勝手に入らないようにする仕組みなので、Web版だけ */
+.native-app #recoverGoogleButton, .native-app .invite-code-note, .native-app #inviteCodeInput { display: none !important; }

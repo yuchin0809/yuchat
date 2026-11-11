@@ -886,7 +886,7 @@ startChatButton?.addEventListener("click", async () => {
     }
 
     /* 1.5 新しく始める人は、招待コードが必要（もう登録している人が、アカウントを探して入るときは要らない） */
-    if (!existing.exists()) {
+    if (!existing.exists() && !document.documentElement.classList.contains("native-app")) {   // iPhone アプリは、招待コード無し（Web版だけの入り口の制限）
       const code = (document.getElementById("inviteCodeInput")?.value || "").trim().toUpperCase();
       if (!code) { showError(nameError, "招待コードを入力してください。友達に教えてもらってね。"); return; }
       try {
