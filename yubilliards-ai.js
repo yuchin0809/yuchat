@@ -1,7 +1,7 @@
 /* 🎱 ビリヤードの CPU（相手）。決まった幾何の計算だけで、狙う球・ポケット・強さを選ぶ（画面には触れない）
    ・当てやすい（切り込みが浅い）・近い・間に球がない、組み合わせを選ぶ。少しだけ、わざとずらして人間らしくする
    ・コインは使わない */
-import { TABLE, POCKETS, HEAD_SPOT, FOOT_SPOT, cueBall, groupOf, canPlace } from "./yubilliards-core.js?v=20261111-bl6";
+import { TABLE, POCKETS, HEAD_SPOT, FOOT_SPOT, cueBall, groupOf, canPlace } from "./yubilliards-core.js?v=20261111-bl7";
 
 const R = TABLE.r;
 
