@@ -1408,6 +1408,7 @@ function listenFriends() {
   if (!username) return;
   stopFriendListeners();
   listenFriendRequests();
+  loadMyYuId();
   listenBlocks();
 
   const rebuild = () => {
@@ -1533,21 +1534,33 @@ async function callFriendApi(action, payload = {}) {
 }
 const FRIEND_ERRORS = {
   not_found: "そのユーザーは見つかりません。", self: "自分自身は追加できません。", already_friends: "すでに友達です。", already_requested: "すでに申請ずみです。相手の承認を待っています。",
-  too_many: "申請が多すぎます。承認されていない申請を取り消してからにしてください。", you_blocked: "その人はブロックしています。", blocked: "友達になれませんでした。", gone: "その申請は、もうありません。", bad_name: "名前を確かめてください。"
+  too_many: "申請が多すぎます。承認されていない申請を取り消してからにしてください。", you_blocked: "その人はブロックしています。", blocked: "友達になれませんでした。", gone: "その申請は、もうありません。", bad_name: "名前を確かめてください。", bad_id: "ゆうIDは、数字と英字8文字です。もう一度確かめてください。"
 };
 addFriendButton?.addEventListener("click", async () => {
-  const friendName = prompt("友達申請したい人の名前を入力してください。\n（相手が承認すると、友達になります）");
-  if (friendName === null) return;
-  const trimmed = friendName.trim();
-  if (!trimmed) return alert("名前を入力してください。");
-  if (trimmed === username) return alert("自分自身は追加できません。");
+  const friendId = prompt("友達申請したい人の「ゆうID」（8文字）を入力してください。\n名前は同じ人がいても、IDはひとりひとり違います。\n（相手が承認すると、友達になります）");
+  if (friendId === null) return;
+  const trimmed = friendId.trim();
+  if (!trimmed) return alert("ゆうIDを入力してください。");
   try {
-    const r = await callFriendApi("request", { name: trimmed });
-    alert(r.accepted ? `${trimmed}さんも申請してくれていたので、友達になりました。` : `${trimmed}さんに友達申請を送りました。承認されると、友達になります。`);
+    const r = await callFriendApi("request", { yuId: trimmed });
+    alert(r.accepted ? `${r.name}さんも申請してくれていたので、友達になりました。` : `${r.name}さんに友達申請を送りました。承認されると、友達になります。`);
   } catch (error) {
     if (!FRIEND_ERRORS[error.code]) console.error("友達申請エラー:", error);
     alert(FRIEND_ERRORS[error.code] || "友達申請に失敗しました。時間をおいて、もう一度お試しください。");
   }
+});
+
+async function loadMyYuId() {   // 自分のゆうID（初回だけ Worker が作る）。端末にも控えて、次からは呼ばない
+  const el = document.getElementById("myYuId"); if (!el) return;
+  const key = `yuId:${currentUser?.uid}`;
+  let id = ""; try { id = localStorage.getItem(key) || ""; } catch {}
+  if (!id) { try { id = (await callFriendApi("myId")).yuId || ""; if (id) localStorage.setItem(key, id); } catch (e) { console.error("ゆうID取得エラー:", e); } }
+  el.textContent = id || "（取得できませんでした）";
+}
+document.getElementById("copyYuId")?.addEventListener("click", async () => {
+  const id = document.getElementById("myYuId")?.textContent || "";
+  if (!/^[A-Z2-9]{8}$/.test(id)) return;
+  try { await navigator.clipboard.writeText(id); alert("ゆうIDをコピーしました。"); } catch { prompt("ゆうID（コピーして友達に送ってください）", id); }
 });
 
 let friendReqIn = [], friendReqOut = [], friendReqInSeen = null, unsubscribeReqIn = null, unsubscribeReqOut = null;

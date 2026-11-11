@@ -63,7 +63,8 @@ function fakeFs(initial = {}) {
 
 function setup() {
   const base = {};
-  for (let i = 0; i < 4; i++) base[`users/u${i}`] = { uid: `id${i}`, name: `u${i}`, coins: 0, profileImage: `img${i}` };
+  for (let i = 0; i < 4; i++) base[`users/u${i}`] = { uid: `id${i}`, name: `u${i}`, coins: 0, profileImage: `img${i}`, yuId: `ABCDEFG${i + 2}` };
+  for (let i = 0; i < 4; i++) base[`yuIds/ABCDEFG${i + 2}`] = { uid: `id${i}`, name: `u${i}` };
   const fs = fakeFs(base);
   fs.put("fcmTokens/t1", encF({ uid: "id1" }));
   const sent = [];
@@ -74,7 +75,7 @@ function setup() {
 
 test("申請：名前を入れても、すぐには友達にならない。相手に申請が届き（通知も）、友達の書類はまだ無い", async () => {
   const c = setup();
-  const r = await c.act(0, { action: "request", name: "u1" });
+  const r = await c.act(0, { action: "request", yuId: "ABCDEFG3" });
   assert.equal(r.ok, true); assert.equal(r.requested, true);
   assert.deepEqual(c.fs.plain("friendRequests/id0_id1").toUid, "id1");
   assert.equal(c.fs.plain("friends/u0_u1"), null, "まだ友達ではない");
@@ -83,21 +84,21 @@ test("申請：名前を入れても、すぐには友達にならない。相�
 
 test("申請できない場合：自分・いない人・すでに友達・すでに申請ずみ・申請しすぎ", async () => {
   const c = setup();
-  assert.equal((await c.act(0, { action: "request", name: "u0" })).error, "self");
-  assert.equal((await c.act(0, { action: "request", name: "nobody" })).error, "not_found");
-  assert.equal((await c.act(0, { action: "request", name: "bad/name" })).error, "bad_name");
-  await c.act(0, { action: "request", name: "u1" });
-  assert.equal((await c.act(0, { action: "request", name: "u1" })).error, "already_requested");
+  assert.equal((await c.act(0, { action: "request", yuId: "ABCDEFG2" })).error, "self");
+  assert.equal((await c.act(0, { action: "request", yuId: "ZZZZZZZZ" })).error, "not_found");
+  assert.equal((await c.act(0, { action: "request", yuId: "bad/id" })).error, "bad_id");
+  await c.act(0, { action: "request", yuId: "ABCDEFG3" });
+  assert.equal((await c.act(0, { action: "request", yuId: "ABCDEFG3" })).error, "already_requested");
   c.fs.put("friends/u0_u2", encF({ user1: "u0", user2: "u2" }));
-  assert.equal((await c.act(0, { action: "request", name: "u2" })).error, "already_friends");
+  assert.equal((await c.act(0, { action: "request", yuId: "ABCDEFG4" })).error, "already_friends");
   const d = setup();
   for (let i = 0; i < 30; i++) d.fs.put(`friendRequests/id0_x${i}`, encF({ fromUid: "id0", toUid: `x${i}` }));
-  assert.equal((await d.act(0, { action: "request", name: "u1" })).error, "too_many");
+  assert.equal((await d.act(0, { action: "request", yuId: "ABCDEFG3" })).error, "too_many");
 });
 
 test("承認：申請された人が承認すると、友達の書類ができる（これまでと同じ形）。申請は消える。申請された人以外は承認できない", async () => {
   const c = setup();
-  await c.act(0, { action: "request", name: "u1" });
+  await c.act(0, { action: "request", yuId: "ABCDEFG3" });
   assert.equal((await c.act(2, { action: "respond", id: "id0_id1", accept: true })).error, "gone", "ほかの人は承認できない");
   assert.equal((await c.act(0, { action: "respond", id: "id0_id1", accept: true })).error, "gone", "申請した本人も承認できない");
   const r = await c.act(1, { action: "respond", id: "id0_id1", accept: true });
@@ -109,29 +110,29 @@ test("承認：申請された人が承認すると、友達の書類ができ�
 
 test("断る・取り消す：断ると友達にならず申請が消える。取り消せるのは申請した本人だけ", async () => {
   const c = setup();
-  await c.act(0, { action: "request", name: "u1" });
+  await c.act(0, { action: "request", yuId: "ABCDEFG3" });
   assert.equal((await c.act(1, { action: "cancel", id: "id0_id1" })).error, "gone");
   assert.equal((await c.act(1, { action: "respond", id: "id0_id1", accept: false })).accepted, false);
   assert.equal(c.fs.plain("friendRequests/id0_id1"), null); assert.equal(c.fs.plain("friends/u0_u1"), null);
-  await c.act(0, { action: "request", name: "u1" });
+  await c.act(0, { action: "request", yuId: "ABCDEFG3" });
   assert.equal((await c.act(0, { action: "cancel", id: "id0_id1" })).ok, true);
   assert.equal(c.fs.plain("friendRequests/id0_id1"), null);
 });
 
 test("お互いに申請したら、そのまま友達になる", async () => {
   const c = setup();
-  await c.act(0, { action: "request", name: "u1" });
-  const r = await c.act(1, { action: "request", name: "u0" });
+  await c.act(0, { action: "request", yuId: "ABCDEFG3" });
+  const r = await c.act(1, { action: "request", yuId: "ABCDEFG2" });
   assert.equal(r.accepted, true); assert.ok(c.fs.plain("friends/u0_u1")); assert.equal(c.fs.plain("friendRequests/id0_id1"), null);
 });
 
 test("ブロック：相手にブロックされていると「見つからない」。自分がブロックしている相手には申請できない。承認のときも確かめる", async () => {
   const c = setup();
   c.fs.put("blocks/id1_id0", encF({ blockerUid: "id1", blockedUid: "id0" }));
-  assert.equal((await c.act(0, { action: "request", name: "u1" })).error, "not_found");
-  assert.equal((await c.act(1, { action: "request", name: "u0" })).error, "you_blocked");
+  assert.equal((await c.act(0, { action: "request", yuId: "ABCDEFG3" })).error, "not_found");
+  assert.equal((await c.act(1, { action: "request", yuId: "ABCDEFG2" })).error, "you_blocked");
   const d = setup();
-  await d.act(0, { action: "request", name: "u1" });
+  await d.act(0, { action: "request", yuId: "ABCDEFG3" });
   d.fs.put("blocks/id1_id0", encF({ blockerUid: "id1", blockedUid: "id0" }));
   assert.equal((await d.act(1, { action: "respond", id: "id0_id1", accept: true })).error, "blocked");
   assert.equal(d.fs.plain("friends/u0_u1"), null);
@@ -145,8 +146,8 @@ test("ブロック：友達関係と申請が消え、相手は申請しても�
   assert.equal((await c.act(0, { action: "block", name: "u1" })).ok, true);
   assert.equal(c.fs.plain("friends/u0_u1"), null); assert.equal(c.fs.plain("friendRequests/id1_id0"), null);
   assert.equal(c.fs.plain("blocks/id0_id1").blockedUid, "id1");
-  assert.equal((await c.act(1, { action: "request", name: "u0" })).error, "not_found");
-  assert.equal((await c.act(0, { action: "request", name: "u1" })).error, "you_blocked");
+  assert.equal((await c.act(1, { action: "request", yuId: "ABCDEFG2" })).error, "not_found");
+  assert.equal((await c.act(0, { action: "request", yuId: "ABCDEFG3" })).error, "you_blocked");
   assert.equal((await c.act(0, { action: "unblock", uid: "id1" })).ok, true);
   assert.equal(c.fs.plain("blocks/id0_id1"), null);
 });
@@ -179,4 +180,15 @@ test("管理者：通報の一覧が新しい順に見え、「対応した」�
   assert.equal((await handleAdminAction(c.deps, "adminUid", { action: "reportDone", id: list.reports[0].id })).ok, true);
   assert.equal((await handleAdminAction(c.deps, "adminUid", { action: "reportList" })).reports.length, 0);
   assert.ok((await handleAdminAction(c.deps, "id0", { action: "reportList" })).error, "管理者以外は使えない");
+});
+
+test("ゆうID：無ければ作り（重ならない8文字・索引にも控える）、あれば同じものを返す。小文字やハイフン入りでも申請できる", async () => {
+  const c = setup();
+  c.fs.put("users/u9", encF({ uid: "id9", name: "u9", coins: 0 }));
+  const a = await c.act(9, { action: "myId" });
+  assert.match(a.yuId, /^[2-9A-HJ-NP-Z]{8}$/);
+  assert.equal((await c.act(9, { action: "myId" })).yuId, a.yuId);
+  assert.equal(c.fs.docs.get(`yuIds/${a.yuId}`) ? true : false, true);
+  const r = await c.act(0, { action: "request", yuId: `${a.yuId.slice(0, 4)}-${a.yuId.slice(4)}`.toLowerCase() });
+  assert.equal(r.requested, true); assert.equal(r.name, "u9");
 });

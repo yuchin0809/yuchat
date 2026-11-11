@@ -31,7 +31,7 @@
 
     <link
         rel="stylesheet"
-        href="./style.css?v=20261111-mod1"
+        href="./style.css?v=20261111-id1"
     >
 
     <!-- 起動を早くするため、アプリ本体の読み込みと並べて Firebase の部品と接続先を先に準備する -->
@@ -1590,6 +1590,13 @@
                         👤 マイページ
                     </h2>
 
+                    <!-- あなたのゆうID：名前が同じ人がいても、友達申請はこのIDで送れる -->
+                    <div class="panel" style="margin-bottom:10px">
+                        <b>🆔 あなたのゆうID</b>
+                        <div><code id="myYuId" style="font-size:1.4em;letter-spacing:.12em">…</code> <button type="button" id="copyYuId">コピー</button></div>
+                        <small>友達にこのIDを教えると、友達申請してもらえます。</small>
+                    </div>
+
                     <!-- ⭐ サポーター（有料プラン）の案内・設定への入口。Web版にも出す -->
                     <div id="supporterCard" class="supporter-card"></div>
 
@@ -1764,7 +1771,7 @@
      OFF のとき（とテスト環境）は、data-app-src のアプリ本体を読み込む -->
 <script
     src="./maintenance.js?v=20261009-maint-quota"
-    data-app-src="./script.js?v=20261111-mod1"
+    data-app-src="./script.js?v=20261111-id1"
 ></script>
 <!-- 🔄 サイトが新しくなったら、画面の上に「アップデート」を出す（yuupdate.js） -->
 <script type="module" src="./yuupdate.js?v=20261111-up3"></script>
