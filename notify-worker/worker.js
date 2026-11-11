@@ -87,7 +87,7 @@ export default {
     /* 💸 コイン送金：3日たっても承認されない申請を、1日1回（日本時間 3:07）自動で却下して返金する。それ以外の分は Firestore に触れずにすぐ戻る */
     /* 🗓 予約公開：決まった時刻に、ヨット・消しバトの公開スイッチを入れる（1回だけ）。それ以外の分は Firestore に触れずにすぐ戻る */
     ctx.waitUntil(runScheduledPublishTick(env, event.scheduledTime).catch((error) => console.error("scheduled publish error", String(error?.message || error).slice(0, 300))));
-    /* 📸 YuReal：決まった時刻の5分間だけ通知／毎日3:10〜3:20に古い写真を消す。それ以外の分は Firestore に触れずにすぐ戻る */
+    /* 📸 YuSnap：決まった時刻の5分間だけ通知／毎日3:10〜3:20に古い写真を消す。それ以外の分は Firestore に触れずにすぐ戻る */
     ctx.waitUntil(runYurealLaunchTick(env, event.scheduledTime).catch((error) => console.error("yureal launch error", String(error?.message || error).slice(0, 300))));
     ctx.waitUntil(runYurealTick(env, event.scheduledTime).catch((error) => console.error("yureal tick error", String(error?.message || error).slice(0, 300))));
     ctx.waitUntil(runBilliardsAnnounceTick(env, event.scheduledTime).catch((error) => console.error("billiards announce error", String(error?.message || error).slice(0, 300))));
@@ -3257,7 +3257,7 @@ export async function runBilliardsAnnounceTick(env = {}, scheduledTime = Date.no
 }
 
 /* =========================================================
-   📸 YuReal（BeReal のような、1日1回の写真）
+   📸 YuSnap（1日1回の写真。内部の名前は yureal のまま）
    ・毎日 9:00〜15:00（日本時間）のどこかで、決まった時刻に通知。その時刻から3分以内に撮るのが「ちょうどいい」投稿、それより遅いと「○分遅れ」と出る。
      時刻は、日付から決まる計算（乱数なし・Firestore に保存しない）。通知は、決まった分の5分間だけ Firestore に触れる。
    ・写真は、友達だけが見られる。自分がその日の写真を投稿するまでは、友達のその日の写真は見えない（きのうの分は見える）。
@@ -3398,7 +3398,7 @@ export async function handleYurealAction(deps, uid, body) {
     return { status: 500, error: "internal_error" };
   }
 }
-/* 📸 YuReal の公開とお知らせ：決まった時刻から30分のあいだに、1回だけ。公開のスイッチを入れ（あとから管理者が非公開に戻しても、入れ直さない）、お知らせを作り（同じ番号は2回作らない）、通知を全員へ（同じお知らせは1回だけ）。それ以外の分は Firestore に触れずにすぐ戻る */
+/* 📸 YuSnap の公開とお知らせ：決まった時刻から30分のあいだに、1回だけ。公開のスイッチを入れ（あとから管理者が非公開に戻しても、入れ直さない）、お知らせを作り（同じ番号は2回作らない）、通知を全員へ（同じお知らせは1回だけ）。それ以外の分は Firestore に触れずにすぐ戻る */
 export const YUREAL_LAUNCH_MS = Date.UTC(2026, 10, 11, 4, 16, 0);
 export const YUREAL_ANNOUNCE_ID = "yureal-launch-20261111";
 const yurealLaunchDone = new Set();
@@ -3410,8 +3410,8 @@ export async function runYurealLaunchTick(env = {}, scheduledTime = Date.now(), 
   const cur = (await d.firestore.get("worldConfig/yureal")) || {};
   if (cur.launched !== true) { await d.firestore.set("worldConfig/yureal", { ...cur, published: true, launched: true, updatedAt: new Date(scheduledTime) }); yurealCfgCache = { at: 0, published: false }; }
   await d.firestore.createIfAbsent(`announcements/${YUREAL_ANNOUNCE_ID}`, {
-    title: "📸 YuReal（ベータ版）を始めました！",
-    body: "BeRealのような、1日1回の写真「YuReal」を、ベータ版として始めました。\n\n・毎日、9時〜15時のどこかで通知が届きます（通知をONにしている人）\n・通知から3分以内に、内カメラで「いまの様子」を撮って投稿しよう（遅れても投稿できます）\n・友達だけに見えます。自分が投稿するまで、友達のきょうの写真は見えません\n・絵文字をタップしてリアクションできます（1つの投稿に1個）\n・写真は2日で消えます\n\nベータ版なので、うまく動かないところがあるかもしれません。気づいたことがあれば教えてね。タブの「YuReal β」から開けます。",
+    title: "📸 YuSnap（ベータ版）を始めました！",
+    body: "1日1回の写真「YuSnap」を、ベータ版として始めました。\n\n・毎日、9時〜15時のどこかで通知が届きます（通知をONにしている人）\n・通知から3分以内に、内カメラで「いまの様子」を撮って投稿しよう（遅れても投稿できます）\n・友達だけに見えます。自分が投稿するまで、友達のきょうの写真は見えません\n・絵文字をタップしてリアクションできます（1つの投稿に1個）\n・写真は2日で消えます\n\nベータ版なので、うまく動かないところがあるかもしれません。気づいたことがあれば教えてね。タブの「YuSnap β」から開けます。",
     createdAt: new Date(scheduledTime), updatedAt: new Date(scheduledTime), createdByUid: "system", createdByName: "ゆうChat"
   });
   const out = await notifyNewAnnouncement(d, YUREAL_ANNOUNCE_ID);
@@ -3432,7 +3432,7 @@ export async function runYurealTick(env = {}, scheduledTime = Date.now(), deps =
   const out = {};
   if (notifyNow) {
     yurealTickDone.add(`n${today}`);
-    const data = { kind: "yureal", title: "📸 YuReal の時間です！", body: "いまから3分以内に、いまの様子を撮ろう", link: "./?open=yureal", tag: `yureal-${today}` };
+    const data = { kind: "yureal", title: "📸 YuSnap の時間です！", body: "3分以内に、いまを撮って送ろう", link: "./?open=yureal", tag: `yureal-${today}` };
     yurealCfgCache = { at: 0, published: false };
     out.notify = (await yurealPublished(d)) ? await sendBroadcastNotification(d, `yureal-${today}`, data) : await sendPushToUids(d, `yureal-${today}`, d.adminUid ? [d.adminUid] : [], data);
   }
