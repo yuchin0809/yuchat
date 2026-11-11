@@ -1,7 +1,7 @@
 /* 🎱 ビリヤードの2人対戦・公開・お知らせ（worker.js の billiardsRoom*）のテスト */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { resetYuslotCacheForTest, handleYuslotAction, runBilliardsAnnounceTick, resetBilliardsAnnounceForTest, BILLIARDS_LAUNCH_MS, BILLIARDS_ANNOUNCE_ID, runScheduledPublishTick, resetScheduledPublishForTest } from "../worker.js";
+import { resetYuslotCacheForTest, resetSupporterCacheForTest, handleYuslotAction, runBilliardsAnnounceTick, resetBilliardsAnnounceForTest, BILLIARDS_LAUNCH_MS, BILLIARDS_ANNOUNCE_ID, runScheduledPublishTick, resetScheduledPublishForTest } from "../worker.js";
 import { readFileSync } from "node:fs";
 import { buildBlock, BEGIN, END } from "../sync-billiards.mjs";
 import { newGame, snapshot, restore, shoot, runToRest, endShot, cueBall } from "../../yubilliards-core.js";
@@ -65,9 +65,9 @@ function fakeFs(initial = {}) {
 const ADMIN = "adminUid";
 const ROOM = "room1234567890abcd";
 
-function setup({ published = true } = {}) {
-  resetYuslotCacheForTest();
-  const base = { "worldConfig/yuslot": { yuslotPublished: true, billiardsPublished: published } };
+function setup({ published = true, supporters = ["id1", "id2"] } = {}) {
+  resetYuslotCacheForTest(); resetSupporterCacheForTest();
+  const base = { "worldConfig/yuslot": { yuslotPublished: true, billiardsPublished: published }, "supporterIndex/all": { byUid: Object.fromEntries(supporters.map((u) => [u, { n: u, m: 1, nc: "default", bc: "default", e: 0 }])) } };
   for (let i = 0; i < 4; i++) base[`users/u${i}`] = { uid: `id${i}`, name: `u${i}`, coins: 1000 };
   const fs = fakeFs(base);
   const state = { now: Date.UTC(2026, 10, 11, 3) };
@@ -174,8 +174,29 @@ test("公開とお知らせ：予約の時刻に、公開のスイッチが入�
   assert.equal(c.fs.plain("worldConfig/yuslot").billiardsPublished, true);
   const out = await runBilliardsAnnounceTick({}, BILLIARDS_LAUNCH_MS + 60000, c.deps);
   assert.equal(out.sent, 2);
-  assert.equal(c.fs.plain(`announcements/${BILLIARDS_ANNOUNCE_ID}`).title.includes("ビリヤード"), true);
+  assert.equal(c.fs.plain(`announcements/${BILLIARDS_ANNOUNCE_ID}`).title.includes("サポーター限定"), true);
   resetBilliardsAnnounceForTest();
   assert.equal((await runBilliardsAnnounceTick({}, BILLIARDS_LAUNCH_MS + 120000, c.deps)).skipped, "duplicate");
   assert.equal(sent.length, 2);
+});
+
+test("サポーター限定：公開されても、サポーターと最上位管理者だけ。サポーターでない人は、ルームも、始めることもできない", async () => {
+  const c = setup({ supporters: ["id1"] });   // id1 だけサポーター
+  const cfg1 = await c.act(1, { action: "config" }), cfg2 = await c.act(2, { action: "config" }), cfg0 = await c.act(0, { action: "config" });
+  assert.equal(cfg1.billiardsAllowed, true); assert.equal(cfg2.billiardsAllowed, false); assert.equal(cfg0.billiardsAllowed, false); assert.equal(cfg2.billiardsPublished, true);
+  assert.equal((await c.r(2, "billiardsRoomStart", { mode: "eight" })).error, "supporter_only");
+  assert.equal((await c.r(1, "billiardsRoomStart", { mode: "eight" })).error, "opponent_not_supporter", "相手がサポーターでないと、始められない");
+  const ok = setup({ supporters: ["id1", "id2"] });
+  assert.equal((await ok.r(1, "billiardsRoomStart", { mode: "eight" })).ok, true);
+});
+
+test("サポーター限定：サポーターをやめた人は、打てなくなる。管理者（ADMIN）は、サポーターでなくても使える", async () => {
+  const c = setup();
+  const y = (await c.r(1, "billiardsRoomStart", { mode: "eight" })).billiards;
+  const me = who(y);
+  resetSupporterCacheForTest(); c.fs.put("supporterIndex/all", encF({ byUid: { [me === 1 ? "id2" : "id1"]: { n: "x", m: 1, nc: "default", bc: "default", e: 0 } } }));
+  assert.equal((await c.r(me, "billiardsRoomShoot", { gid: y.gid, angle: 0, power: 0.5 })).error, "supporter_only");
+  const adm = setup({ supporters: [] });
+  const cfgA = await handleYuslotAction(adm.deps, ADMIN, { username: "admin", action: "config" });
+  assert.equal(cfgA.billiardsAllowed, true);
 });

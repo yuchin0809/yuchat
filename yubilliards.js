@@ -3,8 +3,8 @@
    ・打ち方：白い球から、指を引っぱって離す（引いた向きの反対へ飛ぶ。長く引くほど強い）。押し・引きも選べる
    ・球の動きは yubilliards-core.js（決まった計算）。CPUは yubilliards-ai.js。通信はしない
    ・ベストの記録（練習）は、この端末だけに残す */
-import { TABLE, POCKETS, POCKET_R, BALL_COLORS, HEAD_SPOT, FOOT_SPOT, groupLeft, lowestBall, groupOf, restore, newGame, shoot, step, isRest, settle, endShot, remaining, isCleared, cueBall, aimLine, canPlace, placeCue } from "./yubilliards-core.js?v=20261111-bl4";
-import { chooseShot, choosePlacement, bestShot } from "./yubilliards-ai.js?v=20261111-bl4";
+import { TABLE, POCKETS, POCKET_R, BALL_COLORS, HEAD_SPOT, FOOT_SPOT, groupLeft, lowestBall, groupOf, restore, newGame, shoot, step, isRest, settle, endShot, remaining, isCleared, cueBall, aimLine, canPlace, placeCue } from "./yubilliards-core.js?v=20261111-bl5";
+import { chooseShot, choosePlacement, bestShot } from "./yubilliards-ai.js?v=20261111-bl5";
 
 const M = 40;                          // 台の木の縁の幅（台の単位）
 const BEST_KEY = "yuBilliardsBest";
@@ -451,7 +451,10 @@ export function renderBilliards({ root, esc = (s) => String(s), onBack, adminNot
   }
   async function startGame(m, rematchFlag = false) {
     try { const r = await online.api("billiardsRoomStart", { roomId: online.room.id, mode: m, rematch: rematchFlag }); offset = (r.serverNowMs || Date.now()) - Date.now(); showStart(""); consume(r.billiards); }
-    catch (e) { showStart(`<b>始められませんでした</b><span>${esc(e?.code || e?.message || "エラー")}</span>`); }
+    catch (e) {
+      const c = e?.code || e?.message || "エラー";
+      showStart(`<b>始められませんでした</b><span>${esc(c === "supporter_only" ? "ビリヤードは、ゆうChatサポーター限定です" : c === "opponent_not_supporter" ? "相手がサポーターではないため、始められません（ビリヤードはサポーター限定です）" : c === "not_published" ? "ビリヤードは、いま準備中です" : c)}</span>`);
+    }
   }
   function rematch() { startGame(srv?.mode || "eight", true); }
   function consume(y) {

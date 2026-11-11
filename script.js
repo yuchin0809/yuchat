@@ -3908,7 +3908,7 @@ function lazyCaller(mod, name) {
 const adminCfg = () => ({ callAdmin: (action, payload) => callAdminApi(action, payload), isAdmin: () => isAdminUser(), esc: (v) => escapeHTML(v) });
 
 /* 🎡 ゆうワールド（ゆうスロ）。トークン・ユーザー名・最上位管理者かどうかは呼ばれた時点の状態を使う */
-const lazyYuWorld = lazyModule("./yuworld.js?v=20261111-bl4", (m) => m.initYuWorld({
+const lazyYuWorld = lazyModule("./yuworld.js?v=20261111-bl5", (m) => m.initYuWorld({
   openGame: (type) => openGameFromWorld(type),
   pendingInviteTypes: () => pendingGameInvites.map((invite) => invite.gameType),
   endpoint: NOTIFY_ENDPOINT.replace(/\/notify$/, "/yuslot"),
@@ -3962,7 +3962,7 @@ const economyAdminReset = lazyCaller(lazyEconomyAdmin, "economyAdminReset");
 /* 🎲 ヨット / 🥊 消しバトの部屋の描画：読み込み前は準備中の表示を出し、読み込めたらもう一度描く */
 const lazyYachtRoom = lazyModule("./yuyacht.js?v=20261026-yacht6");
 const lazyKeshiRoom = lazyModule("./yukeshi-room.js?v=20261106-fair1");
-const lazyBilliardsRoom = lazyModule("./yubilliards.js?v=20261111-bl4");
+const lazyBilliardsRoom = lazyModule("./yubilliards.js?v=20261111-bl5");
 function lazyRoomRenderer(mod, name) {
   return (boardEl, room, c) => {
     const m = mod.get();
@@ -7911,7 +7911,7 @@ createGameRoomButton?.addEventListener("click", async () => {
   const gameName = getGameTypeName(type);
   if (type === "billiards") {   // 公開前は、最上位管理者だけがルームを作れる
     const cfg = await callYuslotApi("config").catch(() => null);
-    if (!cfg || (!cfg.billiardsPublished && !cfg.isTopAdmin)) return alert("ビリヤードは、いま準備中です。");
+    if (!cfg || !cfg.billiardsAllowed) return alert(cfg && cfg.billiardsPublished ? "ビリヤードは、ゆうChatサポーター限定です。" : "ビリヤードは、いま準備中です。");
   }
   /* 自分はもう抜けているのに残っている、自分が作ったルームは、先に閉じる（作成者が抜けたルームは、本来は残らない） */
   await Promise.all(latestGameRooms.filter((room) => isMyOrphanRoom(room, type)).map((room) => deleteDoc(doc(db, "gameRooms", room.id)).catch((error) => console.error("残っていたルームの片づけエラー:", error))));
