@@ -46,7 +46,7 @@ function close() { overlay?.remove(); overlay = null; }
 
 function render() {
   if (!overlay) return;
-  overlay.innerHTML = `<div class="sup-sheet"><button type="button" class="sup-close" data-sup="close" aria-label="閉じる">×</button>${supporterState.me ? settingsHtml() : planHtml()}</div>`;
+  overlay.innerHTML = `<div class="sup-sheet ${supporterState.me ? "" : "sup-sheet-plan"}"><button type="button" class="sup-close" data-sup="close" aria-label="閉じる">×</button>${supporterState.me ? settingsHtml() : planHtml()}</div>`;
 }
 
 /* ---------- プランの案内（サポーターでない人） ---------- */
@@ -82,7 +82,7 @@ function pickerHtml(key, table, title, kind) {
 function layoutHtml() {
   const cur = getLayoutChoice();
   const chip = (id, label, note) => `<button type="button" class="sup-chip sup-chip-wide ${cur === id ? "on" : ""}" role="radio" aria-checked="${cur === id}" data-layout="${id}"><b>${label}</b><small>${note}</small></button>`;
-  return `<div class="sup-group"><div class="sup-group-title">画面のレイアウト（この端末だけ）</div><div class="sup-chips" role="radiogroup" aria-label="画面のレイアウト">${chip("std", "ふつう", "いまのWeb版と同じ")}${chip("app", "アプリ版", "スマホの幅で、下のタブ5つ・会話の一覧")}</div><p class="sup-note">アプリ版のレイアウトは、スマホの幅の画面で変わります（iPadなど広い画面は、ふつうと同じです）。</p></div>`;
+  return `<div class="sup-group"><div class="sup-group-title">画面のレイアウト（この端末だけ）</div><div class="sup-chips" role="radiogroup" aria-label="画面のレイアウト">${chip("std", "ふつう", "いまのWeb版と同じ")}${chip("app", "アプリ版", "スマホ用とiPad用のアプリ版の並び")}</div><p class="sup-note">アプリ版のレイアウトにすると、スマホでは下のタブ5つ・会話の一覧に、iPadではサポーターの画面が2列・マイページが中央にまとまる形に変わります。</p></div>`;
 }
 
 function previewHtml() {

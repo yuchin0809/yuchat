@@ -6608,7 +6608,7 @@ button.secondary {
 .app-only { display: none; }
 html:not(.app-mode) .app-only { display: none !important; }
 @media (min-width: 701px) {
-    html.app-mode .app-only { display: none !important; }
+    html.app-mode .app-only:not(.app-account) { display: none !important; }
 }
 .chat-top { display: contents; }
 .app-chat-preview, .app-chat-time { display: none; }
@@ -7062,3 +7062,51 @@ html.app-mode #notificationButton:not([data-state="on"]):not([data-state="denied
 .sup-chip-wide { width: calc(50% - 4px); min-height: 64px; justify-content: center; }
 .sup-chip-wide b { font-size: 14px; }
 .sup-chip-wide small { color: #667089; }
+
+
+/* ==================================================
+   アプリ版（iPadなど広い画面）のレイアウト（幅 701px 以上。html に app-mode が付いているときだけ）
+   ・上のタブ7つ・左に一覧・右に会話は、Web版と同じ
+   ・サポーターの案内の画面は、左右2列（左：マーク・プラン・購入／右：特典）
+   ・マイページは、中央に1列にまとめる（サポーターのカード → 紹介 → 設定 → ログアウト）。紹介・ログアウトは、上の帯からマイページへ移す
+================================================== */
+@media (min-width: 701px) {
+
+    html.app-mode .header { padding-top: env(safe-area-inset-top, 0px); height: calc(70px + env(safe-area-inset-top, 0px)); }
+    html.app-mode #inviteButton, html.app-mode #logoutButton { display: none; }
+    html.app-mode .notify-announcement { display: none !important; }
+
+    /* サポーターの案内（サポーターでない人）：2列 */
+    html.app-mode .sup-sheet-plan {
+        width: min(100%, 980px);
+        padding: 34px 40px 32px;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        column-gap: 36px;
+        align-content: start;
+        grid-template-areas: "hero perks" "plans perks" "cta perks" "note perks" "fine perks";
+    }
+    html.app-mode .sup-sheet-plan .sup-hero { grid-area: hero; display: grid; grid-template-columns: auto 1fr; column-gap: 16px; row-gap: 4px; text-align: left; align-items: center; padding: 0 0 10px; }
+    html.app-mode .sup-sheet-plan .sup-hero svg { grid-row: 1 / 3; }
+    html.app-mode .sup-sheet-plan .sup-plans { grid-area: plans; margin: 6px 0 14px; }
+    html.app-mode .sup-sheet-plan .sup-perks { grid-area: perks; margin: 0; align-self: start; }
+    html.app-mode .sup-sheet-plan .sup-cta { grid-area: cta; align-self: start; }
+    html.app-mode .sup-sheet-plan .sup-note { grid-area: note; margin-top: 8px; }
+    html.app-mode .sup-sheet-plan .sup-fine { grid-area: fine; text-align: left; }
+    html.app-mode .sup-sheet-plan .sup-close { top: 16px; right: 16px; }
+
+    /* マイページ：中央に1列 */
+    html.app-mode #mypageView .panel { max-width: 680px; margin-left: auto; margin-right: auto; }
+    html.app-mode #mypageView .panel > h2:first-child { display: none; }
+    html.app-mode .app-account { display: flex; flex-direction: column; gap: 10px; margin: 0 0 16px; }
+    html.app-mode .app-account-bottom { margin: 20px 0 4px; }
+    html.app-mode .app-account .app-profile { display: none; }
+    html.app-mode .app-section { color: #777; font-size: 12px; font-weight: 700; margin: 6px 4px -4px; }
+    html.app-mode .app-menu { background: #fff; border: 1px solid #e7e9ed; border-radius: 14px; overflow: hidden; }
+    html.app-mode .app-menu button { display: flex; justify-content: space-between; align-items: center; width: 100%; min-height: 54px; padding: 0 20px; border: 0; border-bottom: 1px solid #eef0f3; background: #fff; font-size: 15px; text-align: left; }
+    html.app-mode .app-menu button:last-child { border-bottom: 0; }
+    html.app-mode .app-menu button span:last-child { color: #aaa; }
+    html.app-mode .app-invite { min-height: 54px; border: 0; border-radius: 14px; background: #d9423a; color: #fff; font-weight: 700; font-size: 15px; }
+    html.app-mode .app-logout { color: #d9423a; }
+    html.app-mode .account-delete-area { display: none; }
+}

@@ -803,7 +803,7 @@ function decorateSupporterName(el, uid, size = 14) {
   applyNameStyle(span, entry);
   el.append(span, " ", buildSupporterMark(entry, size));
 }
-const lazySupporter = lazyModule("./yusupporter.js?v=20261110-sup3", (m) => m.supporterUiInit({
+const lazySupporter = lazyModule("./yusupporter.js?v=20261111-ipad1", (m) => m.supporterUiInit({
   api: callSupporterApi, esc: escapeHTML, onChange: refreshSupporterLook,
   /* 通知をまだ決めていない人にだけ、特典の紹介のところで「通知をONにする」を出す（許可の画面を出せるのは、この画面を開いているときだけ） */
   canAskNotify: () => typeof Notification !== "undefined" && Notification.permission === "default" && !isNotifyOptedIn() && !(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()),
