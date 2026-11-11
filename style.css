@@ -6608,7 +6608,7 @@ button.secondary {
 .app-only { display: none; }
 html:not(.app-mode) .app-only { display: none !important; }
 @media (min-width: 701px) {
-    html.app-mode .app-only:not(.app-account) { display: none !important; }
+    html.app-mode .app-only:not(.app-account):not([data-view]) { display: none !important; }
 }
 .chat-top { display: contents; }
 .app-chat-preview, .app-chat-time { display: none; }
@@ -7109,4 +7109,94 @@ html.app-mode #notificationButton:not([data-state="on"]):not([data-state="denied
     html.app-mode .app-invite { min-height: 54px; border: 0; border-radius: 14px; background: #d9423a; color: #fff; font-weight: 700; font-size: 15px; }
     html.app-mode .app-logout { color: #d9423a; }
     html.app-mode .account-delete-area { display: none; }
+}
+
+
+/* ==================================================
+   アプリ版（iPad）の案A：左のメニュー（レール）＋会話の一覧＋会話の3列
+   ・幅 701px 以上で、html に app-mode が付いているときだけ。Web版（ふつう）は変えない
+   ・横向き：左に縦のメニュー。縦向き：メニューは下のタブ5つ
+   ・ダービー・ゆうワールド・ゆう経済は「あそぶ」の中（スマホ版と同じ）。「あそぶ」は4枚のカードと、今日の予定
+================================================== */
+.play-side { display: none; }
+@media (min-width: 701px) {
+
+    html.app-mode .app { display: grid; grid-template-columns: 92px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); height: 100dvh; }
+    html.app-mode .header { grid-column: 2; grid-row: 1; height: calc(56px + env(safe-area-inset-top, 0px)); }
+    html.app-mode .workspace { grid-column: 2; grid-row: 2; height: auto; min-height: 0; }
+    html.app-mode .tabs {
+        grid-column: 1; grid-row: 1 / 3;
+        position: static; order: 0;
+        flex-direction: column; align-items: center; justify-content: flex-start; gap: 6px;
+        width: 92px; height: auto;
+        padding: calc(22px + env(safe-area-inset-top, 0px)) 0 calc(18px + env(safe-area-inset-bottom, 0px));
+        background: #1d2433; border: 0; box-sizing: border-box; overflow-y: auto;
+    }
+    html.app-mode .tabs button { flex: none; width: 68px; max-width: 68px; min-height: 62px; border: 0; border-radius: 16px; color: #aab4cc; font-size: 22px; gap: 4px; }
+    html.app-mode .tabs button span { font-size: 10.5px; color: inherit; overflow: visible; text-overflow: clip; }
+    html.app-mode .tabs button.active { background: #2f6bff; color: #fff; border: 0; font-weight: 700; }
+    html.app-mode .tabs button[data-view="derby"],
+    html.app-mode .tabs button[data-view="yuworld"],
+    html.app-mode .tabs button[data-view="economy"] { display: none; }
+    html.app-mode .tabs button.app-only[data-view="play"] { display: flex; }
+    html.app-mode .tabs .tab-label-long { display: none; }
+    html.app-mode .tabs .tab-label-short { display: inline; }
+
+    /* 会話の一覧（左）：アイコン・名前・最後のメッセージ・時刻。チャット以外の画面では隠して、画面を広く使う */
+    html.app-mode .sidebar { width: 340px; padding: 6px 12px 16px; background: #f5f7fa; }
+    html.app-mode body:not([data-view="chat"]) .sidebar { display: none; }
+    html.app-mode .sidebar .section-title { font-size: 13px; margin: 14px 4px 8px; }
+    html.app-mode .sidebar .chips { gap: 0; background: #fff; border: 1px solid #e7e9ed; border-radius: 16px; overflow: hidden; }
+    html.app-mode .sidebar .chips button { display: flex; align-items: center; gap: 12px; min-height: 66px; padding: 10px 14px; border: 0; border-bottom: 1px solid #eef0f3; border-radius: 0; background: #fff; }
+    html.app-mode .sidebar .chips button.active { background: #eef3ff; }
+    html.app-mode .sidebar .chips button:last-child { border-bottom: 0; }
+    html.app-mode .sidebar .chips .friend-avatar, html.app-mode .sidebar .chips .group-avatar { width: 46px; height: 46px; min-width: 46px; font-size: 20px; }
+    html.app-mode .sidebar .chips .friend-info, html.app-mode .sidebar .chips .group-info { flex: 1; min-width: 0; }
+    html.app-mode .sidebar .chips .friend-name, html.app-mode .sidebar .chips .group-name { font-size: 15px; font-weight: 700; }
+    html.app-mode .sidebar .chips .group-members { display: none; }
+    html.app-mode .app-chat-preview { display: block; color: #777; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+    html.app-mode .app-chat-time { display: block; align-self: flex-start; color: #999; font-size: 11px; white-space: nowrap; padding-top: 4px; }
+
+    /* あそぶ：4枚のカード（左）と今日の予定（右） */
+    html.app-mode #playView.active { display: flex; gap: 24px; padding: 24px 28px; box-sizing: border-box; align-items: flex-start; }
+    html.app-mode #playView .play-grid { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 18px; padding: 0; }
+    html.app-mode .play-tile { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; background: #fff; border: 1px solid #e7e9ed; text-align: center; min-height: 190px; padding: 22px; border-radius: 22px; }
+    html.app-mode .play-tile i { font-size: 46px; }
+    html.app-mode .play-tile b { font-size: 20px; }
+    html.app-mode .play-tile span { font-size: 13px; }
+    html.app-mode .play-side { display: flex; flex-direction: column; gap: 4px; width: 300px; flex: none; background: #fff; border: 1px solid #e7e9ed; border-radius: 22px; padding: 20px; box-sizing: border-box; }
+    html.app-mode .play-side h4 { margin: 0 0 8px; font-size: 14px; color: #667089; }
+    html.app-mode .play-ev { display: flex; gap: 12px; padding: 11px 0; border-bottom: 1px solid #f1f3f7; align-items: baseline; }
+    html.app-mode .play-ev:last-child { border-bottom: 0; }
+    html.app-mode .play-ev b { width: 56px; flex: none; font-size: 15px; }
+    html.app-mode .play-ev span { font-size: 13px; line-height: 1.5; }
+    html.app-mode .play-ev small { display: block; color: #8a93a8; font-size: 11.5px; }
+
+    /* マイページ：2列（左：サポーター・コイン・記録・通知／右：紹介・設定）。ランキングと履歴は、下に横いっぱい */
+    html.app-mode #mypageView .panel { max-width: 1000px; display: grid; grid-template-columns: 1fr 1fr; column-gap: 24px; align-content: start; grid-template-rows: auto auto auto auto 1fr; }
+    html.app-mode #mypageView .panel > * { grid-column: 1 / -1; }
+    html.app-mode #mypageView .panel > #supporterCard { grid-column: 1; grid-row: 1; }
+    html.app-mode #mypageView .panel > .coin-card { grid-column: 1; grid-row: 2; }
+    html.app-mode #mypageView .panel > .stats { grid-column: 1; grid-row: 3; }
+    html.app-mode #mypageView .panel > .app-account:not(.app-account-bottom) { grid-column: 2; grid-row: 1 / 5; align-self: start; }
+    html.app-mode #mypageView .panel > .notification-settings { grid-column: 1; grid-row: 4; }
+}
+
+/* 縦向きのiPad：メニューは、下のタブ5つ。一覧は細く、会話を広く取る */
+@media (min-width: 701px) and (orientation: portrait) {
+    html.app-mode .app { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; }
+    html.app-mode .header, html.app-mode .workspace { grid-column: 1; }
+    html.app-mode .tabs {
+        grid-column: 1; grid-row: 3;
+        flex-direction: row; justify-content: space-around; align-items: stretch;
+        width: auto; padding: 0 0 env(safe-area-inset-bottom, 0px); height: calc(70px + env(safe-area-inset-bottom, 0px));
+        background: #fff; border-top: 1px solid #e1e4e8; overflow: visible; gap: 0;
+    }
+    html.app-mode .tabs button { flex: 1; width: auto; max-width: none; min-height: 0; border-radius: 0; color: #667089; }
+    html.app-mode .tabs button.active { background: transparent; color: #2f6bff; }
+    html.app-mode .sidebar { width: 290px; }
+    html.app-mode #mypageView .panel { grid-template-columns: 1fr; }
+    html.app-mode #mypageView .panel > * { grid-column: 1 !important; grid-row: auto !important; }
+    html.app-mode #playView.active { flex-direction: column; }
+    html.app-mode .play-side { width: 100%; }
 }
