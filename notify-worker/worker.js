@@ -3257,19 +3257,18 @@ export async function runBilliardsAnnounceTick(env = {}, scheduledTime = Date.no
 
 /* =========================================================
    📸 YuReal（BeReal のような、1日1回の写真）
-   ・毎日 9:00〜15:00（日本時間）のどこかで、決まった時刻に通知。その時刻から2分以内に撮るのが「ちょうどいい」投稿、それより遅いと「○分遅れ」と出る。
+   ・毎日 9:00〜15:00（日本時間）のどこかで、決まった時刻に通知。その時刻から3分以内に撮るのが「ちょうどいい」投稿、それより遅いと「○分遅れ」と出る。
      時刻は、日付から決まる計算（乱数なし・Firestore に保存しない）。通知は、決まった分の5分間だけ Firestore に触れる。
    ・写真は、友達だけが見られる。自分がその日の写真を投稿するまでは、友達のその日の写真は見えない（きのうの分は見える）。
    ・保存は2日（きょう・きのう）。毎日 3:10〜3:20（日本時間）に、それより古い分を消す。写真の本体は別の書類（yurealImages）に分けて、一覧では写真を読まない。
-   ・保存：yurealPosts/{日付}_{uid}（名前・時刻・遅れ・ひとこと・リアクション・コメント）、yurealImages/{日付}_{uid}（写真）、worldConfig/yureal（公開の状態）。すべて Worker だけが読み書き
+   ・保存：yurealPosts/{日付}_{uid}（名前・時刻・遅れ・ひとこと・リアクション）、yurealImages/{日付}_{uid}（写真）、worldConfig/yureal（公開の状態）。すべて Worker だけが読み書き
    ・公開：worldConfig/yureal の published（最上位管理者だけが切り替える）。公開前は、最上位管理者だけが使える（通知も最上位管理者にだけ）。
 ========================================================= */
 const YUREAL_START_H = 9, YUREAL_END_H = 15;
-export const YUREAL_WINDOW_MS = 2 * 60000;
+export const YUREAL_WINDOW_MS = 3 * 60000;
 const YUREAL_NOTIFY_SPAN_MS = 5 * 60000;
 const YUREAL_IMG_MAX = 220000;   // 写真（base64の文字数）。画面で小さく縮めてから送る
-const YUREAL_EMOJIS = ["❤️", "😂", "😮", "👍", "🔥"];
-const YUREAL_COMMENT_MAX = 20, YUREAL_COMMENT_LEN = 60;
+const YUREAL_EMOJIS = ["❤️", "😂", "😮", "😢", "👍", "🔥"];   // リアクション：絵文字をタップして送る（コメントはなし）
 const jstDateKey = (ms) => new Date(ms + 9 * 3600000).toISOString().slice(0, 10).replace(/-/g, "");
 const jstDayStartMs = (key) => Date.UTC(Number(key.slice(0, 4)), Number(key.slice(4, 6)) - 1, Number(key.slice(6, 8))) - 9 * 3600000;
 export const yurealDateKey = jstDateKey;
@@ -3304,7 +3303,7 @@ const YUREAL_ID = /^\d{8}_[A-Za-z0-9_-]{1,128}$/;
 const yurealView = (d, me, id) => {
   const rc = {}; let mine = "";
   for (const [u, e] of Object.entries(d.reactions || {})) { rc[e] = (rc[e] || 0) + 1; if (u === me) mine = e; }
-  return { id, uid: d.uid, name: d.name || "", date: d.date, at: d.at, lateMin: d.lateMin || 0, caption: d.caption || "", mine: d.uid === me, reactions: rc, myReaction: mine, comments: (d.comments || []).map((c) => ({ n: c.n, t: c.t, at: c.at, mine: c.uid === me })) };
+  return { id, uid: d.uid, name: d.name || "", date: d.date, at: d.at, lateMin: d.lateMin || 0, caption: d.caption || "", mine: d.uid === me, reactions: rc, myReaction: mine };
 };
 export async function handleYurealAction(deps, uid, body) {
   const action = typeof body?.action === "string" ? body.action : "";
@@ -3336,7 +3335,7 @@ export async function handleYurealAction(deps, uid, body) {
       if (now < at && !test) return { status: 409, error: "not_yet" };
       const id = `${today}_${uid}`;
       const lateMin = now <= at + YUREAL_WINDOW_MS ? 0 : Math.ceil((now - at - YUREAL_WINDOW_MS) / 60000);
-      const meta = { uid, name: me.name, date: today, at: now, lateMin, caption, reactions: {}, comments: [] };
+      const meta = { uid, name: me.name, date: today, at: now, lateMin, caption, reactions: {} };
       if (!test && (await fs.get(`yurealPosts/${id}`))) return { status: 409, error: "already_posted" };
       const writes = [
         { update: { name: fs.docName(`yurealPosts/${id}`), fields: encodeFields(meta) } },
@@ -3371,30 +3370,17 @@ export async function handleYurealAction(deps, uid, body) {
       await fs.delete(`yurealPosts/${id}`); await fs.delete(`yurealImages/${id}`);
       return { ok: true };
     }
-    if (action === "react" || action === "comment") {
+    if (action === "react") {
       if (date === today && ownerUid !== uid && !(await fs.get(`yurealPosts/${today}_${uid}`))) return { status: 403, error: "post_first" };
-      let me = null;
       for (let attempt = 0; attempt < 4; attempt++) {
         const raw = await fs.getRaw(`yurealPosts/${id}`);
         if (!raw) return { status: 404, error: "gone" };
         const d = decodeFields(raw.fields);
-        const fields = {};
-        if (action === "react") {
-          const emoji = String(body?.emoji || "");
-          if (emoji && !YUREAL_EMOJIS.includes(emoji)) return { status: 400, error: "bad_emoji" };
-          const reactions = { ...(d.reactions || {}) };
-          if (!emoji || reactions[uid] === emoji) delete reactions[uid]; else reactions[uid] = emoji;
-          fields.reactions = reactions;
-        } else {
-          const text = String(body?.text || "").trim().slice(0, YUREAL_COMMENT_LEN);
-          me = me || (await loadMyUser(fs, uid, body?.username));
-          if (me.error) return me.error;
-          if (!text || /https?:|www\./i.test(text)) return { status: 400, error: "bad_text" };
-          const comments = [...(d.comments || [])];
-          if (comments.length >= YUREAL_COMMENT_MAX) return { status: 409, error: "full" };
-          comments.push({ uid, n: me.name, t: text, at: now });
-          fields.comments = comments;
-        }
+        const emoji = String(body?.emoji || "");
+        if (emoji && !YUREAL_EMOJIS.includes(emoji)) return { status: 400, error: "bad_emoji" };
+        const reactions = { ...(d.reactions || {}) };
+        if (!emoji || reactions[uid] === emoji) delete reactions[uid]; else reactions[uid] = emoji;   // 同じ絵文字をもう一度タップすると外れる
+        const fields = { reactions };
         try {
           await fs.commit([{ update: { name: fs.docName(`yurealPosts/${id}`), fields: encodeFields(fields) }, updateMask: { fieldPaths: Object.keys(fields) }, currentDocument: { updateTime: raw.updateTime } }]);
           return { ok: true, item: yurealView({ ...d, ...fields }, uid, id) };
@@ -3421,7 +3407,7 @@ export async function runYurealTick(env = {}, scheduledTime = Date.now(), deps =
   const out = {};
   if (notifyNow) {
     yurealTickDone.add(`n${today}`);
-    const data = { kind: "yureal", title: "📸 YuReal の時間です！", body: "いまから2分以内に、いまの様子を撮ろう", link: "./?open=yureal", tag: `yureal-${today}` };
+    const data = { kind: "yureal", title: "📸 YuReal の時間です！", body: "いまから3分以内に、いまの様子を撮ろう", link: "./?open=yureal", tag: `yureal-${today}` };
     yurealCfgCache = { at: 0, published: false };
     out.notify = (await yurealPublished(d)) ? await sendBroadcastNotification(d, `yureal-${today}`, data) : await sendPushToUids(d, `yureal-${today}`, d.adminUid ? [d.adminUid] : [], data);
   }
