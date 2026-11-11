@@ -3491,19 +3491,41 @@ async function friendCreate(deps, me, other) {   // me / other：{ name, uid, ph
   await deps.firestore.createIfAbsent(`friends/${friendDocId(me.name, other.name)}`, { user1: u1.name, user2: u2.name, user1Uid: u1.uid, user2Uid: u2.uid, user1Photo: u1.photo || "", user2Photo: u2.photo || "", createdAt: at, updatedAt: at });
 }
 const FRIEND_REQ_ID = /^[A-Za-z0-9_-]{3,300}$/;
+const YUID_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";   // 見間違えやすい文字（0 O 1 I）を除く
+export function normalizeYuId(v) {
+  const x = String(v || "").toUpperCase().replace(/[\s-]/g, "");
+  return /^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{8}$/.test(x) ? x : "";
+}
+export async function ensureYuId(deps, me, uid) {   // 全員に重ならないIDを1つ。名前は重なってよい前提の「友達申請の宛先」
+  const fs = deps.firestore;
+  const cur = normalizeYuId(decodeFields(me.raw.fields).yuId);
+  if (cur) return cur;
+  for (let i = 0; i < 8; i++) {
+    const bytes = new Uint8Array(8); crypto.getRandomValues(bytes);
+    const id = Array.from(bytes, (b) => YUID_ALPHABET[b % 32]).join("");
+    if (await fs.createIfAbsent(`yuIds/${id}`, { uid, name: me.name, createdAt: new Date(deps.now()) })) {
+      await fs.update(`users/${me.name}`, { yuId: id });
+      return id;
+    }
+  }
+  throw new Error("yuid_exhausted");
+}
 export async function handleFriendAction(deps, uid, body) {
   const fs = deps.firestore, action = typeof body?.action === "string" ? body.action : "";
   try {
     const me = await loadMyUser(fs, uid, body?.username);
     if (me.error) return me.error;
     const mine = { name: me.name, uid, photo: String(decodeFields(me.raw.fields).profileImage || "") };
+    if (action === "myId") return { ok: true, yuId: await ensureYuId(deps, me, uid) };   // 自分のゆうID（無ければ作る）
     if (action === "request") {
-      const name = String(body?.name || "").trim();
-      if (!name || name.length > 100 || name.includes("/")) return { status: 400, error: "bad_name" };
-      if (name === me.name) return { status: 400, error: "self" };
+      const yid = normalizeYuId(body?.yuId);
+      if (!yid) return { status: 400, error: "bad_id" };
+      const idDoc = await fs.get(`yuIds/${yid}`);
+      const name = idDoc && typeof idDoc.name === "string" ? idDoc.name : "";
+      if (!name || idDoc.uid === uid) return { status: name ? 400 : 404, error: name ? "self" : "not_found" };
       const raw = await fs.getRaw(`users/${name}`);
       const t = raw ? decodeFields(raw.fields) : null;
-      if (!t || typeof t.uid !== "string" || !t.uid) return { status: 404, error: "not_found" };
+      if (!t || typeof t.uid !== "string" || t.uid !== idDoc.uid) return { status: 404, error: "not_found" };
       const other = { name, uid: t.uid, photo: String(t.profileImage || "") };
       if (await fs.get(`blocks/${other.uid}_${uid}`)) return { status: 404, error: "not_found" };   // 相手にブロックされている：見つからない扱い
       if (await fs.get(`blocks/${uid}_${other.uid}`)) return { status: 409, error: "you_blocked" };

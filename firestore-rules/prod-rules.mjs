@@ -262,7 +262,7 @@ const TEST_CASES = [
   testCase("ALLOW", "groups：作成者が自分でグループを作る", userAlice, "create", "groups/g2", { data: { name: "g", owner: "alice", ownerUid: userAlice.uid, members: ["alice"] } }),
   testCase("DENY", "groups：自分を入れずにグループを作る", userAlice, "create", "groups/g3", { data: { name: "g", owner: "alice", ownerUid: userAlice.uid, members: ["bob"] } }),
   testCase("DENY", "groups：非メンバーがグループを書き換える", userCarol, "update", "groups/g1", { data: { name: "x", owner: "alice", ownerUid: userAlice.uid, members: ["alice", "bob"] }, existing: { name: "g", owner: "alice", ownerUid: userAlice.uid, members: ["alice", "bob"] } }),
-  testCase("ALLOW", "messages：自分の1対1メッセージを送る", userAlice, "create", "messages/m1", { data: { sender: "alice", senderUid: userAlice.uid, receiver: "bob", type: "friend", text: "hi" } }),
+  testCase("DENY", "messages：友達の書類が無い相手に1対1を送る（友達になっていない）", userAlice, "create", "messages/m1", { data: { sender: "alice", senderUid: userAlice.uid, receiver: "bob", type: "friend", friendshipId: "alice_bob", text: "hi" } }),
   testCase("DENY", "messages：他人になりすまして送る（sender 偽装）", userAlice, "create", "messages/m2", { data: { sender: "bob", senderUid: userAlice.uid, receiver: "carol", type: "friend", text: "x" } }),
   testCase("DENY", "messages：senderUid を他人にして送る", userAlice, "create", "messages/m3", { data: { sender: "alice", senderUid: "someoneElse", receiver: "bob", type: "friend", text: "x" } }),
   testCase("ALLOW", "messages：当事者が自分あての1対1を読む", userAlice, "get", "messages/m1", { existing: { sender: "alice", senderUid: userAlice.uid, receiver: "bob", type: "friend", text: "hi" } }),

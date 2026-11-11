@@ -61,7 +61,7 @@ service cloud.firestore {
     //   gameInvites：送った人・送られた人だけ／fcmTokens：アプリからは読まない（通知サーバーだけが読む）
     //   gameRooms・gameRoomOwners：専用のルールで判定（gameRooms はロビー表示のため読み取りは今まで通り許可）
     function hasDedicatedReadRules(collection) {
-      return collection in ['supporters', 'supporterIndex', 'featureRequests', 'inviteCodes', 'inviteRedeems', 'yurealPosts', 'yurealImages', 'friendRequests', 'blocks', 'reports', 'messages', 'groups', 'fcmTokens', 'gameInvites', 'gameRooms', 'gameRoomOwners', 'yuslotSeats', 'lotteryEntries', 'lotteryRounds', 'bankujiRounds', 'bankujiEntries', 'bankujiPasses', 'bankujiApply', 'economyStats', 'martIndex', 'yuslotKaku', 'yuslotPrefs', 'coinTransfers', 'yuslotRank', 'yuslotBattle', 'yuslotYacht', 'yuslotKeshi', 'yuslotKeshiLeague'];
+      return collection in ['yuIds', 'supporters', 'supporterIndex', 'featureRequests', 'inviteCodes', 'inviteRedeems', 'yurealPosts', 'yurealImages', 'friendRequests', 'blocks', 'reports', 'messages', 'groups', 'fcmTokens', 'gameInvites', 'gameRooms', 'gameRoomOwners', 'yuslotSeats', 'lotteryEntries', 'lotteryRounds', 'bankujiRounds', 'bankujiEntries', 'bankujiPasses', 'bankujiApply', 'economyStats', 'martIndex', 'yuslotKaku', 'yuslotPrefs', 'coinTransfers', 'yuslotRank', 'yuslotBattle', 'yuslotYacht', 'yuslotKeshi', 'yuslotKeshiLeague'];
     }
 
     // 下のコレクションは管理者だけが読める
@@ -104,6 +104,8 @@ service cloud.firestore {
         'yuslotKeshi',
         // 🏆 消しバトのリーグ戦：週の戦績（yuslotKeshiLeague）は通知 Worker（サービスアカウント）だけが書く
         'yuslotKeshiLeague',
+        // 🆔 ゆうID（yuIds：IDから uid を引く表）は Worker だけが書く
+        'yuIds',
         // ⭐ サポーター（supporters・supporterIndex・featureRequests）・🎟 招待コード（inviteCodes・inviteRedeems）・📸 YuSnap の写真（yurealPosts・yurealImages）・👥 友達申請（friendRequests）・ブロック（blocks）・通報（reports）は Worker だけが書く
         'supporters', 'supporterIndex', 'featureRequests', 'inviteCodes', 'inviteRedeems', 'yurealPosts', 'yurealImages', 'friendRequests', 'blocks', 'reports'];
     }
@@ -200,7 +202,9 @@ service cloud.firestore {
           // 🥷 スリ対策：防犯グッズ（guards）・スリの被害の記録（theft）・スリの通知の設定（theftPush）は Worker・毎日の処理だけが書く
           'guards', 'theft', 'theftPush',
           // 🏦 ゆう基金：毎日 9:15 に配られた額の記録（fundGrant）は Worker だけが書く
-          'fundGrant'];
+          'fundGrant',
+          // 🆔 ゆうID（自動で付く。友達申請で使う）は Worker だけが書く
+          'yuId'];
       }
       function hasEconomyFields(data) {
         return data.keys().hasAny(economyFields());
@@ -377,13 +381,25 @@ service cloud.firestore {
     match /messages/{messageId} {
       allow read: if signedIn() && isMessageParticipant(resource.data);
 
+      // 1対1：友達（友達の書類があり、自分と相手がその当事者）にだけ送れる。友達でない人には送れない（友達申請を相手が承認してから）
       allow create: if signedIn()
         && request.resource.data.get('senderUid', '') == request.auth.uid
         && myName() != '' && request.resource.data.get('sender', '') == myName()
         && (
           request.resource.data.get('groupId', '') == ''
-          || (myName() in groupMembers(request.resource.data.get('groupId', '')))
+            ? isFriendMessage(request.resource.data)
+            : (myName() in groupMembers(request.resource.data.get('groupId', '')))
         );
+
+      function isFriendMessage(d) {
+        let fid = d.get('friendshipId', '');
+        return fid is string && fid != '' && d.get('receiver', '') != ''
+          && exists(/databases/$(database)/documents/friends/$(fid))
+          && (
+            (get(/databases/$(database)/documents/friends/$(fid)).data.get('user1', '') == myName() && get(/databases/$(database)/documents/friends/$(fid)).data.get('user2', '') == d.get('receiver', ''))
+            || (get(/databases/$(database)/documents/friends/$(fid)).data.get('user2', '') == myName() && get(/databases/$(database)/documents/friends/$(fid)).data.get('user1', '') == d.get('receiver', ''))
+          );
+      }
 
       allow update: if signedIn() && (
         (isOwnMessage(resource.data) && deletedFieldsOnly())

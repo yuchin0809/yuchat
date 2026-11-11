@@ -15,6 +15,7 @@ async function ng(n, p) { try { await assertFails(p); pass++; logs.push("PASS �
 
 (async () => {
   const env = await initializeTestEnvironment({ projectId: "demo-yuuchat-rules", firestore: { rules: fs.readFileSync(path.join(__dirname, "..", "firestore.rules"), "utf8"), host: "127.0.0.1", port: 8080 } });
+  await env.clearFirestore();   // 前の試験の残り（友達の書類など）を消す
   const alice = env.authenticatedContext("uidA", { name: "alice" }).firestore();
   const bob = env.authenticatedContext("uidB", { name: "bob" }).firestore();
   const carol = env.authenticatedContext("uidC", { name: "carol" }).firestore();
@@ -27,6 +28,7 @@ async function ng(n, p) { try { await assertFails(p); pass++; logs.push("PASS �
     await setDoc(doc(d, "users/alice"), { uid: "uidA", name: "alice" });
     await setDoc(doc(d, "users/bob"), { uid: "uidB", name: "bob" });
     await setDoc(doc(d, "users/carol"), { uid: "uidC", name: "carol" });
+    await setDoc(doc(d, "friends/alice_carol"), { user1: "alice", user2: "carol", user1Uid: "uidA", user2Uid: "uidC" });
     // グループ
     await setDoc(doc(d, "groups/g1"), { name: "G1", owner: "alice", ownerUid: "uidA", members: ["alice", "bob"] });
     await setDoc(doc(d, "groups/gLeave"), { name: "GL", owner: "alice", ownerUid: "uidA", members: ["alice", "bob"] });
@@ -75,7 +77,8 @@ async function ng(n, p) { try { await assertFails(p); pass++; logs.push("PASS �
   await ng("carol が g1 のメッセージを単体 get で覗く", getDoc(doc(carol, "messages/gm1")));
 
   logs.push("--- ② メッセージの作成：送信者が自分のときだけ");
-  await ok("alice が自分の1対1メッセージを送る", addDoc(collection(alice, "messages"), { sender: "alice", senderUid: "uidA", receiver: "carol", type: "friend", text: "hi", createdAt: serverTimestamp() }));
+  await ok("alice が自分の1対1メッセージを送る", addDoc(collection(alice, "messages"), { sender: "alice", senderUid: "uidA", receiver: "carol", type: "friend", friendshipId: "alice_carol", text: "hi", createdAt: serverTimestamp() }));
+  await ng("alice が友達でない bob に1対1を送る（友達の書類が無い）", addDoc(collection(alice, "messages"), { sender: "alice", senderUid: "uidA", receiver: "bob", type: "friend", friendshipId: "alice_bob", text: "hi" }));
   await ng("alice が bob になりすまして送る（sender を偽装）", addDoc(collection(alice, "messages"), { sender: "bob", senderUid: "uidA", receiver: "carol", type: "friend", text: "x", createdAt: serverTimestamp() }));
   await ng("alice が senderUid を他人にして送る", addDoc(collection(alice, "messages"), { sender: "alice", senderUid: "uidB", receiver: "carol", type: "friend", text: "x", createdAt: serverTimestamp() }));
   await ok("bob がグループ g1 にメッセージを送る（メンバー）", addDoc(collection(bob, "messages"), { sender: "bob", senderUid: "uidB", groupId: "g1", type: "group", text: "g", createdAt: serverTimestamp() }));
