@@ -3172,9 +3172,15 @@ export async function handleYuslotAction(deps, uid, body) {
   }
 }
 
+/* 🎱 ビリヤードは、ゆうChatサポーター限定（公開されたあとも）。最上位管理者は、いつでも遊べる。サポーターかどうかは、サポーターの一覧（Workerのメモリに60秒だけ置く）で決める */
+async function billiardsAllowed(deps, uid, published) {
+  if (slotIsTopAdmin(deps, uid)) return true;
+  if (!published) return false;
+  return !!(await supporterLoadIndex(deps))[uid];
+}
 async function yuslotConfig(deps, uid) {
   const { published, yacht, keshi, billiards } = await slotGetConfig(deps);
-  return { ok: true, published, yachtPublished: yacht, keshiPublished: keshi, billiardsPublished: billiards, isTopAdmin: slotIsTopAdmin(deps, uid), open: slotBusinessOpen(deps.now()), serverNowMs: deps.now(), day: slotBusinessDay(deps.now()) };
+  return { ok: true, published, yachtPublished: yacht, keshiPublished: keshi, billiardsPublished: billiards, billiardsAllowed: await billiardsAllowed(deps, uid, billiards), isTopAdmin: slotIsTopAdmin(deps, uid), open: slotBusinessOpen(deps.now()), serverNowMs: deps.now(), day: slotBusinessDay(deps.now()) };
 }
 
 async function yuslotSetConfig(deps, uid, body) {
@@ -3234,8 +3240,8 @@ export async function runBilliardsAnnounceTick(env = {}, scheduledTime = Date.no
   if (billiardsAnnounceDone.has("1")) return { skipped: "done" };
   const d = { ...(deps || createDefaultDeps(env)), now: () => scheduledTime };
   await d.firestore.createIfAbsent(`announcements/${BILLIARDS_ANNOUNCE_ID}`, {
-    title: "🎱 ゆうワールドに「ビリヤード」が登場！",
-    body: "ゆうワールドにビリヤードが登場しました。\n\n・8ボール／9ボールを、CPU（かんたん・ふつう・つよい）と対戦できます\n・友達とのルーム対戦もできます（ゲームの部屋から「ビリヤード」を選んでね）\n・1人で、15個の球を少ない打数で全部落とす練習もできます\n・押し・引き・左右のひねりを使えます\n\nコインは一切使いません（賭け・賞金なし）。気軽に遊んでね！",
+    title: "🎱 ゆうワールドに「ビリヤード」が登場！（サポーター限定）",
+    body: "ゆうワールドにビリヤードが登場しました。ゆうChatサポーター限定で遊べます。\n\n・8ボール／9ボールを、CPU（かんたん・ふつう・つよい）と対戦できます\n・友達とのルーム対戦もできます（ゲームの部屋から「ビリヤード」を選んでね）\n・1人で、15個の球を少ない打数で全部落とす練習もできます\n・押し・引き・左右のひねりを使えます\n\nコインは一切使いません（賭け・賞金なし）。気軽に遊んでね！",
     createdAt: new Date(scheduledTime), updatedAt: new Date(scheduledTime), createdByUid: "system", createdByName: "ゆうChat"
   });
   const out = await notifyNewAnnouncement(d, BILLIARDS_ANNOUNCE_ID);
@@ -7945,7 +7951,7 @@ async function keshiRoomTimeout(deps, uid, body) {
    ・打ったあとの動きは、Worker が画面と同じ計算（BILLIARDS＝yubilliards-core.js の写し）でその場で最後まで進めて、結果（球の位置・反則・勝ち負け）を決める。ズルはできない。
    ・画面には、打つ前の球の位置（last.pre）と打ち方（last）が届く。画面は同じ計算で動きを再生し、終わったら、Worker が決めた位置にそろえる。
    ・持ち時間は1回60秒。過ぎたら、番が相手に移る（相手は手球を好きな場所に置ける）。2回続けて放置した人は負け。
-   ・公開：worldConfig/yuslot の billiardsPublished（最上位管理者だけが切り替える）。非公開のあいだは、最上位管理者がいるルームだけ。
+   ・公開：worldConfig/yuslot の billiardsPublished（最上位管理者だけが切り替える）。公開されたあとも、遊べるのは、ゆうChatサポーターと最上位管理者だけ（2人とも）。非公開のあいだは、最上位管理者だけ。
 ========================================================= */
 const BILLIARDS_TURN_MS = 60000;
 const BILLIARDS_MISS_LIMIT = 2;
@@ -7958,8 +7964,9 @@ async function billiardsRoomLoad(deps, uid, roomId) {
   const uids = Array.isArray(data.memberUids) ? data.memberUids : [];
   if (!uids.includes(uid)) return { error: { status: 403, error: "not_member" } };
   const { billiards } = await slotGetConfig(deps);
-  if (!billiards && !slotIsTopAdmin(deps, uid) && !uids.includes(deps.adminUid)) return { error: { status: 403, error: "not_published" } };
-  return { data, updateTime: raw.updateTime, roomId };
+  if (!billiards && !slotIsTopAdmin(deps, uid)) return { error: { status: 403, error: "not_published" } };
+  if (!(await billiardsAllowed(deps, uid, billiards))) return { error: { status: 403, error: "supporter_only" } };
+  return { data, updateTime: raw.updateTime, roomId, published: billiards };
 }
 const billiardsRoomView = (y, now) => ({ ok: true, billiards: y, serverNowMs: now });
 async function billiardsRoomWrite(deps, cur, billiards) {
@@ -7991,6 +7998,7 @@ async function billiardsRoomStart(deps, uid, body) {
   const same = y && Array.isArray(y.order) && y.order[0] === d.memberUids[0] && y.order[1] === d.memberUids[1];
   if (same && (!y.done || body?.rematch !== true)) return billiardsRoomView(y, now);
   if (!same && d.ownerUid !== uid) return { status: 409, error: "not_owner" };
+  for (const u of d.memberUids.slice(0, 2)) if (!(await billiardsAllowed(deps, u, cur.published))) return { status: 409, error: u === uid ? "supporter_only" : "opponent_not_supporter" };   // 2人とも、サポーター（または管理者）
   const mode = body?.mode === "nine" ? "nine" : body?.mode === "eight" ? "eight" : (same && y.mode) || "eight";
   const fresh = billiardsRoomNew(deps, d, mode, same && Array.isArray(y.score) ? y.score : [0, 0], now);
   if (!(await billiardsRoomWrite(deps, cur, fresh))) { const again = await billiardsRoomLoad(deps, uid, body.roomId); return again.error || billiardsRoomView(again.data.billiards || fresh, now); }
