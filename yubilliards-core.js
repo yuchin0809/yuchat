@@ -14,7 +14,10 @@ export const PHYS = {
   wall: 0.74,            // クッションに当たったときの、はね返りの強さ
   ball: 0.96,            // 球どうしのはね返りの強さ
   maxSpeed: 10,          // 1刻み（1/60秒）で進む距離の最大（球の直径 24 より小さいので、すり抜けない）
-  spinGain: 0.5          // 押し・引きの効きの強さ
+  spinGain: 0.5,         // 押し・引きの効きの強さ
+  sideGain: 0.3,         // 左右のひねりが、クッションで曲がる強さ
+  sideDecay: 0.998,      // ひねりが、ゆっくり弱まる割合（1刻みごと）
+  fastPocket: 7.5        // これより速い球は、ポケットの口の真ん中近くでないと入らない
 };
 export const HEAD_SPOT = { x: 250, y: TABLE.h / 2 };   // 白い球（手球）を置く場所
 export const FOOT_SPOT = { x: 740, y: TABLE.h / 2 };   // 15個の球を三角に並べる先頭の場所
@@ -28,11 +31,15 @@ const RACK = [1, 10, 2, 3, 8, 11, 12, 4, 13, 5, 9, 6, 14, 15, 7];
 const RACK_D = TABLE.r * 2 + 0.6;
 function rackPos(col, row) { return { x: FOOT_SPOT.x + col * RACK_D * 0.866, y: FOOT_SPOT.y + (row - col / 2) * RACK_D }; }
 
-/* 新しいゲーム。mode："eight"（CPU・2人で8ボール）／"practice"（1人で、全部落とす練習） */
+/* ナインボールの並べ方：ダイヤの形（1-2-3-2-1列）。先頭が1番、真ん中が9番 */
+const RACK9 = [[1], [2, 3], [4, 9, 5], [6, 7], [8]];
+function rackPos9(col, n, row) { return { x: FOOT_SPOT.x + col * RACK_D * 0.866, y: FOOT_SPOT.y + (row - (n - 1) / 2) * RACK_D }; }
+
+/* 新しいゲーム。mode："eight"（8ボール）／"nine"（9ボール）／"practice"（1人で、全部落とす練習） */
 export function newGame(mode = "practice") {
-  const balls = [{ id: 0, x: HEAD_SPOT.x, y: HEAD_SPOT.y, vx: 0, vy: 0, on: true }];
-  let i = 0;
-  for (let col = 0; col < 5; col++) for (let row = 0; row <= col; row++) { const p = rackPos(col, row); balls.push({ id: RACK[i++], x: p.x, y: p.y, vx: 0, vy: 0, on: true }); }
+  const balls = [{ id: 0, x: HEAD_SPOT.x, y: HEAD_SPOT.y, vx: 0, vy: 0, w: 0, on: true }];
+  if (mode === "nine") RACK9.forEach((ids, col) => ids.forEach((id, row) => { const p = rackPos9(col, ids.length, row); balls.push({ id, x: p.x, y: p.y, vx: 0, vy: 0, w: 0, on: true }); }));
+  else { let i = 0; for (let col = 0; col < 5; col++) for (let row = 0; row <= col; row++) { const p = rackPos(col, row); balls.push({ id: RACK[i++], x: p.x, y: p.y, vx: 0, vy: 0, w: 0, on: true }); } }
   balls.sort((a, b) => a.id - b.id);
   return { mode, balls, shots: 0, fouls: 0, pocketed: [], events: [], shot: null, cueSpin: 0, spinUsed: false,
     turn: 0, groups: [null, null], inHand: false, breakShot: true, over: false, winner: null };
@@ -42,20 +49,22 @@ export const cueBall = (game) => game.balls[0];
 export const isRest = (game) => game.balls.every((b) => !b.on || (b.vx === 0 && b.vy === 0));
 export const remaining = (game) => game.balls.filter((b) => b.id > 0 && b.on).length;
 export const isCleared = (game) => remaining(game) === 0;
+export const lowestBall = (game) => game.balls.filter((b) => b.on && b.id > 0).sort((a, b) => a.id - b.id)[0] || null;
 export const groupLeft = (game, group) => game.balls.filter((b) => b.on && b.id > 0 && groupOf(b.id) === group).length;
 
 /* 打つ：向き（ラジアン）・強さ（0〜1）・押し引き（−1〜1。＋＝押し（当たったあとも進む）、−＝引き（当たったあと戻る））。止まっているときだけ */
-export function shoot(game, angle, power, spin = 0) {
+export function shoot(game, angle, power, spin = 0, side = 0) {
   if (game.over || game.inHand || !isRest(game) || !cueBall(game).on) return false;
   const p = Math.max(0.03, Math.min(1, Number(power) || 0));
   const cue = cueBall(game);
   cue.vx = Math.cos(angle) * PHYS.maxSpeed * p;
   cue.vy = Math.sin(angle) * PHYS.maxSpeed * p;
   game.cueSpin = Math.max(-1, Math.min(1, Number(spin) || 0));
+  cue.w = -Math.max(-1, Math.min(1, Number(side) || 0));   // 右ひねり＝反時計まわり（画面で見て）
   game.spinUsed = false;
   game.shots += 1;
   const g = game.groups[game.turn];
-  game.shot = { first: null, pocketed: [], rail: false, who: game.turn, groupBefore: g, onEightBefore: !!g && groupLeft(game, g) === 0 };
+  game.shot = { first: null, pocketed: [], rail: false, who: game.turn, groupBefore: g, onEightBefore: !!g && groupLeft(game, g) === 0, lowestBefore: lowestBall(game)?.id ?? null };
   return true;
 }
 
@@ -77,7 +86,8 @@ export function step(game) {
     // ポケット
     for (let i = 0; i < POCKETS.length; i++) {
       const dx = b.x - POCKETS[i][0], dy = b.y - POCKETS[i][1];
-      if (dx * dx + dy * dy < POCKET_R[i] * POCKET_R[i]) { b.on = false; b.vx = 0; b.vy = 0; dropped.push(b.id); break; }
+      const pr = POCKET_R[i] * (sp > PHYS.fastPocket ? 0.82 : 1);   // 速すぎる球は、縁にはじかれて入りにくい
+      if (dx * dx + dy * dy < pr * pr) { b.on = false; b.vx = 0; b.vy = 0; dropped.push(b.id); break; }
     }
     if (!b.on) continue;
     // クッション
@@ -86,6 +96,10 @@ export function step(game) {
     else if (b.x > w - r) { hit = Math.abs(b.vx); b.x = w - r; b.vx = -Math.abs(b.vx) * PHYS.wall; }
     if (b.y < r) { hit = Math.max(hit, Math.abs(b.vy)); b.y = r; b.vy = Math.abs(b.vy) * PHYS.wall; }
     else if (b.y > h - r) { hit = Math.max(hit, Math.abs(b.vy)); b.y = h - r; b.vy = -Math.abs(b.vy) * PHYS.wall; }
+    if (b.w) {
+      if (hit > 0.05) { const nx = b.x <= r + 0.01 ? -1 : b.x >= w - r - 0.01 ? 1 : 0, ny = b.y <= r + 0.01 ? -1 : b.y >= h - r - 0.01 ? 1 : 0; b.vx += b.w * hit * PHYS.sideGain * ny; b.vy -= b.w * hit * PHYS.sideGain * nx; b.w *= 0.55; }
+      else b.w *= PHYS.sideDecay;
+    }
     if (hit > 0.05) { note(game, { k: "rail", v: hit }); if (shot && shot.first !== null) shot.rail = true; }
   }
   // 球どうし
@@ -170,6 +184,7 @@ export function settle(game) {
    ・反則（手球が落ちた／どの球にも当たらない／最初に当てた球が違う／何も落ちず、クッションにも当たらない）は、相手が手球を好きな場所に置ける
    ・自分の球を全部落としたあとに、8番を落とせば勝ち。それより前に8番を落とす、または8番と同時に反則をすると負け（ブレイクで8番が落ちたときは、置き直し） */
 export function endShot(game) {
+  if (game.mode === "nine") return endShotNine(game);
   const s = game.shot;
   const me = game.turn, opp = 1 - me;
   const cue = cueBall(game);
@@ -210,6 +225,43 @@ export function endShot(game) {
   if (switched) game.turn = opp;
   game.inHand = foul;
   return { foul, reason, switched, winner: null, assigned };
+}
+
+/* 【9ボール】止まったあとの決まり：
+   ・いつも、盤の上でいちばん小さい番号の球に、最初に当てる（当てたあとなら、どの球を落としてもよい）
+   ・反則（手球が落ちた／どの球にも当たらない／最初に当てた球が違う／何も落ちず、クッションにも当たらない）は、相手が手球を好きな場所に置ける
+   ・9番を、反則なしで落とせば勝ち（ブレイクでも、あいだの球でも同じ）。反則と同時に9番が落ちたら、9番は置き直し
+   ・球を落として反則がなければ、続けて打てる。そうでなければ交代 */
+function endShotNine(game) {
+  const s = game.shot;
+  const me = game.turn, opp = 1 - me;
+  const cue = cueBall(game);
+  const pocketed = s.pocketed.filter((id) => id !== 0);
+  const scratch = !cue.on;
+  let foul = false, reason = "";
+  if (scratch) { foul = true; reason = "手球がポケットに落ちた"; }
+  else if (s.first === null) { foul = true; reason = "どの球にも当たらなかった"; }
+  else if (s.first !== s.lowestBefore) { foul = true; reason = `最初に${s.lowestBefore}番に当てなかった`; }
+  if (!foul && pocketed.length === 0 && !s.rail) { foul = true; reason = "どの球もクッションに当たらなかった"; }
+  let winner = null;
+  if (pocketed.includes(9)) {
+    if (!foul) winner = me;
+    else {
+      const spot = freeSpotNear(game, FOOT_SPOT.x + 2 * RACK_D * 0.866, FOOT_SPOT.y, 9);
+      const e = game.balls.find((b) => b.id === 9); e.on = true; e.x = spot.x; e.y = spot.y; e.vx = 0; e.vy = 0;
+      game.pocketed = game.pocketed.filter((id) => id !== 9);
+    }
+  }
+  const keep = !foul && !winner && pocketed.length > 0;
+  game.breakShot = false;
+  game.shot = null;
+  if (winner !== null) { game.over = true; game.winner = winner; return { foul, reason, switched: false, winner, assigned: false }; }
+  if (foul) game.fouls += 1;
+  if (scratch) { const spot = freeSpotNear(game, HEAD_SPOT.x, HEAD_SPOT.y, 0); cue.x = spot.x; cue.y = spot.y; cue.vx = 0; cue.vy = 0; cue.on = true; }
+  const switched = !keep;
+  if (switched) game.turn = opp;
+  game.inHand = foul;
+  return { foul, reason, switched, winner: null, assigned: false };
 }
 
 /* 狙いの線：まっすぐ進んだとき、最初に当たる球（またはクッション）までの線と、当たったあとの向き。画面の狙いの表示用（球の動きは使わない・線だけの計算） */

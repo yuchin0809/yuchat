@@ -123,3 +123,31 @@ test("CPU：手球を置くときは、台の中の空いた所を選ぶ", () =>
   const p = choosePlacement(g); assert.ok(canPlace(g, p.x, p.y));
   assert.ok(bestShot(g, p.x, p.y) !== null || true);
 });
+
+test("9ボール：並べ方（1が先頭・9が真ん中）、いちばん小さい番号に最初に当てる、9番で勝ち", () => {
+  const g = newGame("nine");
+  assert.equal(g.balls.length, 10);
+  const xs = g.balls.filter((b) => b.id > 0).map((b) => b.x);
+  assert.equal(ball(g, 1).x, Math.min(...xs)); assert.ok(Math.abs(ball(g, 9).y - TABLE.h / 2) < 0.01);
+  for (let i = 0; i < g.balls.length; i++) for (let j = i + 1; j < g.balls.length; j++) assert.ok(Math.hypot(g.balls[i].x - g.balls[j].x, g.balls[i].y - g.balls[j].y) >= TABLE.r * 2);
+  const mk = (first, pocketed) => { const h = newGame("nine"); h.breakShot = false; h.shot = { first, pocketed: [...pocketed], rail: true, lowestBefore: 1 }; pocketed.forEach((id) => { ball(h, id).on = false; }); return h; };
+  const a = mk(2, []); endShot(a); assert.equal(a.turn, 1); assert.equal(a.inHand, true);   // 1番より先に2番に当てたら反則
+  const b = mk(1, [9]); endShot(b); assert.equal(b.over, true); assert.equal(b.winner, 0);
+  const c = mk(2, [9]); endShot(c); assert.equal(c.over, false); assert.equal(ball(c, 9).on, true);   // 反則と同時の9番は置き直し
+  const d = mk(1, [4]); endShot(d); assert.equal(d.turn, 0);   // 落として反則なし → 続ける
+});
+
+test("左右のひねり：クッションに当たったあとの進む向きが変わる", () => {
+  const run = (side) => { const g = empty(); put(g, 5, 900, 480); cueBall(g).x = 300; cueBall(g).y = 400; shoot(g, -1.2, 0.8, 0, side); for (let i = 0; i < 160; i++) step(g); return cueBall(g).x; };
+  assert.ok(Math.abs(run(1) - run(0)) > 1); assert.ok(Math.abs(run(-1) - run(0)) > 1); assert.notEqual(run(1), run(-1));
+});
+
+test("CPU：狙える形がなくても、遠い球まで届く強さで打つ（空振りしない）", () => {
+  for (const mode of ["eight", "nine"]) {
+    const g = empty(mode); g.breakShot = false; g.groups = ["solid", "stripe"];
+    put(g, 2, 960, 470); put(g, 1, 960, 450); cueBall(g).x = 40; cueBall(g).y = 40;
+    const s = chooseShot(g, { error: 0, rng: () => 0.5 });
+    shoot(g, s.angle, s.power, 0); runToRest(g);
+    assert.ok(g.shot.first !== null, `${mode}: 何かに当たった`);
+  }
+});
