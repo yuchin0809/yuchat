@@ -63,13 +63,13 @@ function nowBox() {
     const left = c.atMs + c.windowMs - nowMs();
     return `<div class="yr-now"><b>📸 YuReal の時間です！</b><span id="yrCount">${left > 0 ? `あと ${Math.floor(left / 60000)}:${String(Math.floor(left / 1000) % 60).padStart(2, "0")}` : `${Math.ceil(-left / 60000)}分遅れ（それでも投稿できます）`}</span><button class="yr-btn pri big" id="yrShoot">📸 いま撮る</button></div>`;
   }
-  return `<div class="yr-now"><b>まだ、きょうの時間ではありません</b><span>通知が来たら、3分以内に撮ろう（9時〜15時のどこか）${c.isAdmin && c.atMs ? `<br>管理者だけ見える：きょうは ${fmtTime(c.atMs)}` : ""}</span></div>`;
+  return `<div class="yr-now"><b>まだ、きょうの時間ではありません</b><span>通知が来たら、3分以内に撮ろう（9時〜15時のどこか）</span></div>`;
 }
 function render() {
   if (!root) return;
   const c = st.conf, f = st.feed;
-  const admin = c?.isAdmin ? `<p class="yr-note">${c.published ? "公開中（全員に見えています）" : "管理者だけに見えています（まだ公開していません）"}</p><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="yr-btn" id="yrPub">${c.published ? "非公開にする" : "全員に公開する"}</button><button class="yr-btn" id="yrTest">テスト投稿（いつでも）</button></div>` : "";
-  root.innerHTML = `<div class="yr"><div class="yr-top"><h2>📸 YuReal</h2><button class="yr-btn" id="yrReload">更新</button></div>${st.error ? `<p class="yr-note">${esc(st.error)}</p>` : ""}${admin}
+  const admin = c?.isAdmin ? `<p class="yr-note">${c.published ? "公開中（ベータ版・全員に見えています）" : "管理者だけに見えています（まだ公開していません）"}</p><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="yr-btn" id="yrPub">${c.published ? "非公開にする" : "全員に公開する"}</button><button class="yr-btn" id="yrTest">テスト投稿（いつでも）</button></div>` : "";
+  root.innerHTML = `<div class="yr"><div class="yr-top"><h2>📸 YuReal（ベータ版）</h2><button class="yr-btn" id="yrReload">更新</button></div>${st.error ? `<p class="yr-note">${esc(st.error)}</p>` : ""}${admin}
     ${f ? `<div class="yr-card" id="yrNow">${nowBox()}</div>` : ""}
     ${f && f.hidden ? '<p class="yr-note">友達の投稿があります。自分が投稿すると見られます</p>' : ""}
     ${f ? (f.items.length ? f.items.map(postHtml).join("") : '<p style="text-align:center;color:#8a93a8">まだ投稿がありません</p>') : ""}
