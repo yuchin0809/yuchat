@@ -99,7 +99,8 @@ function fundLine(f, esc) {
     <div class="yec-row"><button type="button" class="yec-btn" data-ec="derby-settle" ${FUND.busy ? "disabled" : ""}>ゆうダービー：未精算の馬券を今すぐ精算する</button></div>
     <div class="yec-row"><button type="button" class="yec-btn" data-ec="lottery-repay" ${FUND.busy ? "disabled" : ""}>宝くじ：払われていない賞金を調べて払う（直近の回）</button></div>
     ${FUND.derby ? `<p class="${FUND.derbyError ? "yec-err" : "yec-ok"}" style="white-space:pre-line">${esc(FUND.derby)}</p>` : ""}
-    ${requestsBlock(esc)}`;
+    ${requestsBlock(esc)}
+    ${reportsBlock(esc)}`;
 }
 async function lotteryRepayNow() {
   FUND.busy = true; FUND.derby = ""; FUND.derbyError = false; render();
@@ -146,6 +147,27 @@ async function reqDone(id) {
   REQ.busy = true; REQ.err = ""; render();
   try { await cfg.callAdmin("supporterRequestDone", { id }); REQ.list = (REQ.list || []).filter((r) => r.id !== id); } catch (error) { console.error("要望の既読エラー:", error); REQ.err = "うまくいきませんでした。もう一度お試しください。"; }
   REQ.busy = false; render();
+}
+/* 🚩 通報の一覧（対応していないものを新しい順。「対応した」にすると消える。対応は、ユーザー管理の停止・削除などで行う） */
+const RPT = { list: null, busy: false, err: "" };
+const RPT_REASON = { harassment: "いやがらせ・いじめ", inappropriate: "不適切な内容", spam: "迷惑・スパム", impersonation: "なりすまし", other: "その他" };
+const RPT_KIND = { message: "メッセージ", snap: "YuSnapの投稿", user: "ユーザー" };
+function reportsBlock(esc) {
+  const when = (ms) => { const d = new Date(Number(ms || 0) + 9 * 3600000); return `${d.getUTCMonth() + 1}/${d.getUTCDate()} ${d.getUTCHours()}:${String(d.getUTCMinutes()).padStart(2, "0")}`; };
+  const items = (RPT.list || []).map((r) => `<li class="yec-req"><div><b>${esc(r.target || "?")}</b>（${esc(RPT_KIND[r.kind] || r.kind)}）<small> ${esc(r.reporter)}さんが通報 ${when(r.at)}・${esc(RPT_REASON[r.reason] || r.reason)}</small>${r.snippet ? `<p style="white-space:pre-wrap;margin:4px 0 0">「${esc(r.snippet)}」</p>` : ""}${r.note ? `<p style="white-space:pre-wrap;margin:4px 0 0;color:#667089">${esc(r.note)}</p>` : ""}</div><button type="button" class="yec-btn" data-ec="rpt-done" data-id="${esc(r.id)}" ${RPT.busy ? "disabled" : ""}>対応した</button></li>`).join("");
+  return `<div class="yec-row"><button type="button" class="yec-btn" data-ec="rpt-load" ${RPT.busy ? "disabled" : ""}>🚩 通報を見る</button></div>
+    ${RPT.err ? `<p class="yec-err">${esc(RPT.err)}</p>` : ""}
+    ${RPT.list ? (items ? `<ul style="list-style:none;padding:0;margin:8px 0;display:flex;flex-direction:column;gap:8px">${items}</ul>` : `<p class="yec-note">対応していない通報は、ありません。</p>`) : ""}`;
+}
+async function rptLoad() {
+  RPT.busy = true; RPT.err = ""; render();
+  try { RPT.list = (await cfg.callAdmin("reportList", {})).reports || []; } catch (error) { console.error("通報の読み込みエラー:", error); RPT.err = "読み込めませんでした。もう一度お試しください。"; }
+  RPT.busy = false; render();
+}
+async function rptDone(id) {
+  RPT.busy = true; RPT.err = ""; render();
+  try { await cfg.callAdmin("reportDone", { id }); RPT.list = (RPT.list || []).filter((r) => r.id !== id); } catch (error) { console.error("通報の対応済みエラー:", error); RPT.err = "うまくいきませんでした。もう一度お試しください。"; }
+  RPT.busy = false; render();
 }
 const FUND_SKIP = { done: "今日はもう配りました（1日1回）。", small_pool: "基金が10コイン未満なので、配れません。", no_one: "対象の人（直近3日以内にログインした人）がいないので、配れません。" };
 /* 基金ができる前に集めた分（ゆう税・スリ）を、1 回だけ基金に足す。先に内訳を見せる */
@@ -232,6 +254,8 @@ document.addEventListener("click", (event) => {
   if (t.dataset.ec === "load") load();
   else if (t.dataset.ec === "req-load") reqLoad();
   else if (t.dataset.ec === "req-done") reqDone(t.dataset.id);
+  else if (t.dataset.ec === "rpt-load") rptLoad();
+  else if (t.dataset.ec === "rpt-done") rptDone(t.dataset.id);
   else if (t.dataset.ec === "prize-find") prizeFind();
   else if (t.dataset.ec === "prize-revoke") prizeRevoke(t);
   else if (t.dataset.ec === "limit-reset") limitReset();

@@ -1,7 +1,7 @@
 /* 👥 友達申請（worker.js の handleFriendAction）のテスト */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { handleFriendAction } from "../worker.js";
+import { handleFriendAction, handleAdminAction } from "../worker.js";
 
 console.warn = () => {};
 
@@ -135,4 +135,48 @@ test("ブロック：相手にブロックされていると「見つからな�
   d.fs.put("blocks/id1_id0", encF({ blockerUid: "id1", blockedUid: "id0" }));
   assert.equal((await d.act(1, { action: "respond", id: "id0_id1", accept: true })).error, "blocked");
   assert.equal(d.fs.plain("friends/u0_u1"), null);
+});
+
+test("ブロック：友達関係と申請が消え、相手は申請しても「見つからない」になる。解除できる。自分や、いない人はブロックできない", async () => {
+  const c = setup();
+  c.fs.put("friends/u0_u1", encF({ user1: "u0", user2: "u1" })); c.fs.put("friendRequests/id1_id0", encF({ fromUid: "id1", toUid: "id0" }));
+  assert.equal((await c.act(0, { action: "block", name: "u0" })).error, "self");
+  assert.equal((await c.act(0, { action: "block", name: "nobody" })).error, "not_found");
+  assert.equal((await c.act(0, { action: "block", name: "u1" })).ok, true);
+  assert.equal(c.fs.plain("friends/u0_u1"), null); assert.equal(c.fs.plain("friendRequests/id1_id0"), null);
+  assert.equal(c.fs.plain("blocks/id0_id1").blockedUid, "id1");
+  assert.equal((await c.act(1, { action: "request", name: "u0" })).error, "not_found");
+  assert.equal((await c.act(0, { action: "request", name: "u1" })).error, "you_blocked");
+  assert.equal((await c.act(0, { action: "unblock", uid: "id1" })).ok, true);
+  assert.equal(c.fs.plain("blocks/id0_id1"), null);
+});
+
+test("通報：メッセージ・YuSnapの投稿・ユーザーを通報できる。内容は控えられ、管理者に通知が行く。同じものは1件だけ。自分は通報できない", async () => {
+  const c = setup();
+  c.fs.put("fcmTokens/tadmin", encF({ uid: "adminUid" }));
+  c.fs.put("messages/msg1234567890", encF({ sender: "u1", senderUid: "id1", text: "ひどいことば", type: "friend" }));
+  c.fs.put("yurealPosts/20261111_id1", encF({ uid: "id1", name: "u1", caption: "ひとこと" }));
+  assert.equal((await c.act(0, { action: "report", kind: "message", refId: "msg1234567890", reason: "harassment", note: "やめて" })).ok, true);
+  const r = c.fs.plain("reports/id0_message_msg1234567890");
+  assert.deepEqual([r.targetUid, r.targetName, r.snippet, r.reason, r.status], ["id1", "u1", "ひどいことば", "harassment", "open"]);
+  assert.deepEqual(c.sent, [["tadmin", "🚩 通報が届きました"]], "管理者の端末にだけ通知が行く");
+  assert.equal((await c.act(0, { action: "report", kind: "snap", refId: "20261111_id1", reason: "inappropriate" })).ok, true);
+  assert.equal((await c.act(0, { action: "report", kind: "user", name: "u2", reason: "spam" })).ok, true);
+  assert.equal((await c.act(0, { action: "report", kind: "user", name: "u0", reason: "spam" })).error, "self");
+  assert.equal((await c.act(0, { action: "report", kind: "message", refId: "msg1234567890", reason: "bad" })).error, "bad_request");
+  assert.equal((await c.act(0, { action: "report", kind: "message", refId: "nomsg123456789", reason: "spam" })).error, "gone");
+  const before = Object.keys([...c.fs.docs.keys()].filter((k) => k.startsWith("reports/"))).length;
+  await c.act(0, { action: "report", kind: "message", refId: "msg1234567890", reason: "spam" });
+  assert.equal(Object.keys([...c.fs.docs.keys()].filter((k) => k.startsWith("reports/"))).length, before, "同じ対象は、1件だけ");
+});
+
+test("管理者：通報の一覧が新しい順に見え、「対応した」にすると消える。一般の人は呼べない", async () => {
+  const c = setup();
+  c.fs.put("messages/msg1234567890", encF({ sender: "u1", senderUid: "id1", text: "x" }));
+  await c.act(0, { action: "report", kind: "message", refId: "msg1234567890", reason: "other" });
+  const list = await handleAdminAction(c.deps, "adminUid", { action: "reportList" });
+  assert.equal(list.reports.length, 1); assert.equal(list.reports[0].reporter, "u0"); assert.equal(list.reports[0].target, "u1");
+  assert.equal((await handleAdminAction(c.deps, "adminUid", { action: "reportDone", id: list.reports[0].id })).ok, true);
+  assert.equal((await handleAdminAction(c.deps, "adminUid", { action: "reportList" })).reports.length, 0);
+  assert.ok((await handleAdminAction(c.deps, "id0", { action: "reportList" })).error, "管理者以外は使えない");
 });

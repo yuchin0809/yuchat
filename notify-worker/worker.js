@@ -568,7 +568,7 @@ export async function handleAdminAction(deps, callerUid, body) {
 
   const action = typeof body?.action === "string" ? body.action : "";
   const uid = typeof body?.uid === "string" ? body.uid : "";
-  const noUidActions = ["listUsers", "notifyAnnouncement", "renameUserRefs", "transferList", "transferApprove", "transferReject", "kakuWinners", "keshiLeagueEnroll", "economyReport", "grantKakuTicket", "bankujiPrize", "bankujiResetLimit", "fundDistribute", "fundBackfill", "derbySettle", "lotteryRepay", "supporterList", "supporterSet", "supporterRequests", "supporterRequestDone"];
+  const noUidActions = ["listUsers", "notifyAnnouncement", "renameUserRefs", "transferList", "transferApprove", "transferReject", "kakuWinners", "keshiLeagueEnroll", "economyReport", "grantKakuTicket", "bankujiPrize", "bankujiResetLimit", "fundDistribute", "fundBackfill", "derbySettle", "lotteryRepay", "supporterList", "supporterSet", "supporterRequests", "supporterRequestDone", "reportList", "reportDone"];
   if (!noUidActions.includes(action) && !UID_PATTERN.test(uid)) return { status: 400, error: "invalid_uid" };
 
   try {
@@ -597,6 +597,8 @@ export async function handleAdminAction(deps, callerUid, body) {
       case "supporterList": return await adminSupporterList(deps);
       case "supporterRequests": return await adminSupporterRequests(deps);
       case "supporterRequestDone": return await adminSupporterRequestDone(deps, callerUid, body);
+      case "reportList": return await adminReportList(deps);
+      case "reportDone": return await adminReportDone(deps, callerUid, body);
       case "supporterSet": return await adminSupporterSet(deps, callerUid, body);
       case "lotteryRepay": return await adminLotteryRepay(deps, callerUid, body);
       case "fundBackfill": return await adminFundBackfill(deps, callerUid, body);
@@ -1163,6 +1165,21 @@ async function sendPushToUids(deps, logId, uids, data) {
     } catch { failed++; }
   }));
   return { sent, failed, tokens: tokens.length };
+}
+
+/* 管理者：通報の一覧（対応していないものを新しい順）／「対応した」にする。対応は、管理者が、ユーザー管理（停止・削除）などで行う */
+async function adminReportList(deps) {
+  const docs = await deps.firestore.query("reports", [["status", "EQUAL", "open"]]);
+  const items = docs.map((d) => ({ id: d.id, kind: d.data.kind || "", reporter: d.data.reporterName || "", target: d.data.targetName || "", targetUid: d.data.targetUid || "", reason: d.data.reason || "", note: d.data.note || "", snippet: d.data.snippet || "", at: tsMillis(d.data.createdAt) || 0 })).sort((a, b) => b.at - a.at).slice(0, 100);
+  return { ok: true, reports: items };
+}
+async function adminReportDone(deps, callerUid, body) {
+  const id = String(body?.id || "");
+  if (!/^[A-Za-z0-9_-]{1,300}$/.test(id)) return { status: 400, error: "invalid_id" };
+  const cur = await deps.firestore.get(`reports/${id}`);
+  if (!cur) return { status: 404, error: "not_found" };
+  await deps.firestore.set(`reports/${id}`, { ...cur, status: "done", doneAt: new Date(deps.now()), doneBy: callerUid });
+  return { ok: true };
 }
 
 /* 管理者：サポーターの要望の一覧（読んでいないものを新しい順）／「読んだ」にする */
@@ -3460,6 +3477,8 @@ export async function runYurealTick(env = {}, scheduledTime = Date.now(), deps =
    ・ブロックされている相手には、申請できない（「見つかりません」と同じ見え方にする）。1人の未承認の申請は30件まで
    ・友達の書類の形は、これまでブラウザが作っていたものと同じ（user1/user2・uid・プロフィール画像） */
 const FRIEND_REQ_MAX = 30;
+const REPORT_REASONS = ["harassment", "inappropriate", "spam", "impersonation", "other"];   // いやがらせ・不適切な内容・迷惑・なりすまし・その他
+const REPORT_MAX = 50;
 const friendDocId = (a, b) => [a, b].sort((x, y) => x.localeCompare(y)).join("_");
 async function friendDocExists(fs, a, b) {
   for (const id of new Set([friendDocId(a, b), `${a}_${b}`, `${b}_${a}`])) if (await fs.get(`friends/${id}`)) return true;
@@ -3498,6 +3517,53 @@ export async function handleFriendAction(deps, uid, body) {
       await fs.createIfAbsent(`friendRequests/${uid}_${other.uid}`, { fromUid: uid, fromName: me.name, toUid: other.uid, toName: name, createdAt: new Date(deps.now()) });
       await sendPushToUids(deps, `friend-req-${uid}-${other.uid}-${deps.now()}`, [other.uid], { kind: "friend", title: "👋 友達申請が届きました", body: `${me.name}さんから、友達申請が届きました`, link: "./?open=chat", tag: `friend-req-${uid}` }).catch(() => {});
       return { ok: true, requested: true, name };
+    }
+    if (action === "block") {   // ブロック：友達関係を解除し、相手からの友達申請も受けない。相手には知らせない
+      const name = String(body?.name || "").trim();
+      if (!name || name.length > 100 || name.includes("/")) return { status: 400, error: "bad_name" };
+      if (name === me.name) return { status: 400, error: "self" };
+      const raw = await fs.getRaw(`users/${name}`);
+      const t = raw ? decodeFields(raw.fields) : null;
+      if (!t || typeof t.uid !== "string" || !t.uid) return { status: 404, error: "not_found" };
+      await fs.createIfAbsent(`blocks/${uid}_${t.uid}`, { blockerUid: uid, blockedUid: t.uid, blockedName: name, createdAt: new Date(deps.now()) });
+      for (const fid of new Set([friendDocId(me.name, name), `${me.name}_${name}`, `${name}_${me.name}`])) await fs.delete(`friends/${fid}`);
+      await fs.delete(`friendRequests/${uid}_${t.uid}`); await fs.delete(`friendRequests/${t.uid}_${uid}`);
+      return { ok: true, name };
+    }
+    if (action === "unblock") {
+      const blocked = String(body?.uid || "");
+      if (!/^[A-Za-z0-9_-]{1,128}$/.test(blocked)) return { status: 400, error: "bad_request" };
+      await fs.delete(`blocks/${uid}_${blocked}`);
+      return { ok: true };
+    }
+    if (action === "report") {   // 通報：管理者が見る（メッセージ・YuSnap の投稿・ユーザー）。内容は、通報の時点の文を控えておく
+      const kind = String(body?.kind || ""), reason = String(body?.reason || "");
+      if (!["message", "snap", "user"].includes(kind) || !REPORT_REASONS.includes(reason)) return { status: 400, error: "bad_request" };
+      const refId = String(body?.refId || "");
+      let targetUid = "", targetName = "", snippet = "";
+      if (kind === "message") {
+        if (!/^[A-Za-z0-9]{10,40}$/.test(refId)) return { status: 400, error: "bad_request" };
+        const m = await fs.get(`messages/${refId}`);
+        if (!m) return { status: 404, error: "gone" };
+        targetUid = String(m.senderUid || ""); targetName = String(m.sender || ""); snippet = `${String(m.text || "").slice(0, 200)}${m.image ? " [画像あり]" : ""}`;
+      } else if (kind === "snap") {
+        if (!YUREAL_ID.test(refId)) return { status: 400, error: "bad_request" };
+        const p = await fs.get(`yurealPosts/${refId}`);
+        if (!p) return { status: 404, error: "gone" };
+        targetUid = String(p.uid || ""); targetName = String(p.name || ""); snippet = String(p.caption || "").slice(0, 200);
+      } else {
+        const name = String(body?.name || "").trim();
+        if (!name || name.length > 100 || name.includes("/")) return { status: 400, error: "bad_name" };
+        const raw = await fs.getRaw(`users/${name}`);
+        const t = raw ? decodeFields(raw.fields) : null;
+        if (!t || !t.uid) return { status: 404, error: "not_found" };
+        targetUid = String(t.uid); targetName = name;
+      }
+      if (targetUid === uid) return { status: 400, error: "self" };
+      if ((await fs.query("reports", [["reporterUid", "EQUAL", uid]], { select: ["status"] })).length >= REPORT_MAX) return { status: 429, error: "too_many" };
+      const created = await fs.createIfAbsent(`reports/${uid}_${kind}_${refId || targetUid}`, { reporterUid: uid, reporterName: me.name, targetUid, targetName, kind, refId, reason, note: String(body?.note || "").trim().slice(0, 200), snippet, status: "open", createdAt: new Date(deps.now()) });
+      if (created && deps.adminUid) await sendPushToUids(deps, `report-${uid}-${kind}-${refId || targetUid}`, [deps.adminUid], { kind: "report", title: "🚩 通報が届きました", body: `${me.name}さんから、${targetName || "ユーザー"}さんについての通報`, link: "./?open=chat", tag: "report" }).catch(() => {});
+      return { ok: true };
     }
     const id = String(body?.id || "");
     if (!FRIEND_REQ_ID.test(id)) return { status: 400, error: "bad_request" };

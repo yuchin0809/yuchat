@@ -79,12 +79,19 @@ function render() {
   root.querySelector("#yrTest")?.addEventListener("click", () => openCamera(true));
   root.querySelector("#yrPub")?.addEventListener("click", async () => { if (!confirm(c.published ? "非公開にしますか？" : "全員に公開しますか？（通知も全員に届くようになります）")) return; try { await api("setPublished", { published: !c.published }); } catch (e) { st.error = errText(e); } refresh(); });
   root.querySelectorAll("[data-react]").forEach((b) => b.addEventListener("click", () => act(b.dataset.id, "react", { emoji: b.dataset.react })));
+  root.querySelectorAll("[data-report]").forEach((b) => b.addEventListener("click", async () => {
+    if (!confirm("この投稿を通報しますか？（運営が確認します。相手には知らされません）")) return;
+    try {
+      const res = await fetch(cfg.reportEndpoint, { method: "POST", headers: { Authorization: `Bearer ${await cfg.getToken()}`, "Content-Type": "application/json" }, body: JSON.stringify({ action: "report", username: cfg.getUsername(), kind: "snap", refId: b.dataset.report, reason: "inappropriate" }) });
+      alert(res.ok ? "通報を受け付けました。ありがとうございます" : "通報できませんでした。時間をおいて、もう一度お試しください。");
+    } catch (_) { alert("通報できませんでした。通信を確かめてください。"); }
+  }));
   root.querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", async () => { if (confirm("この投稿を消しますか？")) { try { await api("deletePost", { id: b.dataset.del }); } catch (e) { st.error = errText(e); } refresh(); } }));
   observePhotos();
 }
 function postHtml(p) {
   const rc = EMOJIS.map((e) => `<button data-react="${e}" data-id="${p.id}" class="${p.myReaction === e ? "on" : ""}" ${p.myReaction ? "disabled" : ""}>${e}${p.reactions[e] ? `<small>${p.reactions[e]}</small>` : ""}</button>`).join("");
-  return `<div class="yr-post"><div class="yr-head"><b>${esc(p.name)}${p.mine ? "（あなた）" : ""}</b>${p.lateMin ? `<span class="yr-late">${p.lateMin}分遅れ</span>` : ""}<small>${fmtTime(p.at)}</small>${p.mine ? `<button class="yr-btn" style="min-height:30px;padding:0 8px" data-del="${p.id}" aria-label="消す">🗑</button>` : ""}</div>
+  return `<div class="yr-post"><div class="yr-head"><b>${esc(p.name)}${p.mine ? "（あなた）" : ""}</b>${p.lateMin ? `<span class="yr-late">${p.lateMin}分遅れ</span>` : ""}<small>${fmtTime(p.at)}</small>${p.mine ? `<button class="yr-btn" style="min-height:30px;padding:0 8px" data-del="${p.id}" aria-label="消す">🗑</button>` : `<button class="yr-btn" style="min-height:30px;padding:0 8px" data-report="${p.id}" aria-label="通報">🚩</button>`}</div>
     <div class="yr-img" data-photo="${p.id}">写真を読み込み中…</div>${p.caption ? `<div class="yr-cap">${esc(p.caption)}</div>` : ""}
     <div class="yr-react">${rc}</div></div>`;
 }

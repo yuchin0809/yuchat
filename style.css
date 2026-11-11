@@ -7210,3 +7210,19 @@ html.app-mode #notificationButton:not([data-state="on"]):not([data-state="denied
 .friend-req span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .friend-req button { min-height: 34px; padding: 0 12px; border-radius: 10px; border: 1px solid #d6dbe6; background: #fff; font-size: 13px; font-weight: 700; }
 .friend-req button.friend-req-yes { background: #2f6bff; border-color: #2f6bff; color: #fff; }
+
+/* 🚩 通報・🚫 ブロック・📜 利用規約 */
+.report-reasons { display: flex; flex-direction: column; gap: 8px; margin: 10px 0; }
+.report-reason { display: flex; gap: 8px; align-items: center; font-size: 14px; }
+.report-note { width: 100%; min-height: 70px; box-sizing: border-box; border: 1px solid #d6dbe6; border-radius: 10px; padding: 8px 10px; font-size: 14px; margin-bottom: 8px; }
+.blocked-box { margin: 18px 0 8px; } .blocked-box h3 { margin: 0 0 8px; font-size: 14px; }
+.blocked-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid #eef0f3; } .blocked-row span { flex: 1; }
+.blocked-row button { min-height: 32px; padding: 0 12px; border-radius: 10px; border: 1px solid #d6dbe6; background: #fff; font-weight: 700; }
+.blocked-none { margin: 0; color: #8a93a8; font-size: 13px; }
+.legal-links { margin: 12px 0 4px; font-size: 13px; } .legal-links a { color: #667089; }
+.terms-overlay { position: fixed; inset: 0; z-index: 100001; background: rgba(10, 20, 40, .6); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.terms-card { background: #fff; border-radius: 18px; padding: 18px; max-width: 440px; max-height: 90vh; overflow-y: auto; font-size: 14px; line-height: 1.6; }
+.terms-card h3 { margin: 0 0 8px; font-size: 17px; } .terms-card ul { padding-left: 18px; margin: 8px 0; }
+.terms-links { margin: 8px 0 12px; } .terms-links a { color: #2f6bff; font-weight: 700; }
+.terms-buttons { display: flex; gap: 8px; } .terms-buttons button { flex: 1; min-height: 44px; border-radius: 12px; border: 1px solid #d6dbe6; background: #fff; font-weight: 700; font-size: 14px; }
+.terms-buttons .terms-yes { background: #2f6bff; border-color: #2f6bff; color: #fff; }
