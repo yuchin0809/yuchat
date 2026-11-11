@@ -52,6 +52,25 @@ export const isCleared = (game) => remaining(game) === 0;
 export const lowestBall = (game) => game.balls.filter((b) => b.on && b.id > 0).sort((a, b) => a.id - b.id)[0] || null;
 export const groupLeft = (game, group) => game.balls.filter((b) => b.on && b.id > 0 && groupOf(b.id) === group).length;
 
+/* ルーム対戦で、Firestore に保存する形（Firestore は配列の中に配列を入れられないので、平らな数字の列。落ちた球は -1）。b＝球0〜の x,y を順に／g＝グループ／t＝番／h＝手球を置く権利／k＝最初のショット */
+const r3 = (n) => Math.round(n * 1000) / 1000;
+export function snapshot(game) {
+  const b = [];
+  for (const ball of game.balls) { if (ball.on) b.push(r3(ball.x), r3(ball.y)); else b.push(-1, -1); }
+  return { b, g: [game.groups[0] || "", game.groups[1] || ""], t: game.turn, h: game.inHand ? 1 : 0, k: game.breakShot ? 1 : 0 };
+}
+export function restore(mode, st) {
+  const game = newGame(mode);
+  game.balls.forEach((ball, i) => {
+    const x = Number(st.b[i * 2]), y = Number(st.b[i * 2 + 1]);
+    ball.vx = 0; ball.vy = 0; ball.w = 0;
+    if (x < 0 || y < 0) { ball.on = false; game.pocketed.push(ball.id); } else { ball.on = true; ball.x = x; ball.y = y; }
+  });
+  game.groups = [st.g?.[0] || null, st.g?.[1] || null];
+  game.turn = st.t === 1 ? 1 : 0; game.inHand = st.h === 1; game.breakShot = st.k === 1;
+  return game;
+}
+
 /* 打つ：向き（ラジアン）・強さ（0〜1）・押し引き（−1〜1。＋＝押し（当たったあとも進む）、−＝引き（当たったあと戻る））。止まっているときだけ */
 export function shoot(game, angle, power, spin = 0, side = 0) {
   if (game.over || game.inHand || !isRest(game) || !cueBall(game).on) return false;
