@@ -1,0 +1,7 @@
+{
+  "appId": "jp.yuchat.app",
+  "appName": "ゆうChat",
+  "webDir": "www",
+  "server": { "url": "https://yuchin0809.github.io/yuchat/", "cleartext": false },
+  "ios": { "appendUserAgent": "YuChatApp", "contentInset": "always" }
+}

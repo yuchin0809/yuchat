@@ -821,6 +821,7 @@ function renderSupporterCard() {
   if (!card) return;
   const me = isMeSupporter();
   card.className = `supporter-card ${me ? "is-member" : ""}`;
+  card.hidden = !me && document.documentElement.classList.contains("native-app");   // iPhone アプリでは、購入（App Store の課金）がまだ無いので、案内は出さない
   card.innerHTML = "";
   const mark = buildSupporterMark({ e: 0 }, 44);
   const text = document.createElement("div");
