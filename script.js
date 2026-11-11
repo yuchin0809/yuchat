@@ -3806,7 +3806,7 @@ tabButtons.forEach((button) => {
 
 /* アプリ版（スマホ）：「あそぶ」の中の画面と、ヘッダーに出す画面の名前 */
 const APP_PLAY_VIEWS = ["derby", "yuworld", "economy", "games"];
-const APP_VIEW_TITLES = { chat: "チャット", play: "あそぶ", derby: "ゆうダービー", yuworld: "ゆうワールド", games: "ゆうワールド", economy: "ゆう経済", mart: "ゆうマート", yureal: "YuReal β", announcements: "お知らせ", mypage: "マイページ", usermanage: "ユーザー管理" };
+const APP_VIEW_TITLES = { chat: "チャット", play: "あそぶ", derby: "ゆうダービー", yuworld: "ゆうワールド", games: "ゆうワールド", economy: "ゆう経済", mart: "ゆうマート", yureal: "YuSnap β", announcements: "お知らせ", mypage: "マイページ", usermanage: "ユーザー管理" };
 const appHeaderTitle = document.getElementById("appHeaderTitle");
 const appPlusMenu = document.getElementById("appPlusMenu");
 document.body.dataset.view = "chat";
@@ -3932,7 +3932,7 @@ const stopYuWorldView = lazyCaller(lazyYuWorld, "stopYuWorldView");
 
 /* 📸 YuReal（いまは管理者だけ。公開の状態は、ログイン後に Worker に聞く。聞くのは1回だけ） */
 const yurealEndpoint = () => NOTIFY_ENDPOINT.replace(/\/notify$/, "/yureal");
-const lazyYureal = lazyModule("./yureal.js?v=20261111-yr4", (m) => m.initYureal({
+const lazyYureal = lazyModule("./yureal.js?v=20261111-sn1", (m) => m.initYureal({
   endpoint: yurealEndpoint(),
   getToken: () => currentUser.getIdToken(),
   getUsername: () => username

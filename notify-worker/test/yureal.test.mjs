@@ -158,7 +158,7 @@ test("通知：決まった時刻の5分だけ。公開前は最上位管理者�
   c.fs.put("fcmTokens/ta", encF({ uid: ADMIN })); c.fs.put("fcmTokens/t0", encF({ uid: "id0" }));
   assert.equal((await runYurealTick({}, c.at - 60000, c.deps)).skipped, "outside");
   const out = await runYurealTick({}, c.at + 60000, c.deps);
-  assert.equal(out.notify.sent, 1); assert.deepEqual(c.sent, [["ta", "📸 YuReal の時間です！"]]);
+  assert.equal(out.notify.sent, 1); assert.deepEqual(c.sent, [["ta", "📸 YuSnap の時間です！"]]);
   assert.equal((await runYurealTick({}, c.at + 120000, c.deps)).skipped, "outside");
   const d2 = setup({ published: true });
   d2.fs.put("fcmTokens/ta", encF({ uid: ADMIN })); d2.fs.put("fcmTokens/t0", encF({ uid: "id0" }));
