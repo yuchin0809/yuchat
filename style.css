@@ -7236,3 +7236,6 @@ html { touch-action: manipulation; }   /* ダブルタップでの拡大をし�
 .room-code-join { display: flex; gap: 8px; margin-top: 8px; }
 .room-code-join input { flex: 1; min-width: 0; font-size: 16px; letter-spacing: .12em; }
 .room-card .room-code { margin: 4px 0; font-size: 14px; }
+
+/* iPhone アプリ：通知の状態の文章は、いつも見せる（できない理由が分かるように） */
+html.native-app #notificationStatus { display: block !important; }
