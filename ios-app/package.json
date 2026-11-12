@@ -6,6 +6,8 @@
   "dependencies": {
     "@capacitor/cli": "6.2.0",
     "@capacitor/core": "6.2.0",
-    "@capacitor/ios": "6.2.0"
+    "@capacitor/ios": "6.2.0",
+    "@capacitor-firebase/messaging": "^6.3.0",
+    "firebase": "^10.14.0"
   }
 }

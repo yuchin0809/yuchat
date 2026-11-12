@@ -9986,7 +9986,7 @@ function createAuthAdminClient({ base, projectId, getAccessToken, fetchImpl }) {
 
 /* ----- FCM HTTP v1 ----- */
 
-async function sendFcmMessage({ base, projectId, getAccessToken, fetchImpl }, token, data) {
+export async function sendFcmMessage({ base, projectId, getAccessToken, fetchImpl }, token, data) {
   const accessToken = await getAccessToken();
   const response = await fetchImpl(`${base}/projects/${projectId}/messages:send`, {
     method: "POST",
@@ -9995,7 +9995,12 @@ async function sendFcmMessage({ base, projectId, getAccessToken, fetchImpl }, to
       message: {
         token,
         data,
-        webpush: { headers: { Urgency: "high", TTL: String(NOTIFICATION_TTL_SECONDS) } }
+        webpush: { headers: { Urgency: "high", TTL: String(NOTIFICATION_TTL_SECONDS) } },
+        /* iPhone アプリ（APNs）用：画面に出る通知にする。Web の通知（上の webpush）には影響しない（この指定は、iPhone アプリの端末にだけ効く） */
+        apns: {
+          headers: { "apns-priority": "10", "apns-push-type": "alert", "apns-expiration": String(Math.floor(Date.now() / 1000) + NOTIFICATION_TTL_SECONDS) },
+          payload: { aps: { alert: { title: String(data?.title || "ゆうChat").slice(0, 100), body: String(data?.body || "新しい通知があります。").slice(0, 200) }, sound: "default", ...(data?.tag ? { "thread-id": String(data.tag).slice(0, 64) } : {}) } }
+        }
       }
     })
   });

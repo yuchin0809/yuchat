@@ -2,6 +2,22 @@
   "appId": "jp.yuchat.app",
   "appName": "ゆうChat",
   "webDir": "www",
-  "server": { "url": "https://yuchin0809.github.io/yuchat/", "cleartext": false },
-  "ios": { "appendUserAgent": "YuChatApp", "contentInset": "never", "backgroundColor": "#ffffff" }
+  "server": {
+    "url": "https://yuchin0809.github.io/yuchat/",
+    "cleartext": false
+  },
+  "ios": {
+    "appendUserAgent": "YuChatApp",
+    "contentInset": "never",
+    "backgroundColor": "#ffffff"
+  },
+  "plugins": {
+    "FirebaseMessaging": {
+      "presentationOptions": [
+        "badge",
+        "sound",
+        "alert"
+      ]
+    }
+  }
 }
