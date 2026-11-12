@@ -102,7 +102,7 @@ function draw() {
   const tabs = [["buy", "🛒 買う"], ["sell", "📦 出品する"], ["mine", `👤 自分の出品${M.listings.length ? `（${M.listings.length}）` : ""}`]];
   const alerts = M.listings.reduce((a, l) => a + l.offers.length + (l.npcOffer ? 1 : 0), 0);
   root.innerHTML = `<div class="ym-head"><h2>🏪 ゆうマート</h2><div class="ym-coins">🪙 ${fmt(M.coins)}</div></div>
-    <p class="ym-lead">いらなくなった消しバトのパーツ・確変台の枠・ゆう番くじの景品を、売ったり買ったり。売れたパーツは中古になります。手数料は ${S.feePct}%。</p>
+    <p class="ym-lead">${IN_APP ? "いらなくなった消しバトのパーツを、売ったり買ったり。" : "いらなくなった消しバトのパーツ・確変台の枠・ゆう番くじの景品を、売ったり買ったり。"}売れたパーツは中古になります。手数料は ${S.feePct}%。</p>
     ${S.paused ? `<div class="ym-card ym-warn">⏸ いまゆうマートは一時お休み中です（買う・出品はできません）</div>` : ""}
     ${note ? `<div class="ym-note ${note.bad ? "bad" : "ok"}">${esc(note.text)}</div>` : ""}
     <div class="ym-tabs">${tabs.map(([k, label]) => `<button type="button" class="ym-tab${tab === k ? " on" : ""}" data-tab="${k}">${label}${k === "mine" && alerts ? ` <b class="ym-dot">${alerts}</b>` : ""}</button>`).join("")}</div>
@@ -111,9 +111,12 @@ function draw() {
   if (tab === "buy") drawBuy(); else if (tab === "sell") drawSell(); else drawMine();
   if (S.isTopAdmin) drawAdmin();
 }
-const KINDS = [["all", "すべて"], ["kaku", "🌈 確変台の枠"], ["prize", "🎁 番くじの景品"], ["body", "🧽 本体"], ["edge", "🔲 ふち"], ["sole", "👟 そこ"], ["weight", "⚖️ おもり"]];
+/* iPhone アプリの中：確変台の枠・番くじの景品（賭けゲームに関わるもの）は、売り買いの一覧にも出品にも出さない */
+const IN_APP = document.documentElement.classList.contains("native-app");
+const hiddenInApp = (x) => IN_APP && (x.k === "kaku" || x.k === "prize");
+const KINDS = [["all", "すべて"], ["kaku", "🌈 確変台の枠"], ["prize", "🎁 番くじの景品"], ["body", "🧽 本体"], ["edge", "🔲 ふち"], ["sole", "👟 そこ"], ["weight", "⚖️ おもり"]].filter(([k]) => !(IN_APP && (k === "kaku" || k === "prize")));
 function drawBuy() {
-  let list = S.listings.filter((x) => slotFilter === "all" || (slotFilter === "kaku" || slotFilter === "prize" ? x.k === slotFilter : x.k === "part" && x.slot === slotFilter));
+  let list = S.listings.filter((x) => !hiddenInApp(x)).filter((x) => slotFilter === "all" || (slotFilter === "kaku" || slotFilter === "prize" ? x.k === slotFilter : x.k === "part" && x.slot === slotFilter));
   list = [...list].sort(sort === "cheap" ? (a, b) => a.price - b.price : sort === "dear" ? (a, b) => b.price - a.price : (a, b) => b.t - a.t);
   const my = M.myOffers.reduce((o, x) => { o[x.id] = x.q; return o; }, {});
   const bidInfo = (M.myBids || []).reduce((o, x) => { o[x.id] = x; return o; }, {});
@@ -152,8 +155,8 @@ async function loadSell() {
 function drawSell() {
   if (!SELL) { $("#ymBody").innerHTML = `<div class="ym-card ym-msg">読み込み中…</div>`; loadSell(); return; }
   const rows = [
-    ...SELL.slots.map((x) => ({ item: { k: "kaku", ...x }, ref: x.ref, send: { kind: "kaku", day: x.day, si: x.si }, extra: "（始まる10分前まで）" })),
-    ...SELL.prizes.map((x) => ({ item: { k: "prize", ...x }, ref: x.ref, send: { kind: "prize", n: x.n }, extra: "" })),
+    ...(IN_APP ? [] : SELL.slots).map((x) => ({ item: { k: "kaku", ...x }, ref: x.ref, send: { kind: "kaku", day: x.day, si: x.si }, extra: "（始まる10分前まで）" })),
+    ...(IN_APP ? [] : SELL.prizes).map((x) => ({ item: { k: "prize", ...x }, ref: x.ref, send: { kind: "prize", n: x.n }, extra: "" })),
     ...M.sellable.map((x) => ({ item: { k: "part", ...x }, ref: x.ref, send: { kind: "part", slot: x.slot, part: x.part }, extra: x.equipped ? "（いま付けている）" : "" }))
   ];
   $("#ymBody").innerHTML = `<div class="ym-card"><h3>出品するものを選ぶ</h3>

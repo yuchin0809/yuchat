@@ -17,7 +17,7 @@ import { renderLottery, stopLottery } from "./yulottery.js?v=20261027-draw1";
 /* 🎊 ゆう番くじ（発売前のお知らせの画面） */
 import { renderBankuji, stopBankuji, BANKUJI_SALE_MS } from "./yubankuji.js?v=20261027-pass1";
 import { renderYacht, stopYacht } from "./yuyacht.js?v=20261026-yacht6";
-import { renderBilliards, stopBilliards } from "./yubilliards.js?v=20261111-bl7";
+import { renderBilliards, stopBilliards } from "./yubilliards.js?v=20261112-all1";
 import { renderKeshi, stopKeshi } from "./yukeshi.js?v=20261106-fair1";
 import { eraserIcon, keshiLeagueTag } from "./yukeshi-core.js?v=20261106-fair1";
 /* 🌈 確変台のパネル（台の一覧の上）。抽選・先着・通知設定。Worker の kaku* アクションを呼んで表示するだけ */
@@ -142,7 +142,7 @@ function render() {
     const first = state.keshiLeagueFirst === true; state.keshiLeagueFirst = false;   // 最強決定戦の札から来たときは、リーグの画面を開く
     return renderKeshi({ root: rootEl, api, esc, leagueFirst: first, openRooms: () => { if (typeof deps.openGame === "function") deps.openGame("keshi"); }, onBack: () => { state.screen = "shop"; render(); } });
   }
-  if (state.screen === "billiards" && !state.billiardsAllowed) { renderMessage(state.billiardsPublished ? "⭐ サポーター限定です" : "🚧 現在準備中です", state.billiardsPublished ? "ビリヤードは、ゆうChatサポーターだけが遊べます。マイページの「ゆうChat サポーター」から見られます。" : "このお店はまだ公開されていません。公開までもうしばらくお待ちください。"); rootEl.insertAdjacentHTML("beforeend", `<button type="button" class="yw-back" id="ywBackShop">← お店の一覧へ</button>`); $("#ywBackShop")?.addEventListener("click", () => { state.screen = "shop"; render(); }); return; }
+  if (state.screen === "billiards" && !state.billiardsAllowed) { renderMessage("🚧 現在準備中です", "このお店はまだ公開されていません。公開までもうしばらくお待ちください。"); rootEl.insertAdjacentHTML("beforeend", `<button type="button" class="yw-back" id="ywBackShop">← お店の一覧へ</button>`); $("#ywBackShop")?.addEventListener("click", () => { state.screen = "shop"; render(); }); return; }
   if (state.screen === "billiards") return renderBilliards({ root: rootEl, esc, openRooms: () => { if (typeof deps.openGame === "function") deps.openGame("billiards"); }, adminNote: state.billiardsPublished ? "" : "管理者だけに見えています（一般ユーザーには「準備中」）。コインは使いません。", onBack: () => { state.screen = "shop"; render(); } });
   if (state.screen === "yacht") return renderYacht({ root: rootEl, api, esc, openRooms: () => { if (typeof deps.openGame === "function") deps.openGame("yacht"); }, onBack: () => { state.screen = "shop"; render(); } });
   if (state.screen === "lobby") return renderLobby();
@@ -236,7 +236,7 @@ function renderShop() {
       </button>
       <button type="button" class="yw-shop-card${state.billiardsAllowed ? "" : " is-soon"}" id="ywOpenBilliards" ${state.billiardsPublished || state.isTopAdmin ? "" : "disabled"}>
         <div class="yw-shop-banner yw-billiards-banner"><span>🎱</span></div>
-        <div class="yw-shop-body"><div class="yw-shop-name">ビリヤード${state.billiardsPublished ? ' <span class="yw-badge yw-badge-invite">⭐ サポーター限定</span>' : ' <span class="yw-badge">準備中</span>'}</div>
+        <div class="yw-shop-body"><div class="yw-shop-name">ビリヤード${state.billiardsPublished ? "" : ' <span class="yw-badge">準備中</span>'}</div>
           <div class="yw-shop-desc">15個の球を少ない打数で全部ポケットへ。コインは使わない、気軽な練習モード。</div></div>
       </button>
     </div>`;

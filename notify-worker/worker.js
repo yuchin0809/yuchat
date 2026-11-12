@@ -3202,11 +3202,10 @@ export async function handleYuslotAction(deps, uid, body) {
   }
 }
 
-/* 🎱 ビリヤードは、ゆうChatサポーター限定（公開されたあとも）。最上位管理者は、いつでも遊べる。サポーターかどうかは、サポーターの一覧（Workerのメモリに60秒だけ置く）で決める */
+/* 🎱 ビリヤードは、公開されたら、全員が遊べる（以前は、ゆうChatサポーター限定だった）。公開前は、最上位管理者だけ */
 async function billiardsAllowed(deps, uid, published) {
   if (slotIsTopAdmin(deps, uid)) return true;
-  if (!published) return false;
-  return !!(await supporterLoadIndex(deps))[uid];
+  return published === true;
 }
 async function yuslotConfig(deps, uid) {
   const { published, yacht, keshi, billiards } = await slotGetConfig(deps);
