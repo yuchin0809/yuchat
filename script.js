@@ -1568,6 +1568,35 @@ document.getElementById("copyYuId")?.addEventListener("click", async () => {
   try { await navigator.clipboard.writeText(id); alert("ゆうIDをコピーしました。"); } catch { prompt("ゆうID（コピーして友達に送ってください）", id); }
 });
 
+/* 🗑 アカウントの削除（本人）。名前を入力して確かめ、Worker（/account）が、データ・ログイン情報をまとめて消す。App Store の審査で必要 */
+const ACCOUNT_DELETE_ERRORS = {
+  confirm_mismatch: "入力した名前が、あなたの名前と一致しません。", blocked: "いま、削除できない状態です（未精算の馬券など）。しばらくして、精算のあとにもう一度お試しください。",
+  cannot_target_admin: "管理者のアカウントは、ここからは削除できません。", user_not_found: "アカウントのデータが見つかりません。"
+};
+document.getElementById("deleteAccountButton")?.addEventListener("click", async () => {
+  if (!currentUser || !username) return;
+  if (!confirm("アカウントを完全に削除します。\nメッセージ・友達・コインなど、あなたのデータはすべて消え、元に戻せません。\n\n削除を続けますか？")) return;
+  const typed = prompt(`確認のため、あなたの名前「${username}」を、そのまま入力してください。`);
+  if (typed === null) return;
+  try {
+    const token = await currentUser.getIdToken();
+    const res = await fetch(NOTIFY_ENDPOINT.replace(/\/notify$/, "/account"), { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ action: "deleteMyAccount", username, confirmName: typed }) });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || json.ok === false) {
+      const code = json.error || `http_${res.status}`;
+      if (!ACCOUNT_DELETE_ERRORS[code]) console.error("アカウント削除エラー:", code, json);
+      alert(ACCOUNT_DELETE_ERRORS[code] || `アカウントを削除できませんでした。時間をおいて、もう一度お試しください。（${code}）`);
+      return;
+    }
+    alert("アカウントを削除しました。ご利用ありがとうございました。");
+    skipLogoutConfirm = true;
+    logoutButton?.click();   // 画面・購読の後片づけと、サインアウト
+  } catch (error) {
+    console.error("アカウント削除エラー:", error);
+    alert("アカウントを削除できませんでした。通信を確かめて、もう一度お試しください。");
+  }
+});
+
 let friendReqIn = [], friendReqOut = [], friendReqInSeen = null, unsubscribeReqIn = null, unsubscribeReqOut = null;
 function stopFriendRequestListeners() {
   if (unsubscribeReqIn) { unsubscribeReqIn(); unsubscribeReqIn = null; }
@@ -4183,8 +4212,10 @@ inviteInit(document.getElementById("inviteButton"), (title, body) => showAppToas
    ログアウト
 ========================================================= */
 
+let skipLogoutConfirm = false;   // アカウント削除のあとは、確認なしでログアウトの後片づけをする
 logoutButton?.addEventListener("click", async () => {
-  if (!confirm("ログアウトしますか？")) return;
+  if (!skipLogoutConfirm && !confirm("ログアウトしますか？")) return;
+  skipLogoutConfirm = false;
 
   appSessionSeq++;
   try {
