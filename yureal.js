@@ -5,7 +5,8 @@
    ・いまは管理者だけ（公開の切り替えは管理者のこの画面から） */
 import { hasNgWord, NG_MESSAGE } from "./yungwords.js?v=20261111-ng2";
 const MAX_SIDE = 720, MAX_LEN = 200000;
-const EMOJIS = ["❤️", "😂", "😮", "😢", "👍", "🔥"];
+const EMOJIS = ["❤️", "😂", "😮", "😢", "👍", "🔥"];   // よく使うもの。ほかに、好きな絵文字も1つ送れる（「＋」から）
+const EMOJI_RE = /^(?:\p{Extended_Pictographic}[\uFE0F\u{1F3FB}-\u{1F3FF}]?(?:\u200D\p{Extended_Pictographic}[\uFE0F\u{1F3FB}-\u{1F3FF}]?)*|\p{Regional_Indicator}{2})$/u;   // 絵文字1つだけ（文字・数字・記号は不可）。サーバー（worker.js）にも同じ判定がある
 let cfg = null, root = null, st = null, observer = null, timer = 0, stream = null;
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -40,7 +41,7 @@ async function api(action, body = {}) {
 }
 const nowMs = () => Date.now() + (st?.offset || 0);
 const fmtTime = (ms) => new Date(ms).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
-const errText = (e) => ({ not_yet: "まだ通知の時刻になっていません", already_posted: "きょうは、もう投稿ずみです", bad_image: "写真を送れませんでした（大きすぎるかも）", post_first: "先に自分が投稿しよう", already_reacted: "リアクションは1つの投稿に1個までです", not_friend: "友達だけが見られます", ng_word: "使えないことばが含まれています。ひとことを書き直してください", gone: "この写真は、もう見られません（次の通知で消えます）" }[e?.code] || `できませんでした（${e?.code || "エラー"}）`);
+const errText = (e) => ({ not_yet: "まだ通知の時刻になっていません", already_posted: "きょうは、もう投稿ずみです", bad_image: "写真を送れませんでした（大きすぎるかも）", post_first: "先に自分が投稿しよう", already_reacted: "リアクションは1つの投稿に1個までです", not_friend: "友達だけが見られます", ng_word: "使えないことばが含まれています。ひとことを書き直してください", bad_emoji: "絵文字を1つだけ入れてください", gone: "この写真は、もう見られません（次の通知で消えます）" }[e?.code] || `できませんでした（${e?.code || "エラー"}）`);
 
 export function initYureal(c) { cfg = c; }
 export function stopYurealView() { clearInterval(timer); timer = 0; closeCamera(); observer?.disconnect(); observer = null; }
@@ -81,6 +82,12 @@ function render() {
   root.querySelector("#yrTest")?.addEventListener("click", () => openCamera(true));
   root.querySelector("#yrPub")?.addEventListener("click", async () => { if (!confirm(c.published ? "非公開にしますか？" : "全員に公開しますか？（通知も全員に届くようになります）")) return; try { await api("setPublished", { published: !c.published }); } catch (e) { st.error = errText(e); } refresh(); });
   root.querySelectorAll("[data-react]").forEach((b) => b.addEventListener("click", () => act(b.dataset.id, "react", { emoji: b.dataset.react })));
+  root.querySelectorAll("[data-more]").forEach((b) => b.addEventListener("click", () => {
+    const v = (prompt("好きな絵文字を1つ入れてね（文字は使えません。1つの投稿に1個だけです）") || "").trim();
+    if (!v) return;
+    if (v.length > 16 || !EMOJI_RE.test(v)) { alert("絵文字を1つだけ入れてください。（文字・数字・記号は使えません）"); return; }
+    act(b.dataset.more, "react", { emoji: v });
+  }));
   root.querySelectorAll("[data-report]").forEach((b) => b.addEventListener("click", async () => {
     if (!confirm("この投稿を通報しますか？（運営が確認します。相手には知らされません）")) return;
     try {
@@ -92,7 +99,9 @@ function render() {
   observePhotos();
 }
 function postHtml(p) {
-  const rc = EMOJIS.map((e) => `<button data-react="${e}" data-id="${p.id}" class="${p.myReaction === e ? "on" : ""}" ${p.myReaction ? "disabled" : ""}>${e}${p.reactions[e] ? `<small>${p.reactions[e]}</small>` : ""}</button>`).join("");
+  const shown = [...EMOJIS, ...Object.keys(p.reactions).filter((e) => !EMOJIS.includes(e))];   // よく使う6つ＋ほかの人が付けた好きな絵文字
+  const rc = shown.map((e) => `<button data-react="${esc(e)}" data-id="${p.id}" class="${p.myReaction === e ? "on" : ""}" ${p.myReaction ? "disabled" : ""}>${esc(e)}${p.reactions[e] ? `<small>${p.reactions[e]}</small>` : ""}</button>`).join("")
+    + `<button data-more="${p.id}" aria-label="好きな絵文字" ${p.myReaction ? "disabled" : ""}>＋</button>`;
   return `<div class="yr-post"><div class="yr-head"><b>${esc(p.name)}${p.mine ? "（あなた）" : ""}</b>${p.lateMin ? `<span class="yr-late">${p.lateMin}分遅れ</span>` : ""}<small>${fmtTime(p.at)}</small>${p.mine ? `<button class="yr-btn" style="min-height:30px;padding:0 8px" data-del="${p.id}" aria-label="消す">🗑</button>` : `<button class="yr-btn" style="min-height:30px;padding:0 8px" data-report="${p.id}" aria-label="通報">🚩</button>`}</div>
     <div class="yr-img" data-photo="${p.id}">写真を読み込み中…</div>${p.caption ? `<div class="yr-cap">${esc(p.caption)}</div>` : ""}
     <div class="yr-react">${rc}</div></div>`;
