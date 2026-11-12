@@ -134,12 +134,14 @@ jobs:
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             MARKETING_VERSION=1.0.0 CURRENT_PROJECT_VERSION="${{ github.run_number }}" archive
 
-      - name: 通知の権限（aps-environment）が、できあがったアプリに入っているか確認
+      - name: 通知の権限（aps-environment）を、アプリに入れる（署名なしで作った archive には入らないため、仮の署名で権限だけ埋め込む。本番の署名は、次の書き出しでやり直す）
         run: |
+          set -e
           APP="$RUNNER_TEMP/App.xcarchive/Products/Applications/App.app"
-          echo "---- archived-expanded-entitlements.xcent"; cat "$APP/archived-expanded-entitlements.xcent" 2>/dev/null || echo "(なし)"
-          echo "---- 埋め込まれた権限"; codesign -d --entitlements - "$APP" 2>&1 | head -20 || true
-          grep -rq "aps-environment" "$RUNNER_TEMP/App.xcarchive" || { echo "::error::aps-environment が、アプリに入っていません（通知が使えません）"; exit 1; }
+          for f in "$APP"/Frameworks/*.framework; do [ -d "$f" ] && codesign --force --sign - "$f"; done
+          codesign --force --sign - --entitlements ios-app/ios/App/App/App.entitlements "$APP"
+          echo "---- 埋め込まれた権限"; codesign -d --entitlements - "$APP" 2>&1 | tee /tmp/ent.txt
+          grep -q "aps-environment" /tmp/ent.txt || { echo "::error::aps-environment が、アプリに入っていません（通知が使えません）"; exit 1; }
 
       - name: 書き出して App Store Connect へ送る
         if: ${{ inputs.upload }}
