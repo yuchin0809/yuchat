@@ -3507,7 +3507,16 @@ function loadFcmModule() {
   return fcmModulePromise;
 }
 
+/* iPhone アプリ：通知は、アプリの部品（FirebaseMessaging）で受ける。Web のように、ブラウザの通知・Service Worker は使わない */
+const NATIVE_FM = IN_NATIVE_APP ? (window.Capacitor?.registerPlugin?.("FirebaseMessaging") || null) : null;
+async function notifyPermission() {   // "granted" | "denied" | "default" | "unsupported"
+  if (NATIVE_FM) {
+    try { const r = await NATIVE_FM.checkPermissions(); return r.receive === "granted" ? "granted" : r.receive === "denied" ? "denied" : "default"; } catch (_) { return "denied"; }
+  }
+  return typeof Notification === "undefined" ? "unsupported" : Notification.permission;
+}
 async function isFcmAvailable() {
+  if (NATIVE_FM) return true;
   if (typeof Notification === "undefined" || !("serviceWorker" in navigator)) return false;
   try {
     return await (await loadFcmModule()).isSupported();
@@ -3523,11 +3532,12 @@ async function refreshNotificationStatus() {
     setNotificationStatus(getUnsupportedNotificationText(), "unsupported");
     return;
   }
-  if (Notification.permission === "denied") {
-    setNotificationStatus("通知がブロックされています。ブラウザや端末の設定から、このサイトの通知を許可してください。", "denied");
+  const perm = await notifyPermission();
+  if (perm === "denied") {
+    setNotificationStatus(NATIVE_FM ? "通知がブロックされています。iPhone の「設定」→「ゆうChat」→「通知」から許可してください。" : "通知がブロックされています。ブラウザや端末の設定から、このサイトの通知を許可してください。", "denied");
     return;
   }
-  if (Notification.permission === "granted" && isNotifyOptedIn() && localStorage.getItem(FCM_TOKEN_STORAGE_KEY)) {
+  if (perm === "granted" && isNotifyOptedIn() && localStorage.getItem(FCM_TOKEN_STORAGE_KEY)) {
     setNotificationStatus("この端末に通知が届きます。（ボタンを押すとOFFにできます）", "on");
     return;
   }
@@ -3549,10 +3559,10 @@ notificationButton?.addEventListener("click", async () => {
 
   /* iOS Safari はユーザー操作の直後でないと許可ダイアログを出さないので、
      他の await より前に許可を求める */
-  let permission = typeof Notification === "undefined" ? "unsupported" : Notification.permission;
+  let permission = await notifyPermission();
   if (permission === "default") {
     try {
-      permission = await Notification.requestPermission();
+      permission = NATIVE_FM ? ((await NATIVE_FM.requestPermissions()).receive === "granted" ? "granted" : "denied") : await Notification.requestPermission();
     } catch (error) {
       console.error("通知許可エラー:", error);
     }
@@ -3582,7 +3592,7 @@ notificationButton?.addEventListener("click", async () => {
    許可を求めずにトークンを更新する（ONにしていない人・OFFにした人には登録しない） */
 async function restoreNotificationsIfGranted() {
   try {
-    if (isNotifyOptedIn() && await isFcmAvailable() && Notification.permission === "granted") {
+    if (isNotifyOptedIn() && await isFcmAvailable() && (await notifyPermission()) === "granted") {
       await registerFcmToken();
     }
   } catch (error) {
@@ -3602,15 +3612,19 @@ async function registerFcmToken() {
   if (!currentUser || !username) return false;
 
   try {
-    const messaging = await getFcmMessaging();
-    if (!messaging) return false;
-
-    const registration = await navigator.serviceWorker.register("./firebase-messaging-sw.js");
-    const { getToken } = await loadFcmModule();
-    const token = await getToken(messaging, {
-      vapidKey: VAPID_PUBLIC_KEY,
-      serviceWorkerRegistration: registration
-    });
+    let messaging = null, token = "";
+    if (NATIVE_FM) {
+      token = (await NATIVE_FM.getToken())?.token || "";   // iPhone アプリ：アプリの部品から、通知の宛先（トークン）をもらう
+    } else {
+      messaging = await getFcmMessaging();
+      if (!messaging) return false;
+      const registration = await navigator.serviceWorker.register("./firebase-messaging-sw.js");
+      const { getToken } = await loadFcmModule();
+      token = await getToken(messaging, {
+        vapidKey: VAPID_PUBLIC_KEY,
+        serviceWorkerRegistration: registration
+      });
+    }
     if (!token) return false;
 
     /* この端末で前に使っていたトークンが変わっていたら、古い方だけ消す */
@@ -3623,11 +3637,12 @@ async function registerFcmToken() {
       uid: currentUser.uid,
       username,
       userAgent: (navigator.userAgent || "").slice(0, 200),
+      ...(NATIVE_FM ? { platform: "ios-app" } : {}),
       updatedAt: serverTimestamp()
     }, { merge: true });
 
     localStorage.setItem(FCM_TOKEN_STORAGE_KEY, token);
-    setupForegroundMessageListener(messaging);
+    if (messaging) setupForegroundMessageListener(messaging);
     return true;
   } catch (error) {
     console.error(`[通知トークン登録エラー] code=${error?.code || "(なし)"} message=${error?.message || error}`, error);
@@ -3645,6 +3660,7 @@ async function unregisterFcmTokenForThisDevice() {
   try { await deleteDoc(doc(db, "fcmTokens", token)); } catch (error) { console.warn("通知トークン削除失敗:", error); }
 
   /* FCM 側のトークン無効化は、通信が遅くても画面を待たせないよう待たない */
+  if (NATIVE_FM) { NATIVE_FM.deleteToken().catch((error) => console.warn("FCMトークン無効化失敗:", error)); return; }
   getFcmMessaging()
     .then(async (messaging) => (messaging ? (await loadFcmModule()).deleteToken(messaging) : null))
     .catch((error) => console.warn("FCMトークン無効化失敗:", error));
