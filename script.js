@@ -3482,8 +3482,9 @@ function isStandaloneApp() {
   return window.matchMedia?.("(display-mode: standalone)").matches || navigator.standalone === true;
 }
 
+let notifyDiag = "";   // iPhone アプリ：原因をさがすための目印（画面の小さな文字に出す）
 function setNotificationStatus(text, state) {
-  if (notificationStatusEl) notificationStatusEl.textContent = text;
+  if (notificationStatusEl) notificationStatusEl.textContent = IN_NATIVE_APP && notifyDiag ? `${text} [${notifyDiag}]` : text;
   if (notificationButton) {
     notificationButton.dataset.state = state || "";
     notificationButton.textContent = state === "on" ? "🔕 通知をOFFにする" : "🔔 通知をONにする";
@@ -3512,9 +3513,10 @@ const NATIVE_OLD_TEXT = "このアプリは古い版のため、通知が使え�
 const NATIVE_FM = IN_NATIVE_APP ? (window.Capacitor?.registerPlugin?.("FirebaseMessaging") || null) : null;
 async function notifyPermission() {   // "granted" | "denied" | "default" | "unsupported"
   if (NATIVE_FM) {
-    try { const r = await NATIVE_FM.checkPermissions(); return r.receive === "granted" ? "granted" : r.receive === "denied" ? "denied" : "default"; }
+    try { const r = await NATIVE_FM.checkPermissions(); notifyDiag = `部品:あり`; return r.receive === "granted" ? "granted" : r.receive === "denied" ? "denied" : "default"; }
     catch (e) {
       console.error("通知の許可の確認エラー:", e);
+      notifyDiag = `部品エラー:${String(e?.code || e?.message || e).slice(0, 40)}`;
       /* アプリに通知の部品が入っていない（古い版）：更新を案内する。それ以外の失敗は、押せる状態のままにして、押したときに理由を出す */
       return /unimplemented|not implemented|not available/i.test(`${e?.code || ""} ${e?.message || ""}`) ? "plugin-missing" : "default";
     }
@@ -3539,6 +3541,7 @@ async function refreshNotificationStatus() {
     return;
   }
   const perm = await notifyPermission();
+  notifyDiag = `許可:${perm}`;
   if (perm === "plugin-missing") { setNotificationStatus(NATIVE_OLD_TEXT, "unsupported"); return; }
   if (perm === "denied") {
     setNotificationStatus(NATIVE_FM ? "通知がブロックされています。iPhone の「設定」→「ゆうChat」→「通知」から許可してください。" : "通知がブロックされています。ブラウザや端末の設定から、このサイトの通知を許可してください。", "denied");
