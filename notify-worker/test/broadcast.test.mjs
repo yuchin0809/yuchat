@@ -177,6 +177,17 @@ test("使えなくなったトークンは消し、1台の送信が失敗（例�
   assert.equal(deps.firestore.store.has("fcmTokens/tA"), true);
 });
 
+test("iPhone アプリの端末（platform: ios-app）には、賭けゲーム（ダービー・確変）の通知は送らない。お知らせなど、ほかの通知は送る", async () => {
+  const { deps, sent } = makeDeps({ ...TOKENS, "fcmTokens/appT": { uid: "uA", platform: "ios-app" } });
+  const d = await sendBroadcastNotification(deps, "derby-app-1", { kind: "derby", title: "t", body: "b" });
+  assert.equal(sent.some((x) => x.token === "appT"), false, "ダービーは、アプリの端末に送らない");
+  assert.ok(d.sent >= 1, "ウェブの端末には、送る");
+  const k = await sendBroadcastNotification(deps, "kaku-app-1", { kind: "kaku", title: "t", body: "b" });
+  assert.equal(sent.some((x) => x.token === "appT"), false);
+  await sendBroadcastNotification(deps, "announcement-app-1", { kind: "announcement", title: "t", body: "b" });
+  assert.equal(sent.some((x) => x.token === "appT"), true, "お知らせは、アプリの端末にも送る");
+});
+
 test("Cron の入口：worker の scheduled が runScheduled を呼ぶ（アプリを閉じていても Cloudflare が毎分動かす）", async () => {
   assert.equal(typeof worker.scheduled, "function");
   const { deps, sent } = makeDeps({ ...TOKENS });

@@ -402,13 +402,15 @@ async function claimBroadcastLog(deps, logId, kind) {
   }
 }
 
+/* iPhone アプリ（fcmTokens の platform が "ios-app"）には、コインを賭けるゲーム（ダービー・確変）の通知は送らない。アプリの中では、そのゲームを出していないため */
+const IOS_APP_HIDDEN_KINDS = new Set(["derby", "kaku"]);
 export async function sendBroadcastNotification(deps, logId, data, filterUid = null, dataForUid = null) {
   const fs = deps.firestore;
   const claimed = await claimBroadcastLog(deps, logId, data.kind || "");
   if (!claimed) return { skipped: "duplicate" };
 
   // filterUid＝通知の好みで、送らない人を外す／dataForUid＝人ごとに中身を変える（null を返した人には送らない。本人の結果だけを届けるため）
-  const targets = (await fs.query("fcmTokens", [], { select: ["uid"] })).filter((d) => !filterUid || filterUid(d.data?.uid)).map((d) => ({ token: d.id, data: dataForUid ? dataForUid(d.data?.uid) : data })).filter((t) => t.data);
+  const targets = (await fs.query("fcmTokens", [], { select: ["uid", "platform"] })).filter((d) => !filterUid || filterUid(d.data?.uid)).map((d) => ({ token: d.id, platform: d.data?.platform, data: dataForUid ? dataForUid(d.data?.uid) : data })).filter((t) => t.data && !(t.platform === "ios-app" && IOS_APP_HIDDEN_KINDS.has(t.data.kind)));
   const tokens = targets.map((t) => t.token);
   let sent = 0, failed = 0, removed = 0;
   await Promise.all(targets.map(async ({ token, data }) => {
