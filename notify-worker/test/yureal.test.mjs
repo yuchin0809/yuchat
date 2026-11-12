@@ -1,7 +1,7 @@
 /* 📸 YuReal（worker.js の handleYurealAction・runYurealTick）のテスト */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { runYurealLaunchTick, resetYurealLaunchForTest, YUREAL_LAUNCH_MS, YUREAL_ANNOUNCE_ID, handleYurealAction, resetYurealCacheForTest, resetYurealTickForTest, runYurealTick, yurealTimeFor, yurealDateKey } from "../worker.js";
+import { isEmojiReaction, runYurealLaunchTick, resetYurealLaunchForTest, YUREAL_LAUNCH_MS, YUREAL_ANNOUNCE_ID, handleYurealAction, resetYurealCacheForTest, resetYurealTickForTest, runYurealTick, yurealTimeFor, yurealDateKey } from "../worker.js";
 
 console.warn = () => {};
 
@@ -140,7 +140,10 @@ test("リアクション：友達の写真に、絵文字をタップして送�
   assert.equal((await c.act("id0", { action: "react", id, emoji: "😢" })).error, "already_reacted", "べつの絵文字も、追加できない");
   assert.equal((await c.act("id0", { action: "react", id, emoji: "" })).error, "bad_emoji", "外すこともできない");
   assert.equal((await c.act("id1", { action: "react", id, emoji: "😢" })).item.reactions["😢"], 1, "ほかの人は、べつに付けられる");
-  assert.equal((await c.act("id0", { action: "react", id, emoji: "💩" })).error, "bad_emoji");
+  for (const bad of ["abc", "a", "1", "#", "あ", "😀😀", "😀a", "❤️❤️", "<b>", "👍 "]) assert.equal((await c.act("id0", { action: "react", id, emoji: bad })).error, "bad_emoji", `文字・数字・記号・2つ以上は不可: ${bad}`);
+  for (const good of ["🎉", "💩", "👍🏽", "🇯🇵", "👨‍👩‍👧", "❤", "🥹"]) assert.equal(isEmojiReaction(good), true, `好きな絵文字は使える: ${good}`);
+  const own = `${c.key}_id0`;
+  assert.deepEqual((await c.act("id1", { action: "react", id: own, emoji: "🎉" })).item.reactions, { "🎉": 1 }, "好きな絵文字で、リアクションできる");
   assert.equal((await c.act("id2", { action: "react", id, emoji: "👍" })).error, "not_friend");
   assert.equal((await c.act("id0", { action: "comment", id, text: "いいね" })).error, "unknown_action", "コメントはなくなった");
   assert.equal("comments" in (await c.act("id0", { action: "feed" })).items[0], false);

@@ -3290,7 +3290,9 @@ const YUREAL_START_H = 9, YUREAL_END_H = 15;
 export const YUREAL_WINDOW_MS = 3 * 60000;
 const YUREAL_NOTIFY_SPAN_MS = 5 * 60000;
 const YUREAL_IMG_MAX = 220000;   // 写真（base64の文字数）。画面で小さく縮めてから送る
-const YUREAL_EMOJIS = ["❤️", "😂", "😮", "😢", "👍", "🔥"];   // リアクション：絵文字をタップして送る（1つの投稿に1人1個だけ。コメントはなし）
+/* リアクション：好きな絵文字を、1つだけ（文字・数字・記号・2つ以上は不可）。画面側（yureal.js）にも同じ判定がある */
+const YUREAL_EMOJI_RE = /^(?:\p{Extended_Pictographic}[\uFE0F\u{1F3FB}-\u{1F3FF}]?(?:\u200D\p{Extended_Pictographic}[\uFE0F\u{1F3FB}-\u{1F3FF}]?)*|\p{Regional_Indicator}{2})$/u;
+export const isEmojiReaction = (s) => typeof s === "string" && s.length > 0 && s.length <= 16 && YUREAL_EMOJI_RE.test(s);   // リアクション：絵文字をタップして送る（1つの投稿に1人1個だけ。コメントはなし）
 const jstDateKey = (ms) => new Date(ms + 9 * 3600000).toISOString().slice(0, 10).replace(/-/g, "");
 const jstDayStartMs = (key) => Date.UTC(Number(key.slice(0, 4)), Number(key.slice(4, 6)) - 1, Number(key.slice(6, 8))) - 9 * 3600000;
 export const yurealDateKey = jstDateKey;
@@ -3425,7 +3427,7 @@ export async function handleYurealAction(deps, uid, body) {
         if (!raw) return { status: 404, error: "gone" };
         const d = decodeFields(raw.fields);
         const emoji = String(body?.emoji || "");
-        if (!YUREAL_EMOJIS.includes(emoji)) return { status: 400, error: "bad_emoji" };
+        if (!isEmojiReaction(emoji)) return { status: 400, error: "bad_emoji" };
         const reactions = { ...(d.reactions || {}) };
         if (reactions[uid]) return { status: 409, error: "already_reacted" };   // 1つの投稿に、リアクションは1人1個だけ（あとから変えたり、外したりはできない）
         reactions[uid] = emoji;
