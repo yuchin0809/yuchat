@@ -144,6 +144,29 @@ test("リアクション：友達の写真に、絵文字をタップして送�
   assert.equal("comments" in (await c.act("id0", { action: "feed" })).items[0], false);
 });
 
+test("きえる時刻：きのうの写真は、きょうの通知の時刻まで見える。その日に自分も投稿したときだけ、友達の写真が見える。通知のあとは、きえる（見えず、データも消える）", async () => {
+  const c = setup({ published: true });
+  const yk = yurealDateKey(c.at - 86400000);
+  const post = (u, mark) => { c.fs.put(`yurealPosts/${yk}_${u}`, encF({ uid: u, name: u.replace("id", "u"), date: yk, at: c.at - 86400000 + 60000, lateMin: 0, caption: mark, reactions: {} })); c.fs.put(`yurealImages/${yk}_${u}`, encF({ img: JPG, uid: u, date: yk })); };
+  post("id1", "y1");
+  c.state.now = c.at - 3600000;   // きょうの通知の1時間前
+  let f = await c.act("id0", { action: "feed" });
+  assert.equal(f.items.length, 0, "自分がきのう投稿していないので、友達のきのうの写真は見えない"); assert.equal(f.hidden, true);
+  assert.equal((await c.act("id0", { action: "photo", id: `${yk}_id1` })).error, "post_first");
+  post("id0", "y0");
+  f = await c.act("id0", { action: "feed" });
+  assert.deepEqual(f.items.map((i) => i.name).sort(), ["u0", "u1"], "自分もきのう投稿していれば、見える");
+  assert.equal((await c.act("id0", { action: "photo", id: `${yk}_id1` })).img, JPG);
+  c.state.now = c.at + 30000;     // きょうの通知の時刻をすぎた
+  f = await c.act("id0", { action: "feed" });
+  assert.equal(f.items.length, 0, "きのうの写真は、きえる");
+  assert.equal((await c.act("id0", { action: "photo", id: `${yk}_id1` })).error, "gone");
+  assert.equal((await c.act("id0", { action: "react", id: `${yk}_id1`, emoji: "❤️" })).error, "gone");
+  c.fs.put("fcmTokens/t0", encF({ uid: "id0" }));
+  const out = await runYurealTick({}, c.at + 60000, c.deps);   // 通知のとき、きのうまでの分を消す
+  assert.equal(out.expired, 2); assert.equal(c.fs.plain(`yurealPosts/${yk}_id1`), null); assert.equal(c.fs.plain(`yurealImages/${yk}_id0`), null);
+});
+
 test("消す：自分の投稿は消せる。友達は消せない", async () => {
   const c = setup({ published: true });
   await c.act("id1", { action: "post", img: JPG }); await c.act("id0", { action: "post", img: JPG });
