@@ -180,22 +180,11 @@ test("公開とお知らせ：予約の時刻に、公開のスイッチが入�
   assert.equal(sent.length, 2);
 });
 
-test("サポーター限定：公開されても、サポーターと最上位管理者だけ。サポーターでない人は、ルームも、始めることもできない", async () => {
-  const c = setup({ supporters: ["id1"] });   // id1 だけサポーター
-  const cfg1 = await c.act(1, { action: "config" }), cfg2 = await c.act(2, { action: "config" }), cfg0 = await c.act(0, { action: "config" });
-  assert.equal(cfg1.billiardsAllowed, true); assert.equal(cfg2.billiardsAllowed, false); assert.equal(cfg0.billiardsAllowed, false); assert.equal(cfg2.billiardsPublished, true);
-  assert.equal((await c.r(2, "billiardsRoomStart", { mode: "eight" })).error, "supporter_only");
-  assert.equal((await c.r(1, "billiardsRoomStart", { mode: "eight" })).error, "opponent_not_supporter", "相手がサポーターでないと、始められない");
-  const ok = setup({ supporters: ["id1", "id2"] });
-  assert.equal((await ok.r(1, "billiardsRoomStart", { mode: "eight" })).ok, true);
-});
-
-test("サポーター限定：サポーターをやめた人は、打てなくなる。管理者（ADMIN）は、サポーターでなくても使える", async () => {
-  const c = setup();
-  const y = (await c.r(1, "billiardsRoomStart", { mode: "eight" })).billiards;
-  const me = who(y);
-  resetSupporterCacheForTest(); c.fs.put("supporterIndex/all", encF({ byUid: { [me === 1 ? "id2" : "id1"]: { n: "x", m: 1, nc: "default", bc: "default", e: 0 } } }));
-  assert.equal((await c.r(me, "billiardsRoomShoot", { gid: y.gid, angle: 0, power: 0.5 })).error, "supporter_only");
+test("ビリヤードは、公開されたら全員が使える（サポーターでなくても、ルームを始められる）。公開前は、最上位管理者だけ", async () => {
+  const c = setup({ supporters: [] });   // だれもサポーターではない
+  const cfg2 = await c.act(2, { action: "config" });
+  assert.equal(cfg2.billiardsAllowed, true); assert.equal(cfg2.billiardsPublished, true);
+  assert.equal((await c.r(1, "billiardsRoomStart", { mode: "eight" })).ok, true, "サポーターでなくても、始められる");
   const adm = setup({ supporters: [] });
   const cfgA = await handleYuslotAction(adm.deps, ADMIN, { username: "admin", action: "config" });
   assert.equal(cfgA.billiardsAllowed, true);
