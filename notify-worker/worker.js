@@ -3397,7 +3397,9 @@ export async function handleYurealAction(deps, uid, body) {
       const posted = rows.some((r) => r.uid === uid && r.date === today);
       const mineOn = (date) => rows.some((r) => r.uid === uid && r.date === date);   // 友達の写真は、その日に自分も投稿したときだけ見える
       const items = rows.filter((r) => dayVisible(r.date) && (r.uid === uid || mineOn(r.date))).sort((a, b) => b.at - a.at).map((r) => yurealView(r, uid, r.id));
-      return { ok: true, today, posted, hidden: rows.some((r) => dayVisible(r.date) && r.uid !== uid && !mineOn(r.date)), items, serverNowMs: now };
+      /* 自分が投稿していない日の友達の投稿：写真・ひとこと・リアクションは出さず、「だれが投稿したか」（名前と日）だけ見せる */
+      const locked = rows.filter((r) => dayVisible(r.date) && r.uid !== uid && !mineOn(r.date)).sort((a, b) => b.at - a.at).map((r) => ({ name: String(r.name || ""), date: r.date }));
+      return { ok: true, today, posted, hidden: locked.length > 0, locked, items, serverNowMs: now };
     }
     const id = String(body?.id || "");
     if (!YUREAL_ID.test(id)) return { status: 400, error: "bad_request" };

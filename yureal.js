@@ -18,6 +18,7 @@ const STYLE = `
 .yr-note{margin:0;padding:8px 12px;border-radius:10px;background:#fff6d6;color:#6b5200;font-size:12.5px}
 .yr-card{background:#fff;border:1px solid #e7e9ed;border-radius:18px;padding:14px;display:flex;flex-direction:column;gap:10px}
 .yr-now{display:flex;flex-direction:column;gap:8px;text-align:center}.yr-now b{font-size:17px}.yr-now span{font-size:13px;color:#667089}
+.yr-locked{display:flex;align-items:center;gap:8px;padding:8px 2px;border-top:1px solid #eef0f4;font-weight:700}.yr-locked small{color:#8a93a8;font-weight:400;margin-left:auto}
 .yr-post{background:#fff;border:1px solid #e7e9ed;border-radius:18px;overflow:hidden}
 .yr-head{display:flex;align-items:center;gap:8px;padding:10px 12px}.yr-head b{flex:1;font-size:15px}.yr-head small{color:#8a93a8;font-size:12px}
 .yr-late{background:#eef0f4;color:#667089;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:700}
@@ -72,7 +73,7 @@ function render() {
   const admin = c?.isAdmin ? `<p class="yr-note">${c.published ? "公開中（ベータ版・全員に見えています）" : "管理者だけに見えています（まだ公開していません）"}</p><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="yr-btn" id="yrPub">${c.published ? "非公開にする" : "全員に公開する"}</button><button class="yr-btn" id="yrTest">テスト投稿（いつでも）</button></div>` : "";
   root.innerHTML = `<div class="yr"><div class="yr-top"><h2>📸 YuSnap（ベータ版）</h2><button class="yr-btn" id="yrReload">更新</button></div>${st.error ? `<p class="yr-note">${esc(st.error)}</p>` : ""}${admin}
     ${f ? `<div class="yr-card" id="yrNow">${nowBox()}</div>` : ""}
-    ${f && f.hidden ? '<p class="yr-note">友達の投稿があります。自分が投稿すると見られます</p>' : ""}
+    ${f && f.locked && f.locked.length ? `<div class="yr-card"><b>🔒 投稿した友達</b><p class="yr-note" style="margin:4px 0">自分が投稿すると、写真が見られます</p>${f.locked.map((l) => `<div class="yr-locked">👤 ${esc(l.name)}<small>${l.date === f.today ? "きょう" : "きのう"}・投稿ずみ</small></div>`).join("")}</div>` : ""}
     ${f ? (f.items.length ? f.items.map(postHtml).join("") : '<p style="text-align:center;color:#8a93a8">まだ投稿がありません</p>') : ""}
     ${f ? '<p style="text-align:center;color:#8a93a8;font-size:12px">写真は2日で消えます。友達だけに見えます。絵文字をタップするとリアクションが送れます（1つの投稿に1個だけ）</p>' : ""}</div>`;
   root.querySelector("#yrReload")?.addEventListener("click", refresh);

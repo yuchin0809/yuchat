@@ -119,6 +119,8 @@ test("見られる範囲：友達だけ。自分が投稿するまで、友達�
   await c.act("id2", { action: "post", img: JPG, caption: "u2" });
   let f0 = await c.act("id0", { action: "feed" });
   assert.equal(f0.items.length, 0); assert.equal(f0.hidden, true); assert.equal(f0.posted, false);
+  assert.deepEqual(f0.locked, [{ name: "u1", date: c.key }], "写真は見えないが、友達（u1）が投稿したことは分かる。友達でない u2 は出ない");
+  assert.ok(!JSON.stringify(f0.locked).includes("data:image") && !JSON.stringify(f0.locked).includes("id1"), "写真も、UID も出さない");
   assert.equal((await c.act("id0", { action: "photo", id: `${c.key}_id1` })).error, "post_first");
   await c.act("id0", { action: "post", img: JPG });
   f0 = await c.act("id0", { action: "feed" });
