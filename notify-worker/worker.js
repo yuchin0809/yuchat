@@ -3282,7 +3282,7 @@ export async function runBilliardsAnnounceTick(env = {}, scheduledTime = Date.no
    ・毎日 9:00〜15:00（日本時間）のどこかで、決まった時刻に通知。その時刻から3分以内に撮るのが「ちょうどいい」投稿、それより遅いと「○分遅れ」と出る。
      時刻は、日付から決まる計算（乱数なし・Firestore に保存しない）。通知は、決まった分の5分間だけ Firestore に触れる。
    ・写真は、友達だけが見られる。自分がその日の写真を投稿するまでは、友達のその日の写真は見えない（きのうの分は見える）。
-   ・保存は2日（きょう・きのう）。毎日 3:10〜3:20（日本時間）に、それより古い分を消す。写真の本体は別の書類（yurealImages）に分けて、一覧では写真を読まない。
+   ・写真が見えるのは、きょうと、「きょうの通知の時刻まで」のきのう。その日に自分も投稿したときだけ、友達のその日の写真が見える。きょうの通知を出すとき、きのうまでの分を消す（毎日 3:10〜3:20 にも、2〜3日前の分を消す）。写真の本体は別の書類（yurealImages）に分けて、一覧では写真を読まない。
    ・保存：yurealPosts/{日付}_{uid}（名前・時刻・遅れ・ひとこと・リアクション）、yurealImages/{日付}_{uid}（写真）、worldConfig/yureal（公開の状態）。すべて Worker だけが読み書き
    ・公開：worldConfig/yureal の published（最上位管理者だけが切り替える）。公開前は、最上位管理者だけが使える（通知も最上位管理者にだけ）。
 ========================================================= */
@@ -3393,17 +3393,21 @@ export async function handleYurealAction(deps, uid, body) {
       const rows = [];
       for (let i = 0; i < uids.length; i += FIRESTORE_IN_LIMIT) rows.push(...(await fs.queryIn("yurealPosts", "uid", uids.slice(i, i + FIRESTORE_IN_LIMIT))));
       const yesterday = jstDateKey(now - 24 * 3600000);
+      const dayVisible = (date) => date === today || (date === yesterday && now < yurealTimeFor(today));   // きのうの分は、きょうの通知の時刻まで（その時刻で、きえる）
       const posted = rows.some((r) => r.uid === uid && r.date === today);
-      const items = rows.filter((r) => (r.date === today || r.date === yesterday) && (r.uid === uid || r.date !== today || posted)).sort((a, b) => b.at - a.at).map((r) => yurealView(r, uid, r.id));
-      return { ok: true, today, posted, hidden: rows.filter((r) => r.date === today && r.uid !== uid).length > 0 && !posted, items, serverNowMs: now };
+      const mineOn = (date) => rows.some((r) => r.uid === uid && r.date === date);   // 友達の写真は、その日に自分も投稿したときだけ見える
+      const items = rows.filter((r) => dayVisible(r.date) && (r.uid === uid || mineOn(r.date))).sort((a, b) => b.at - a.at).map((r) => yurealView(r, uid, r.id));
+      return { ok: true, today, posted, hidden: rows.some((r) => dayVisible(r.date) && r.uid !== uid && !mineOn(r.date)), items, serverNowMs: now };
     }
     const id = String(body?.id || "");
     if (!YUREAL_ID.test(id)) return { status: 400, error: "bad_request" };
     const ownerUid = id.slice(9);
     if (ownerUid !== uid && !friends.includes(ownerUid) && !admin) return { status: 403, error: "not_friend" };
     const date = id.slice(0, 8);
+    const yesterdayKey = jstDateKey(now - 24 * 3600000);
+    if (date !== today && !(date === yesterdayKey && now < yurealTimeFor(today))) return { status: 404, error: "gone" };   // 次の日の通知の時刻をすぎた写真は、見られない
     if (action === "photo") {
-      if (date === today && ownerUid !== uid && !(await fs.get(`yurealPosts/${today}_${uid}`))) return { status: 403, error: "post_first" };
+      if (ownerUid !== uid && !(await fs.get(`yurealPosts/${date}_${uid}`))) return { status: 403, error: "post_first" };
       const doc = await fs.get(`yurealImages/${id}`);
       return doc ? { ok: true, img: doc.img } : { status: 404, error: "gone" };
     }
@@ -3413,7 +3417,7 @@ export async function handleYurealAction(deps, uid, body) {
       return { ok: true };
     }
     if (action === "react") {
-      if (date === today && ownerUid !== uid && !(await fs.get(`yurealPosts/${today}_${uid}`))) return { status: 403, error: "post_first" };
+      if (ownerUid !== uid && !(await fs.get(`yurealPosts/${date}_${uid}`))) return { status: 403, error: "post_first" };
       for (let attempt = 0; attempt < 4; attempt++) {
         const raw = await fs.getRaw(`yurealPosts/${id}`);
         if (!raw) return { status: 404, error: "gone" };
@@ -3474,6 +3478,13 @@ export async function runYurealTick(env = {}, scheduledTime = Date.now(), deps =
     const data = { kind: "yureal", title: "📸 YuSnap の時間です！", body: "3分以内に、いまを撮って送ろう", link: "./?open=yureal", tag: `yureal-${today}` };
     yurealCfgCache = { at: 0, published: false };
     out.notify = (await yurealPublished(d)) ? await sendBroadcastNotification(d, `yureal-${today}`, data) : await sendPushToUids(d, `yureal-${today}`, d.adminUid ? [d.adminUid] : [], data);
+    /* きょうの通知を出したので、きのうまでの写真を消す（見えるのは、きょうの通知の時刻まで） */
+    let gone = 0;
+    for (const back of [1, 2]) {
+      const key = jstDateKey(scheduledTime - back * 24 * 3600000);
+      for (const row of await d.firestore.query("yurealPosts", [["date", "EQUAL", key]], { select: ["uid"] })) { await d.firestore.delete(`yurealPosts/${row.id}`); await d.firestore.delete(`yurealImages/${row.id}`); gone++; }
+    }
+    out.expired = gone;
   }
   if (pruneNow) {
     yurealTickDone.add(`p${today}`);

@@ -1,6 +1,6 @@
 /* 📸 YuSnap（1日1回の写真）の画面（内部の名前は yureal のまま）。中身は Worker（/yureal）が決める
    ・通知（9:00〜15:00 のどこか）から3分以内に撮る。カメラは、内カメラ（自撮り）だけ。写真ライブラリからは選べない。遅れても投稿できる（「○分遅れ」と出る）
-   ・友達だけに見える。自分が投稿するまで、友達のきょうの写真は見えない。保存は2日
+   ・友達だけに見える。その日に自分も投稿したときだけ、友達のその日の写真が見える。写真は、次の日の通知の時刻に消える
    ・写真は小さく縮めて送る（200KB以下）。一覧では写真を読まず、見える所に来たときに、1枚ずつ読む（読み取りを減らすため）
    ・いまは管理者だけ（公開の切り替えは管理者のこの画面から） */
 import { hasNgWord, NG_MESSAGE } from "./yungwords.js?v=20261111-ng2";
@@ -39,7 +39,7 @@ async function api(action, body = {}) {
 }
 const nowMs = () => Date.now() + (st?.offset || 0);
 const fmtTime = (ms) => new Date(ms).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
-const errText = (e) => ({ not_yet: "まだ通知の時刻になっていません", already_posted: "きょうは、もう投稿ずみです", bad_image: "写真を送れませんでした（大きすぎるかも）", post_first: "先に自分が投稿しよう", already_reacted: "リアクションは1つの投稿に1個までです", not_friend: "友達だけが見られます", ng_word: "使えないことばが含まれています。ひとことを書き直してください" }[e?.code] || `できませんでした（${e?.code || "エラー"}）`);
+const errText = (e) => ({ not_yet: "まだ通知の時刻になっていません", already_posted: "きょうは、もう投稿ずみです", bad_image: "写真を送れませんでした（大きすぎるかも）", post_first: "先に自分が投稿しよう", already_reacted: "リアクションは1つの投稿に1個までです", not_friend: "友達だけが見られます", ng_word: "使えないことばが含まれています。ひとことを書き直してください", gone: "この写真は、もう見られません（次の通知で消えます）" }[e?.code] || `できませんでした（${e?.code || "エラー"}）`);
 
 export function initYureal(c) { cfg = c; }
 export function stopYurealView() { clearInterval(timer); timer = 0; closeCamera(); observer?.disconnect(); observer = null; }
