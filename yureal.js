@@ -64,7 +64,7 @@ function nowBox() {
     const left = c.atMs + c.windowMs - nowMs();
     return `<div class="yr-now"><b>📸 YuSnap の時間です！</b><span id="yrCount">${left > 0 ? `あと ${Math.floor(left / 60000)}:${String(Math.floor(left / 1000) % 60).padStart(2, "0")}` : `${Math.ceil(-left / 60000)}分遅れ（それでも投稿できます）`}</span><button class="yr-btn pri big" id="yrShoot">📸 いま撮る</button></div>`;
   }
-  return `<div class="yr-now"><b>まだ、きょうの時間ではありません</b><span>通知が来たら、3分以内に撮ろう（9時〜15時のどこか）</span></div>`;
+  return `<div class="yr-now"><b>まだ、きょうの時間ではありません</b><span>通知が来たら、3分以内に撮ろう</span></div>`;
 }
 function render() {
   if (!root) return;

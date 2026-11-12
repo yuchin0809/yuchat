@@ -3454,7 +3454,7 @@ export async function runYurealLaunchTick(env = {}, scheduledTime = Date.now(), 
   if (cur.launched !== true) { await d.firestore.set("worldConfig/yureal", { ...cur, published: true, launched: true, updatedAt: new Date(scheduledTime) }); yurealCfgCache = { at: 0, published: false }; }
   await d.firestore.createIfAbsent(`announcements/${YUREAL_ANNOUNCE_ID}`, {
     title: "📸 YuSnap（ベータ版）を始めました！",
-    body: "1日1回の写真「YuSnap」を、ベータ版として始めました。\n\n・毎日、9時〜15時のどこかで通知が届きます（通知をONにしている人）\n・通知から3分以内に、内カメラで「いまの様子」を撮って投稿しよう（遅れても投稿できます）\n・友達だけに見えます。自分が投稿するまで、友達のきょうの写真は見えません\n・絵文字をタップしてリアクションできます（1つの投稿に1個）\n・写真は2日で消えます\n\nベータ版なので、うまく動かないところがあるかもしれません。気づいたことがあれば教えてね。タブの「YuSnap β」から開けます。",
+    body: "1日1回の写真「YuSnap」を、ベータ版として始めました。\n\n・毎日、どこかの時刻に通知が届きます（通知をONにしている人）\n・通知から3分以内に、内カメラで「いまの様子」を撮って投稿しよう（遅れても投稿できます）\n・友達だけに見えます。自分が投稿するまで、友達のきょうの写真は見えません\n・絵文字をタップしてリアクションできます（1つの投稿に1個）\n・写真は2日で消えます\n\nベータ版なので、うまく動かないところがあるかもしれません。気づいたことがあれば教えてね。タブの「YuSnap β」から開けます。",
     createdAt: new Date(scheduledTime), updatedAt: new Date(scheduledTime), createdByUid: "system", createdByName: "ゆうChat"
   });
   const out = await notifyNewAnnouncement(d, YUREAL_ANNOUNCE_ID);
