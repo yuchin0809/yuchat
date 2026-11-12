@@ -3508,10 +3508,16 @@ function loadFcmModule() {
 }
 
 /* iPhone アプリ：通知は、アプリの部品（FirebaseMessaging）で受ける。Web のように、ブラウザの通知・Service Worker は使わない */
+const NATIVE_OLD_TEXT = "このアプリは古い版のため、通知が使えません。TestFlight（App Store）から、最新版に更新してください。";
 const NATIVE_FM = IN_NATIVE_APP ? (window.Capacitor?.registerPlugin?.("FirebaseMessaging") || null) : null;
 async function notifyPermission() {   // "granted" | "denied" | "default" | "unsupported"
   if (NATIVE_FM) {
-    try { const r = await NATIVE_FM.checkPermissions(); return r.receive === "granted" ? "granted" : r.receive === "denied" ? "denied" : "default"; } catch (_) { return "denied"; }
+    try { const r = await NATIVE_FM.checkPermissions(); return r.receive === "granted" ? "granted" : r.receive === "denied" ? "denied" : "default"; }
+    catch (e) {
+      console.error("通知の許可の確認エラー:", e);
+      /* アプリに通知の部品が入っていない（古い版）：更新を案内する。それ以外の失敗は、押せる状態のままにして、押したときに理由を出す */
+      return /unimplemented|not implemented|not available/i.test(`${e?.code || ""} ${e?.message || ""}`) ? "plugin-missing" : "default";
+    }
   }
   return typeof Notification === "undefined" ? "unsupported" : Notification.permission;
 }
@@ -3533,6 +3539,7 @@ async function refreshNotificationStatus() {
     return;
   }
   const perm = await notifyPermission();
+  if (perm === "plugin-missing") { setNotificationStatus(NATIVE_OLD_TEXT, "unsupported"); return; }
   if (perm === "denied") {
     setNotificationStatus(NATIVE_FM ? "通知がブロックされています。iPhone の「設定」→「ゆうChat」→「通知」から許可してください。" : "通知がブロックされています。ブラウザや端末の設定から、このサイトの通知を許可してください。", "denied");
     return;
@@ -3560,11 +3567,13 @@ notificationButton?.addEventListener("click", async () => {
   /* iOS Safari はユーザー操作の直後でないと許可ダイアログを出さないので、
      他の await より前に許可を求める */
   let permission = await notifyPermission();
+  if (permission === "plugin-missing") { setNotificationStatus(NATIVE_OLD_TEXT, "unsupported"); return; }
   if (permission === "default") {
     try {
       permission = NATIVE_FM ? ((await NATIVE_FM.requestPermissions()).receive === "granted" ? "granted" : "denied") : await Notification.requestPermission();
     } catch (error) {
       console.error("通知許可エラー:", error);
+      if (NATIVE_FM) { setNotificationStatus(`通知の許可を確認できませんでした。（${String(error?.message || error?.code || "不明なエラー").slice(0, 80)}）`, "off"); return; }
     }
   }
 
@@ -3584,7 +3593,7 @@ notificationButton?.addEventListener("click", async () => {
     markNotifySetupDone();
     setNotificationStatus("この端末に通知が届きます。（ボタンを押すとOFFにできます）", "on");
   } else {
-    setNotificationStatus("通知の設定に失敗しました。時間をおいてもう一度お試しください。", "off");
+    setNotificationStatus(`通知の設定に失敗しました。時間をおいてもう一度お試しください。${lastNotifyError ? `（${lastNotifyError}）` : ""}`, "off");
   }
 });
 
@@ -3608,6 +3617,7 @@ async function getFcmMessaging() {
   return fcmMessaging;
 }
 
+let lastNotifyError = "";
 async function registerFcmToken() {
   if (!currentUser || !username) return false;
 
@@ -3645,6 +3655,7 @@ async function registerFcmToken() {
     if (messaging) setupForegroundMessageListener(messaging);
     return true;
   } catch (error) {
+    lastNotifyError = String(error?.message || error?.code || "").slice(0, 80);
     console.error(`[通知トークン登録エラー] code=${error?.code || "(なし)"} message=${error?.message || error}`, error);
     return false;
   }
