@@ -71,16 +71,31 @@ jobs:
             t.build_configurations.each { |c| c.build_settings["CODE_SIGN_ENTITLEMENTS"] = "App/App.entitlements" }
             pr.save
           '
+          echo "---- AppDelegate（書き換え前）"; cat ios/App/App/AppDelegate.swift
           python3 - <<'PY'
           import re
           p = "ios/App/App/AppDelegate.swift"
           s = open(p).read()
-          if "import FirebaseCore" not in s: s = s.replace("import UIKit", "import UIKit\nimport FirebaseCore\nimport FirebaseMessaging", 1)
-          s = s.replace("didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {", "didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {\n        FirebaseApp.configure()", 1)
-          s = s.replace("NotificationCenter.default.post(name: .capacitorDidRegisterForRemoteNotifications, object: deviceToken)", "Messaging.messaging().apnsToken = deviceToken\n        NotificationCenter.default.post(name: .capacitorDidRegisterForRemoteNotifications, object: deviceToken)", 1)
-          assert "FirebaseApp.configure()" in s and "apnsToken" in s, "AppDelegate を書き換えられませんでした"
+          s = re.sub(r"^import UIKit", "import UIKit\nimport FirebaseCore\nimport FirebaseMessaging", s, count=1, flags=re.M)
+          s, n1 = re.subn(r"(didFinishLaunchingWithOptions[^{]*\{)", r"\1\n        FirebaseApp.configure()", s, count=1)
+          if "capacitorDidRegisterForRemoteNotifications" in s:
+              s, n2 = re.subn(r"^(\s*)NotificationCenter\.default\.post\(name: \.capacitorDidRegisterForRemoteNotifications", r"\1Messaging.messaging().apnsToken = deviceToken\n\1NotificationCenter.default.post(name: .capacitorDidRegisterForRemoteNotifications", s, count=1, flags=re.M)
+          else:
+              extra = """
+              func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+                  Messaging.messaging().apnsToken = deviceToken
+                  NotificationCenter.default.post(name: .capacitorDidRegisterForRemoteNotifications, object: deviceToken)
+              }
+              func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+                  NotificationCenter.default.post(name: .capacitorDidFailToRegisterForRemoteNotifications, object: error)
+              }
+          """
+              i = s.rstrip().rfind("}")
+              s = s[:i] + extra + "\n}\n"; n2 = 1
+          assert n1 == 1 and n2 == 1, f"AppDelegate を書き換えられませんでした（{n1},{n2}）"
           open(p, "w").write(s)
           PY
+          echo "---- AppDelegate（書き換え後）"
           sed -n 1,60p ios/App/App/AppDelegate.swift
 
       - name: アイコン（1024px・透明なし）と、Info.plist の説明文
