@@ -3537,6 +3537,7 @@ async function isFcmAvailable() {
 /* 今の状態をボタンと説明文に反映する（許可は求めない） */
 async function refreshNotificationStatus() {
   if (!(await isFcmAvailable())) {
+    if (IN_NATIVE_APP) notifyDiag = `アプリ判定:あり 部品:なし Capacitor:${typeof window.Capacitor} registerPlugin:${typeof window.Capacitor?.registerPlugin}`;
     setNotificationStatus(getUnsupportedNotificationText(), "unsupported");
     return;
   }
