@@ -3513,7 +3513,7 @@ function isStandaloneApp() {
 
 let notifyDiag = "";   // iPhone アプリ：原因をさがすための目印（画面の小さな文字に出す）
 function setNotificationStatus(text, state) {
-  if (notificationStatusEl) notificationStatusEl.textContent = IN_NATIVE_APP && notifyDiag ? `${text} [${notifyDiag}]` : text;
+  if (notificationStatusEl) notificationStatusEl.textContent = IN_NATIVE_APP && notifyDiag && (state === "unsupported" || state === "denied") ? `${text} [${notifyDiag}]` : text;   // 目印は、できないときだけ出す
   if (notificationButton) {
     notificationButton.dataset.state = state || "";
     notificationButton.textContent = state === "on" ? "🔕 通知をOFFにする" : "🔔 通知をONにする";
