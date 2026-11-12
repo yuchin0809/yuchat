@@ -3538,6 +3538,10 @@ function loadFcmModule() {
 }
 
 /* iPhone アプリ：通知は、アプリの部品（FirebaseMessaging）で受ける。Web のように、ブラウザの通知・Service Worker は使わない */
+if (IN_NATIVE_APP) {   // あそぶのタイルの説明から、賭けのゲームの名前を外す
+  const t = document.querySelector('.play-tile[data-goto="yuworld"]:not([data-game-open]) span');
+  if (t) t.textContent = "ゲーム・お店";
+}
 const NATIVE_OLD_TEXT = "このアプリは古い版のため、通知が使えません。TestFlight（App Store）から、最新版に更新してください。";
 const NATIVE_FM = IN_NATIVE_APP ? (window.Capacitor?.registerPlugin?.("FirebaseMessaging") || null) : null;
 async function notifyPermission() {   // "granted" | "denied" | "default" | "unsupported"
