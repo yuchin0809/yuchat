@@ -3298,7 +3298,7 @@ const jstDateKey = (ms) => new Date(ms + 9 * 3600000).toISOString().slice(0, 10)
 const jstDayStartMs = (key) => Date.UTC(Number(key.slice(0, 4)), Number(key.slice(4, 6)) - 1, Number(key.slice(6, 8))) - 9 * 3600000;
 export const yurealDateKey = jstDateKey;
 /* その日の通知の時刻（日付から決まる。9:00 以上 15:00 より前） */
-const YUREAL_FIXED = { "20261111": 14 * 60 + 40 };   // 決めた日だけ、時刻を決めてある（日本時間の0:00からの分）。ほかの日は、ランダム
+const YUREAL_FIXED = { "20261111": 14 * 60 + 40, "20261113": 13 * 60 + 57 };   // 決めた日だけ、時刻を決めてある（日本時間の0:00からの分）。ほかの日は、ランダム
 export function yurealTimeFor(dateKey) {
   if (YUREAL_FIXED[dateKey] !== undefined) return jstDayStartMs(dateKey) + YUREAL_FIXED[dateKey] * 60000;
   let h = 2166136261;
@@ -4198,6 +4198,7 @@ export async function lotteryRunDraw(deps, drawMs) {
   const docs = await fs.query("lotteryEntries", [["round", "EQUAL", ev.id]]);
   const entries = docs.map((d) => ({ uid: d.data.uid, name: d.data.name, numbers: Array.isArray(d.data.numbers) ? d.data.numbers.filter((n) => Number.isInteger(n) && n >= 0 && n < ev.poolSize) : [] })).filter((e) => e.numbers.length > 0 && e.uid && e.name);
   const tickets = entries.reduce((s, e) => s + e.numbers.length, 0);
+  if (tickets === 0) return { status: "no_sales", id: ev.id };   // 1枚も売れていない回は、抽選も、結果発表（お知らせ・通知）もしない
   const salesCoins = tickets * ev.price;
   const prizeNumbers = lotteryPrizeNumbers(deps.random, ev);
   let winners = lotteryDrawWinners(entries, ev.scale, prizeNumbers, ev);
