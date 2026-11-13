@@ -186,7 +186,7 @@ function openLotteryScreen() {
 const GAME_SHOPS = [
   { id: "othello", icon: "⚫", name: "オセロ", cls: "yw-othello-banner", desc: "友達とオセロで対戦。ルームを作って招待しよう。" },
   { id: "shogi", icon: '<svg class="yw-shogi-svg" viewBox="0 0 64 72" aria-hidden="true"><polygon points="32,3 57,17 62,69 2,69 7,17" fill="#f0cf8c" stroke="#5e3a12" stroke-width="3" stroke-linejoin="round"/><polygon points="32,9 52,20 56,63 8,63 12,20" fill="none" stroke="#b98a45" stroke-width="1.5" stroke-linejoin="round"/><text x="32" y="50" text-anchor="middle" font-size="33" font-weight="900" font-family="serif" fill="#2b1a08">王</text></svg>', name: "将棋", cls: "yw-shogi-banner", desc: "友達と将棋で対戦。ルームを作って招待しよう。" },
-  { id: "daifugo", icon: "🃏", name: "大富豪", cls: "yw-daifugo-banner", soon: true, desc: "みんなで大富豪。ただいまメンテナンス中です。" }
+  { id: "daifugo", icon: "🃏", name: "大富豪", cls: "yw-daifugo-banner", desc: "みんなで大富豪。ルールは部屋を作った人が決められます。" }
 ];
 /* ゆうワールドの一番上に出す、最強決定戦（消しバトのリーグ戦）の目立つ札。押すと、消しバトの最強決定戦の画面を開く */
 function leagueTop() {
