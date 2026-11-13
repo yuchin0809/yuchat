@@ -7251,3 +7251,25 @@ html.native-app #notificationStatus { display: block !important; }
 
 /* iPhone アプリの中：コインを賭けるゲーム（ダービー・スロット・宝くじ／番くじ）は出さない。App Store の年齢制限（疑似ギャンブルの有無）に、実際の内容を合わせるため。Web版は、そのまま */
 .native-app [data-view="derby"], .native-app [data-goto="derby"], .native-app #derbyView, .native-app #ywOpenSlot, .native-app #ywOpenLottery, .native-app .ev-gamble { display: none !important; }
+
+/* 大富豪：7渡し・10捨て・Qボンバーの選択パネル */
+.daifugo-pending {
+    margin: 8px 0;
+    padding: 10px 12px;
+    border: 2px solid #e0a800;
+    border-radius: 10px;
+    background: rgba(255, 214, 79, .18);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.daifugo-pending-title {
+    font-weight: 700;
+}
+
+.daifugo-pending-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 6px;
+}
