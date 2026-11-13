@@ -504,6 +504,16 @@ test("cron の間引き：時刻の前・10分後以降の途中の分は動か�
   assert.equal((await runLotteryTick({}, T + 6 * MIN, deps)).skipped, "done");
 });
 
+test("1枚も売れていない回は、売り場の書類があっても、抽選も結果発表（お知らせ・通知）もしない", async () => {
+  const { fs, deps } = setup();
+  fs.docs.set("lotteryRounds/2026-10-23", { fields: encF({ soldBits: "0".repeat(1500) }), updateTime: "t999" });
+  const before = fs.docs.size;
+  const r = await lotteryRunDraw(deps, T);
+  assert.equal(r.status, "no_sales");
+  assert.equal(fs.docs.size, before, "お知らせも、結果の書類も作らない");
+  assert.equal(fs.plain("lotteryRounds/2026-10-23").status, undefined);
+});
+
 test("売上ゼロの回は何も作らない（ドキュメントもお知らせも作らない）", async () => {
   const { fs, deps } = setup();
   const before = fs.docs.size;

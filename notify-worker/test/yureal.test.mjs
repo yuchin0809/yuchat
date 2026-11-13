@@ -88,6 +88,11 @@ test("通知の時刻：毎日 9:00〜15:00（日本時間）のどこか。同�
   assert.ok(seen.size > 30, "日によって、ちがう時刻");
 });
 
+test("決めた日の通知の時刻：2026-11-13 は 13:57（日本時間）。ほかの日は、9〜15時のランダム", () => {
+  assert.equal(yurealTimeFor("20261113"), Date.UTC(2026, 10, 13, 4, 57, 0));
+  assert.equal(yurealTimeFor("20261111"), Date.UTC(2026, 10, 11, 5, 40, 0));
+});
+
 test("公開前は、最上位管理者だけ。公開の切り替えは、最上位管理者だけ。公開後はだれでも", async () => {
   const c = setup();
   assert.equal((await c.act("id0", { action: "feed" })).error, "not_published");
