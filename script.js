@@ -4119,7 +4119,7 @@ function lazyCaller(mod, name) {
 const adminCfg = () => ({ callAdmin: (action, payload) => callAdminApi(action, payload), isAdmin: () => isAdminUser(), esc: (v) => escapeHTML(v) });
 
 /* 🎡 ゆうワールド（ゆうスロ）。トークン・ユーザー名・最上位管理者かどうかは呼ばれた時点の状態を使う */
-const lazyYuWorld = lazyModule("./yuworld.js?v=20261113-df1", (m) => m.initYuWorld({
+const lazyYuWorld = lazyModule("./yuworld.js?v=20261113-df2", (m) => m.initYuWorld({
   openGame: (type) => openGameFromWorld(type),
   pendingInviteTypes: () => pendingGameInvites.map((invite) => invite.gameType),
   endpoint: NOTIFY_ENDPOINT.replace(/\/notify$/, "/yuslot"),
@@ -9517,6 +9517,7 @@ function applyDaifugoRules(state) {
   if (!state) return state;
   if (typeof state.revolution !== "boolean") state.revolution = false;
   if (typeof state.elevenBack !== "boolean") state.elevenBack = false;
+  if (!state.pending) state.pending = null;
   if (state.direction !== 1 && state.direction !== -1) state.direction = 1;
   if (!("lockSuit" in state)) state.lockSuit = null;
   if (!Array.isArray(state.passedPlayers)) state.passedPlayers = [];
@@ -9530,14 +9531,17 @@ function applyDaifugoRules(state) {
 const DAIFUGO_DEFAULT_RULES = {
   revolution: true, eightCut: true, elevenBack: true, suitLock: true,
   sequence: true, joker: true, spade3: false, miyakoOchi: false,
-  stairRevolution: false, fiveSkip: false, nineReverse: false, noEightFinish: false, noJokerFinish: false
+  stairRevolution: false, fiveSkip: false, nineReverse: false, noEightFinish: false, noJokerFinish: false,
+  sevenPass: false, tenDiscard: false, qBomber: false
 };
 
 const DAIFUGO_RULE_LABELS = {
   revolution: "革命", eightCut: "8切り", elevenBack: "11バック", suitLock: "しばり",
   sequence: "階段", joker: "ジョーカー", spade3: "スペ3返し", miyakoOchi: "都落ち",
   stairRevolution: "階段革命（5枚以上の階段で革命）", fiveSkip: "5スキップ（次の人を飛ばす）", nineReverse: "9リバース（回る向きが逆）",
-  noEightFinish: "8上がり禁止（8で上がれない）", noJokerFinish: "ジョーカー上がり禁止"
+  noEightFinish: "8上がり禁止（8で上がれない）", noJokerFinish: "ジョーカー上がり禁止",
+  sevenPass: "7渡し（7を出すと、出した枚数だけ次の人にカードを渡す）", tenDiscard: "10捨て（10を出すと、出した枚数だけ手札を捨てる）",
+  qBomber: "Qボンバー（Qを出すと数字を宣言。ほかの人はその数字を全部捨てる）"
 };
 
 function getDaifugoRules(source) {
@@ -9893,6 +9897,53 @@ function buildDaifugoRulesPanel(room) {
   return panel;
 }
 
+/* 7渡し・10捨て・Qボンバーの選択パネル（選ぶのは出した人だけ。ほかの人は待つ） */
+function buildDaifugoPendingPanel(room, game, pending) {
+  const panel = document.createElement("div");
+  panel.className = "daifugo-pending";
+  const owner = (game.players || []).find((p) => p.uid === pending.uid);
+  const mine = pending.uid === currentUser?.uid;
+  const label = { seven: "7渡し", ten: "10捨て", qbomb: "Qボンバー" }[pending.type] || "";
+
+  const title = document.createElement("div");
+  title.className = "daifugo-pending-title";
+  title.textContent = mine ? `✨ ${label}` : `✨ ${owner?.name || "プレイヤー"}さんが ${label} を選んでいます…`;
+  panel.appendChild(title);
+  if (!mine) return panel;
+
+  if (pending.type === "qbomb") {
+    const note = document.createElement("div");
+    note.textContent = "宣言する数字を選んでください（ほかの人はその数字を全部捨てます）";
+    panel.appendChild(note);
+    const grid = document.createElement("div");
+    grid.className = "daifugo-pending-grid";
+    for (let v = 3; v <= 15; v++) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "secondary-button";
+      b.textContent = DAIHUGO_RANK_LABELS[v];
+      b.addEventListener("click", () => resolveDaifugoPending(room.id, { value: v }));
+      grid.appendChild(b);
+    }
+    panel.appendChild(grid);
+    return panel;
+  }
+
+  const note = document.createElement("div");
+  note.textContent = pending.type === "seven"
+    ? `手札から ${pending.count}枚えらんで、次の人に渡します`
+    : `手札から ${pending.count}枚えらんで、捨てます`;
+  panel.appendChild(note);
+  const ok = document.createElement("button");
+  ok.type = "button";
+  ok.className = "primary-button";
+  ok.textContent = `${pending.type === "seven" ? "渡す" : "捨てる"}（${selectedDaifugoCards.length}/${pending.count}枚）`;
+  ok.disabled = selectedDaifugoCards.length !== pending.count;
+  ok.addEventListener("click", () => resolveDaifugoPending(room.id, { cardIds: [...selectedDaifugoCards] }));
+  panel.appendChild(ok);
+  return panel;
+}
+
 function renderDaifugoGame(container, room) {
   if (!container) return;
   const game = applyDaifugoRules(room.gameState || createInitialGameState("daifugo"));
@@ -9971,7 +10022,11 @@ function renderDaifugoGame(container, room) {
   wrapper.appendChild(field);
 
   const myHand = getMyDaifugoHand(room);
-  const isMyTurn = game.currentPlayerUid === currentUser?.uid && !game.winner;
+  const pending = game.pending || null;
+  const pendingMine = Boolean(pending && pending.uid === currentUser?.uid && pending.type !== "qbomb");
+  const isMyTurn = game.currentPlayerUid === currentUser?.uid && !game.winner && !pending;
+
+  if (pending) wrapper.appendChild(buildDaifugoPendingPanel(room, game, pending));
 
   const handTitleRow = document.createElement("div");
   handTitleRow.className = "daifugo-hand-title-row";
@@ -9994,7 +10049,7 @@ function renderDaifugoGame(container, room) {
   myHand.forEach((card) => {
     const isSelected = selectedDaifugoCards.includes(card.id);
     const button = buildDaifugoCardElement(card, isSelected, true);
-    button.disabled = !isMyTurn;
+    button.disabled = !isMyTurn && !pendingMine;
     button.addEventListener("click", () => { toggleDaifugoCard(card.id); renderCurrentGame(room); });
     hand.appendChild(button);
   });
@@ -10042,6 +10097,109 @@ function renderDaifugoGame(container, room) {
   container.appendChild(wrapper);
 }
 
+/* 上がった人の記録（順位・都落ち） */
+function finishDaifugoPlayer(game, players, uid, rules) {
+  const player = players.find((p) => p.uid === uid);
+  if (!player || player.finished) return;
+  const isFirstFinisher = !players.some((p) => p.finished && !p.fallen);
+  player.finished = true;
+  player.rank = getNextDaifugoRank(players);
+
+  /* 都落ち：前回の大富豪以外が最初に上がったら、前回の大富豪はその場で最下位 */
+  if (rules.miyakoOchi && isFirstFinisher && game.previousDaifugoUid && game.previousDaifugoUid !== uid) {
+    const fallenPlayer = players.find((p) => p.uid === game.previousDaifugoUid && !p.finished);
+    if (fallenPlayer) {
+      fallenPlayer.finished = true;
+      fallenPlayer.fallen = true;
+      fallenPlayer.rank = players.length;
+    }
+  }
+}
+
+/* 残りが1人以下になったらゲーム終了 */
+function settleDaifugoEnd(game, players, fallbackUid) {
+  const activePlayers = players.filter((p) => !p.finished);
+  if (activePlayers.length > 1) return false;
+  if (activePlayers.length === 1) {
+    activePlayers[0].finished = true;
+    activePlayers[0].rank = getNextDaifugoRank(players);
+  }
+  game.phase = "finished";
+  game.pending = null;
+  game.winner = players.find((p) => p.rank === 1)?.uid || fallbackUid || null;
+  return true;
+}
+
+/* 出したカードで起きる「あとから選ぶ」ルール（7渡し・10捨て・Qボンバー）。同時なら Q → 7 → 10 の順で1つだけ */
+function getDaifugoPendingAction(selected, handLeft, rules) {
+  const normal = selected.filter((c) => !c.isJoker);
+  if (rules.qBomber && normal.some((c) => c.value === 12)) return { type: "qbomb", count: 0 };
+  const sevens = normal.filter((c) => c.value === 7).length;
+  if (rules.sevenPass && sevens > 0 && handLeft > 0) return { type: "seven", count: Math.min(sevens, handLeft) };
+  const tens = normal.filter((c) => c.value === 10).length;
+  if (rules.tenDiscard && tens > 0 && handLeft > 0) return { type: "ten", count: Math.min(tens, handLeft) };
+  return null;
+}
+
+async function resolveDaifugoPending(roomId, payload) {
+  if (!currentUser) return;
+  const roomRef = doc(db, "gameRooms", roomId);
+
+  try {
+    await runTransaction(db, async (transaction) => {
+      const snapshot = await transaction.get(roomRef);
+      if (!snapshot.exists()) throw new Error("ROOM_NOT_FOUND");
+
+      const room = snapshot.data();
+      const game = applyDaifugoRules(room.gameState);
+      const pending = game?.pending;
+      if (!game || game.phase !== "playing" || !pending || pending.uid !== currentUser.uid) throw new Error("NO_PENDING");
+
+      const rules = getDaifugoRules(game);
+      const hands = game.hands || {};
+      const players = (game.players || []).map((p) => ({ ...p }));
+      game.players = players;
+      const myHand = Array.isArray(hands[currentUser.uid]) ? [...hands[currentUser.uid]] : [];
+
+      if (pending.type === "qbomb") {
+        const value = Number(payload?.value);
+        if (!Number.isInteger(value) || value < 3 || value > 15) throw new Error("BAD_SELECTION");
+        players.forEach((p) => {
+          if (p.finished || p.uid === currentUser.uid) return;
+          hands[p.uid] = (hands[p.uid] || []).filter((c) => c.isJoker || c.value !== value);
+          if (hands[p.uid].length === 0) finishDaifugoPlayer(game, players, p.uid, rules);
+        });
+        game.lastBomb = { by: currentUser.uid, value };
+      } else {
+        const ids = Array.isArray(payload?.cardIds) ? payload.cardIds : [];
+        const chosen = myHand.filter((c) => ids.includes(c.id));
+        if (ids.length !== pending.count || chosen.length !== pending.count) throw new Error("BAD_SELECTION");
+        hands[currentUser.uid] = myHand.filter((c) => !ids.includes(c.id));
+        if (pending.type === "seven") {
+          const toUid = findNextDaifugoPlayer(room, game, currentUser.uid);
+          if (toUid !== currentUser.uid) hands[toUid] = [...(hands[toUid] || []), ...chosen];
+          else hands[currentUser.uid] = [...hands[currentUser.uid], ...chosen];
+        }
+        if (hands[currentUser.uid].length === 0) finishDaifugoPlayer(game, players, currentUser.uid, rules);
+      }
+
+      game.hands = hands;
+      game.pending = null;
+      if (!settleDaifugoEnd(game, players, currentUser.uid)) {
+        const current = players.find((p) => p.uid === game.currentPlayerUid);
+        if (!current || current.finished) game.currentPlayerUid = findNextDaifugoPlayer(room, game, game.currentPlayerUid);
+      }
+
+      transaction.update(roomRef, { gameState: game, updatedAt: serverTimestamp() });
+    });
+    selectedDaifugoCards = [];
+  } catch (error) {
+    console.error("大富豪の選択エラー:", error);
+    if (error.message === "BAD_SELECTION") alert("選び方が正しくありません。");
+    else if (error.message !== "ROOM_NOT_FOUND" && error.message !== "NO_PENDING") alert("処理できませんでした。");
+  }
+}
+
 async function playDaifugoCards(roomId) {
   if (!currentUser) return;
   if (isGameUnderMaintenance("daifugo")) return alert(GAME_MAINTENANCE_ALERT);
@@ -10057,6 +10215,7 @@ async function playDaifugoCards(roomId) {
       const room = snapshot.data();
       const game = applyDaifugoRules(room.gameState);
       if (!game || game.phase !== "playing") throw new Error("GAME_FINISHED");
+      if (game.pending) throw new Error("PENDING");
       if (game.currentPlayerUid !== currentUser.uid) throw new Error("NOT_YOUR_TURN");
 
       const hands = game.hands || {};
@@ -10087,19 +10246,7 @@ async function playDaifugoCards(roomId) {
       const myPlayer = players.find((p) => p.uid === currentUser.uid);
 
       if (hands[currentUser.uid].length === 0 && myPlayer && !myPlayer.finished) {
-        const isFirstFinisher = !players.some((p) => p.finished && !p.fallen);
-        myPlayer.finished = true;
-        myPlayer.rank = getNextDaifugoRank(players);
-
-        /* 都落ち：前回の大富豪以外が最初に上がったら、前回の大富豪はその場で最下位 */
-        if (rules.miyakoOchi && isFirstFinisher && game.previousDaifugoUid && game.previousDaifugoUid !== currentUser.uid) {
-          const fallenPlayer = players.find((p) => p.uid === game.previousDaifugoUid && !p.finished);
-          if (fallenPlayer) {
-            fallenPlayer.finished = true;
-            fallenPlayer.fallen = true;
-            fallenPlayer.rank = players.length;
-          }
-        }
+        finishDaifugoPlayer(game, players, currentUser.uid, rules);
       }
 
       game.hands = hands;
@@ -10113,14 +10260,7 @@ async function playDaifugoCards(roomId) {
       if (rules.suitLock) updateDaifugoLock(game, selected, previousCards);
       else game.lockSuit = null;
 
-      const activePlayers = players.filter((p) => !p.finished);
-      if (activePlayers.length <= 1) {
-        if (activePlayers.length === 1) {
-          activePlayers[0].finished = true;
-          activePlayers[0].rank = getNextDaifugoRank(players);
-        }
-        game.phase = "finished";
-        game.winner = players.find((p) => p.rank === 1)?.uid || myPlayer?.uid || null;
+      if (settleDaifugoEnd(game, players, myPlayer?.uid)) {
       } else if (isEightCut || isSpade3Return) {
         /* 場を流して、出した人からもう一度（上がっていたら次の人） */
         clearDaifugoTable(game);
@@ -10133,6 +10273,12 @@ async function playDaifugoCards(roomId) {
         game.currentPlayerUid = nextUid;
       }
 
+      /* 7渡し・10捨て・Qボンバー：出した人があとからカードを選ぶ */
+      if (game.phase === "playing" && !myPlayer?.finished) {
+        const action = getDaifugoPendingAction(selected, hands[currentUser.uid].length, rules);
+        if (action) game.pending = { ...action, uid: currentUser.uid };
+      }
+
       transaction.update(roomRef, { gameState: game, updatedAt: serverTimestamp() });
     });
 
@@ -10140,6 +10286,7 @@ async function playDaifugoCards(roomId) {
   } catch (error) {
     console.error("大富豪エラー:", error);
     if (error.message === "NOT_YOUR_TURN") alert("今はあなたの番ではありません。");
+    else if (error.message === "PENDING") alert("先に、7渡し・10捨て・Qボンバーの処理を終えてください。");
     else if (error.message === "INVALID_COMBINATION") alert("そのカードの組み合わせは出せません。");
     else if (error.message === "GAME_FINISHED") alert("このゲームは終了しています。");
     else if (error.message !== "ROOM_NOT_FOUND") alert("カードを出せませんでした。");
@@ -10159,6 +10306,7 @@ async function passDaifugoTurn(roomId) {
       const room = snapshot.data();
       const game = applyDaifugoRules(room.gameState);
       if (!game || game.currentPlayerUid !== currentUser.uid) throw new Error("NOT_YOUR_TURN");
+      if (game.pending) throw new Error("PENDING");
       if (!(game.lastPlayedCards || []).length) throw new Error("CANNOT_PASS");
 
       const players = game.players || [];
