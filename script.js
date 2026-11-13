@@ -4119,7 +4119,7 @@ function lazyCaller(mod, name) {
 const adminCfg = () => ({ callAdmin: (action, payload) => callAdminApi(action, payload), isAdmin: () => isAdminUser(), esc: (v) => escapeHTML(v) });
 
 /* 🎡 ゆうワールド（ゆうスロ）。トークン・ユーザー名・最上位管理者かどうかは呼ばれた時点の状態を使う */
-const lazyYuWorld = lazyModule("./yuworld.js?v=20261112-all1", (m) => m.initYuWorld({
+const lazyYuWorld = lazyModule("./yuworld.js?v=20261113-df1", (m) => m.initYuWorld({
   openGame: (type) => openGameFromWorld(type),
   pendingInviteTypes: () => pendingGameInvites.map((invite) => invite.gameType),
   endpoint: NOTIFY_ENDPOINT.replace(/\/notify$/, "/yuslot"),
@@ -7910,14 +7910,14 @@ function getMaxGamePlayers(type) {
 
 /* =========================================================
    ゲームの緊急メンテナンス
-   ・DAIFUGO_MAINTENANCE が true の間、大富豪は「新しいルーム作成・参加・ゲーム開始・カードを出す／パス・ルール変更」ができない
+   ・（2026-11 に解除済み）DAIFUGO_MAINTENANCE が true の間、大富豪は「新しいルーム作成・参加・ゲーム開始・カードを出す／パス・ルール変更」ができない
      （画面の表示だけでなく、それぞれの処理の入口でも止める）
    ・すでにあるルームと対局のデータ・履歴は消さない。参加中の人はルームを開いて「ルームを閉じる」（退出）だけできる
    ・オセロ・将棋・チャットなど、ほかの機能には影響しない
    ・メンテナンスを終えるときは DAIFUGO_MAINTENANCE を false にする
 ========================================================= */
 
-const DAIFUGO_MAINTENANCE = true;
+const DAIFUGO_MAINTENANCE = false;
 
 function isGameUnderMaintenance(type) {
   return DAIFUGO_MAINTENANCE && type === "daifugo";
@@ -8766,7 +8766,8 @@ function getOthelloValidMoves(board, color) {
   return moves;
 }
 
-function getOthelloWinner(board) {
+/* 盤が埋まったら枚数の多い方の勝ち。埋まっていなくても、手番の人が置ける場所がなければ「詰み」でその人の負け */
+function getOthelloWinner(board, nextColor) {
   let black = 0, white = 0;
   board.forEach((row) => row.forEach((cell) => {
     if (cell === "black") black++;
@@ -8774,10 +8775,12 @@ function getOthelloWinner(board) {
   }));
 
   const full = board.every((row) => row.every((cell) => cell !== null));
-  const blackMoves = getOthelloValidMoves(board, "black");
-  const whiteMoves = getOthelloValidMoves(board, "white");
-
-  if (!full && (blackMoves.length > 0 || whiteMoves.length > 0)) return null;
+  if (!full) {
+    if (nextColor && getOthelloValidMoves(board, nextColor).length === 0) {
+      return nextColor === "black" ? "white" : "black";
+    }
+    if (getOthelloValidMoves(board, "black").length > 0 || getOthelloValidMoves(board, "white").length > 0) return null;
+  }
   if (black > white) return "black";
   if (white > black) return "white";
   return "draw";
@@ -8811,6 +8814,8 @@ function getOthelloResultSummary(state, room, board) {
     };
   }
 
+  const loserColor = winner === "black" ? "white" : "black";
+  const stuck = black + white < 64 && getOthelloValidMoves(board, loserColor).length === 0;
   const winnerName = names[winner] ? `（${names[winner]}）` : "";
   const winnerLabel = `${colorText[winner] || ""}${winnerName}の勝ち`;
   const margin = diff > 0 ? `・${diff}枚差` : "";
@@ -8819,13 +8824,13 @@ function getOthelloResultSummary(state, room, board) {
     return {
       tone: iWon ? "win" : "lose", black, white, names, myColor, winner, diff,
       headline: iWon ? "🎉 あなたの勝ち！" : "😢 相手の勝ち",
-      detail: iWon ? `${winnerLabel}${diff > 0 ? `・${diff}枚差で勝ちました` : ""}` : `${winnerLabel}${diff > 0 ? `・${diff}枚差で負けました` : ""}`
+      detail: stuck ? (iWon ? "相手は置ける場所がなく詰み。あなたの勝ち" : "置ける場所がなくなり詰み。負けです") : (iWon ? `${winnerLabel}${diff > 0 ? `・${diff}枚差で勝ちました` : ""}` : `${winnerLabel}${diff > 0 ? `・${diff}枚差で負けました` : ""}`)
     };
   }
   return {
     tone: "neutral", black, white, names, myColor, winner, diff,
     headline: `🏆 ${winnerLabel}！`,
-    detail: `${winnerLabel}${margin}`
+    detail: stuck ? `${winnerLabel}（${colorText[loserColor]}は置ける場所がなく詰み）` : `${winnerLabel}${margin}`
   };
 }
 
@@ -8963,16 +8968,9 @@ async function playOthelloMove(room, row, col) {
       newBoard[row][col] = playerColor;
       flips.forEach(([r, c]) => { newBoard[r][c] = playerColor; });
 
-      let nextPlayer = playerColor === "black" ? "white" : "black";
-
-      /* 次の人が置けない場合はさらに手番を回す */
-      if (getOthelloValidMoves(newBoard, nextPlayer).length === 0) {
-        if (getOthelloValidMoves(newBoard, playerColor).length > 0) {
-          nextPlayer = playerColor;
-        }
-      }
-
-      const winner = getOthelloWinner(newBoard);
+      /* 次の人が置けなければ詰み（その人の負け） */
+      const nextPlayer = playerColor === "black" ? "white" : "black";
+      const winner = getOthelloWinner(newBoard, nextPlayer);
 
       transaction.update(roomRef, {
         gameState: gameStateToFirestore("othello", { ...state, board: newBoard, currentPlayer: nextPlayer, started: true, winner }),
@@ -9519,6 +9517,7 @@ function applyDaifugoRules(state) {
   if (!state) return state;
   if (typeof state.revolution !== "boolean") state.revolution = false;
   if (typeof state.elevenBack !== "boolean") state.elevenBack = false;
+  if (state.direction !== 1 && state.direction !== -1) state.direction = 1;
   if (!("lockSuit" in state)) state.lockSuit = null;
   if (!Array.isArray(state.passedPlayers)) state.passedPlayers = [];
   return state;
@@ -9530,12 +9529,15 @@ function applyDaifugoRules(state) {
 
 const DAIFUGO_DEFAULT_RULES = {
   revolution: true, eightCut: true, elevenBack: true, suitLock: true,
-  sequence: true, joker: true, spade3: false, miyakoOchi: false
+  sequence: true, joker: true, spade3: false, miyakoOchi: false,
+  stairRevolution: false, fiveSkip: false, nineReverse: false, noEightFinish: false, noJokerFinish: false
 };
 
 const DAIFUGO_RULE_LABELS = {
   revolution: "革命", eightCut: "8切り", elevenBack: "11バック", suitLock: "しばり",
-  sequence: "階段", joker: "ジョーカー", spade3: "スペ3返し", miyakoOchi: "都落ち"
+  sequence: "階段", joker: "ジョーカー", spade3: "スペ3返し", miyakoOchi: "都落ち",
+  stairRevolution: "階段革命（5枚以上の階段で革命）", fiveSkip: "5スキップ（次の人を飛ばす）", nineReverse: "9リバース（回る向きが逆）",
+  noEightFinish: "8上がり禁止（8で上がれない）", noJokerFinish: "ジョーカー上がり禁止"
 };
 
 function getDaifugoRules(source) {
@@ -9749,9 +9751,18 @@ function isDaifugoEightCut(cards) {
   return cards.some((c) => !c.isJoker && c.value === 8);
 }
 
-function canPlayDaifugoSelection(selectedCards, game) {
+/* 反則上がり：最後の手札を出して上がるときに、禁止されたカードを含んでいたら出せない */
+function isDaifugoForbiddenFinish(selectedCards, handSize, rules) {
+  if (selectedCards.length !== handSize) return false;
+  if (rules.noEightFinish && isDaifugoEightCut(selectedCards)) return true;
+  if (rules.noJokerFinish && selectedCards.some((c) => c.isJoker)) return true;
+  return false;
+}
+
+function canPlayDaifugoSelection(selectedCards, game, handSize = Infinity) {
   if (!selectedCards.length || !game) return false;
   const rules = getDaifugoRules(game);
+  if (isDaifugoForbiddenFinish(selectedCards, handSize, rules)) return false;
   if (!canUseDaifugoSuitLock(selectedCards, game)) return false;
 
   const type = getDaifugoCombinationType(selectedCards, rules);
@@ -9802,7 +9813,8 @@ function findNextDaifugoPlayer(room, game, fromUid) {
   const fromIndex = memberUids.indexOf(fromUid);
 
   for (let i = 1; i <= memberUids.length; i++) {
-    const idx = (fromIndex + i) % memberUids.length;
+    const step = game.direction === -1 ? -i : i;
+    const idx = (((fromIndex + step) % memberUids.length) + memberUids.length) % memberUids.length;
     const uid = memberUids[idx];
     const player = players.find((p) => p.uid === uid);
     if (player && !player.finished) return uid;
@@ -9814,6 +9826,7 @@ function getDaifugoRuleStatus(game) {
   const status = [];
   if (game.revolution) status.push("🔄 革命");
   if (game.elevenBack) status.push("↩️ 11バック");
+  if (game.direction === -1) status.push("🔁 逆回り");
   if (game.lockSuit) status.push(`🔒 ${game.lockSuit}縛り`);
   return status.length ? status.join("　") : "通常状態";
 }
@@ -10056,13 +10069,16 @@ async function playDaifugoCards(roomId) {
       const previousCards = Array.isArray(game.lastPlayedCards) ? [...game.lastPlayedCards] : [];
 
       /* 8切りも含めて、出せる組み合わせかを必ず確認する */
-      if (!canPlayDaifugoSelection(selected, game)) {
+      if (!canPlayDaifugoSelection(selected, game, myHand.length)) {
         throw new Error("INVALID_COMBINATION");
       }
 
       const isEightCut = rules.eightCut && isDaifugoEightCut(selected);
       const isSpade3Return = isDaifugoSpade3Return(selected, previousCards, rules);
-      const isRevolution = rules.revolution && selected.length >= 4 && areSameDaifugoValue(selected);
+      const isRevolution = (rules.revolution && selected.length >= 4 && areSameDaifugoValue(selected))
+        || (rules.stairRevolution && selected.length >= 5 && getDaifugoCombinationType(selected, rules) === "sequence");
+      const isFiveSkip = rules.fiveSkip && selected.some((c) => !c.isJoker && c.value === 5);
+      const isNineReverse = rules.nineReverse && selected.some((c) => !c.isJoker && c.value === 9);
       const isElevenBack = rules.elevenBack && selected.some((c) => !c.isJoker && c.value === 11);
 
       hands[currentUser.uid] = myHand.filter((card) => !selectedDaifugoCards.includes(card.id));
@@ -10093,6 +10109,7 @@ async function playDaifugoCards(roomId) {
 
       if (isRevolution) game.revolution = !game.revolution;
       if (isElevenBack) game.elevenBack = !game.elevenBack;
+      if (isNineReverse) game.direction = game.direction === -1 ? 1 : -1;
       if (rules.suitLock) updateDaifugoLock(game, selected, previousCards);
       else game.lockSuit = null;
 
@@ -10109,7 +10126,11 @@ async function playDaifugoCards(roomId) {
         clearDaifugoTable(game);
         game.currentPlayerUid = myPlayer?.finished ? findNextDaifugoPlayer(room, game, currentUser.uid) : currentUser.uid;
       } else {
-        game.currentPlayerUid = findNextDaifugoPlayer(room, game, currentUser.uid);
+        let nextUid = findNextDaifugoPlayer(room, game, currentUser.uid);
+        if (isFiveSkip) nextUid = findNextDaifugoPlayer(room, game, nextUid);
+        /* 全員を飛ばして出した人に戻ってきたら、場を流してもう一度 */
+        if (nextUid === currentUser.uid && !myPlayer?.finished) clearDaifugoTable(game);
+        game.currentPlayerUid = nextUid;
       }
 
       transaction.update(roomRef, { gameState: game, updatedAt: serverTimestamp() });
