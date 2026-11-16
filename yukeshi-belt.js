@@ -7,13 +7,35 @@
      買えるかどうかは、Worker（keshiBeltBuy）が、種の署名と時刻とパーツを確かめて決める。
    ・いまは管理者だけが使える（Worker が確かめる）。
 ========================================================= */
-import { keshiStatsView, keshiPunchView, keshiBeltItemView } from "./yukeshi-core.js?v=20261116-belt2";
+import { keshiStatsView, keshiPunchView, keshiBeltItemView } from "./yukeshi-core.js?v=20261116-belt3";
 
 const SLOT_NAMES = { body: "本体", edge: "ふち", sole: "そこ", weight: "おもり" };
-const SLOT_ICONS = { body: "🧽", edge: "🖼️", sole: "👟", weight: "⚖️" };
 const STAT_NAMES = [["m", "重さ"], ["s", "すべり"], ["b", "反発"], ["z", "大きさ"]];
 const RARITY = { N: "ふつう", R: "レア", SR: "スーパーレア", UR: "ウルトラレア" };
 const CARD_W = 104;
+
+/* パーツの見た目（ベルトの上に置いてあるように、パーツだけを描く。ふちは、中が空洞の枠だけ） */
+const LOOK = {
+  body: { plain: "#f4f1ea", sponge: "#ffd84a", sand: "#b8b2a4", pro: "#fde7ee", titan: "#d2d6dc", carbon: "#2b2e34", diamond: "#cdf3ff", meteor: "#5a4640", ltd: "#7fa3d6" },
+  edge: { paper: "#ffffff", plastic: "#9fd8ff", band: "#d8262a", metal: "#b9c0c8", crystal: "#66d0ff", titanf: "#c9ced6", mithril: "#bcd8ff", aurora: "url(#ybAur)", ltd: "#ffc933" },
+  sole: { tape: "#f4d20a", wax: "#fff1c9", teflon: "#1c1c20", air: "#c4ecff", hover: "#c8ffdc", linear: "#8ccaff", zero: "#f4fbff", ltd: "#ff7a45" },
+  weight: { coin: "#d9a233", bolt: "#aab0b8", lead: "#4a4d54", gold: "#ffc933", tungsten: "#6b6f78", platinum: "#e6edf2", neutron: "#9ad0ff", ltd: "#5fe6cf" }
+};
+function partSvg(slot, id) {
+  const c = (LOOK[slot] && LOOK[slot][id]) || "#ddd", rim = "stroke=\"rgba(0,0,0,.35)\" stroke-width=\"1.5\"";
+  const defs = `<defs><linearGradient id="ybAur" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7affd4"/><stop offset=".5" stop-color="#b57aff"/><stop offset="1" stop-color="#ff7ac8"/></linearGradient><radialGradient id="ybShine" cx=".3" cy=".25" r=".8"><stop offset="0" stop-color="#fff" stop-opacity=".75"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient></defs>`;
+  let g = "";
+  if (slot === "body") g = `<rect x="8" y="14" width="72" height="34" rx="9" fill="${c}" ${rim}/><rect x="8" y="14" width="72" height="34" rx="9" fill="url(#ybShine)"/>${id === "sponge" || id === "sand" || id === "meteor" ? [[20, 24], [34, 38], [50, 26], [62, 40], [44, 20], [26, 42]].map(([x, y]) => `<circle cx="${x}" cy="${y}" r="2" fill="rgba(0,0,0,.28)"/>`).join("") : ""}`;
+  else if (slot === "edge") g = id === "band"
+    ? `<rect x="8" y="12" width="9" height="38" rx="3" fill="${c}" ${rim}/><rect x="71" y="12" width="9" height="38" rx="3" fill="${c}" ${rim}/>`
+    : `<rect x="9" y="13" width="70" height="36" rx="8" fill="none" stroke="rgba(0,0,0,.3)" stroke-width="12"/><rect x="9" y="13" width="70" height="36" rx="8" fill="none" stroke="${c}" stroke-width="9" ${id === "plastic" || id === "crystal" ? "opacity=\".8\"" : ""}/>`;
+  else if (slot === "sole") g = `<rect x="6" y="26" width="76" height="9" rx="4" fill="${c}" ${rim}/><rect x="6" y="26" width="76" height="9" rx="4" fill="url(#ybShine)"/>`;
+  else g = id === "coin" ? `<circle cx="44" cy="31" r="17" fill="${c}" ${rim}/><circle cx="44" cy="31" r="11" fill="none" stroke="rgba(0,0,0,.25)" stroke-width="2"/>`
+    : id === "bolt" ? `<polygon points="44,12 60,21 60,41 44,50 28,41 28,21" fill="${c}" ${rim}/><circle cx="44" cy="31" r="6" fill="rgba(0,0,0,.3)"/>`
+    : id === "neutron" ? `<circle cx="44" cy="31" r="19" fill="${c}" ${rim}/><circle cx="44" cy="31" r="19" fill="url(#ybShine)"/><circle cx="44" cy="31" r="26" fill="none" stroke="#9ad0ff" stroke-opacity=".5" stroke-width="3"/>`
+    : `<rect x="22" y="16" width="44" height="30" rx="5" fill="${c}" ${rim}/><rect x="22" y="16" width="44" height="30" rx="5" fill="url(#ybShine)"/>`;
+  return `<svg class="yb-art" viewBox="0 0 88 62" aria-hidden="true">${defs}${g}</svg>`;
+}
 let run = 0, stylesDone = false;
 
 export function stopBelt() { run++; }
@@ -52,7 +74,7 @@ export function renderBelt(c) {
   function makeCard(it) {
     const el = document.createElement("button");
     el.type = "button"; el.className = `yb-card ${it.rarity}`;
-    el.innerHTML = `<span class="pr">${yen(it.price)}</span><span class="plate"><span class="ico">${SLOT_ICONS[it.slot]}</span></span><span class="nm">${esc(it.name)}</span><span class="rr">${it.rarity === "N" ? SLOT_NAMES[it.slot] : `${RARITY[it.rarity]}`}</span>`;
+    el.innerHTML = `<span class="pr">${yen(it.price)}</span><span class="plate">${partSvg(it.slot, it.id)}</span><span class="nm">${esc(it.name)}</span><span class="rr">${it.rarity === "N" ? SLOT_NAMES[it.slot] : `${RARITY[it.rarity]}`}</span>`;
     el.addEventListener("click", () => openSheet(it));
     return el;
   }
@@ -91,7 +113,7 @@ export function renderBelt(c) {
     const row = (label, x, y) => { const d = Math.round((y - x) * 10) / 10; return `<div class="yb-st"><span>${label}</span><b>${x}</b><i>→</i><b>${y}</b><em class="${d > 0 ? "up" : d < 0 ? "down" : ""}">${d ? (d > 0 ? "▲" : "▼") + Math.abs(d) : ""}</em></div>`; };
     const el = document.createElement("div");
     el.className = "yb-sheet";
-    el.innerHTML = `<div class="yb-box ${it.rarity}"><div class="yb-rar">${RARITY[it.rarity]}</div><h3>${SLOT_ICONS[it.slot]} ${esc(it.name)}</h3>
+    el.innerHTML = `<div class="yb-box ${it.rarity}"><div class="yb-rar">${RARITY[it.rarity]}</div><div class="yb-look ${it.rarity}">${partSvg(it.slot, it.id)}</div><h3>${esc(it.name)}</h3>
       <p class="yb-d">${SLOT_NAMES[it.slot]}のパーツ　${esc(it.desc)}<br>効き目：${esc(fx)}</p>
       <div class="yb-cmp"><b>いま付けている消しゴムに付けたら</b>
         ${STAT_NAMES.map(([k, l]) => row(l, a[k], b[k])).join("")}
@@ -134,20 +156,21 @@ function injectStyles() {
   .yb-load { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; }
   .yb-card { position: absolute; left: 0; top: 14px; width: ${CARD_W}px; padding: 0; border: none; background: none; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 2px; will-change: transform; -webkit-tap-highlight-color: transparent; }
   .yb-card .pr { background: #fff; color: #b45309; font-weight: 900; font-size: 13px; border-radius: 999px; padding: 2px 9px; box-shadow: 0 2px 0 rgba(0,0,0,.25); }
-  .yb-card .plate { width: 84px; height: 84px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: radial-gradient(circle at 35% 30%, #fff, #e9e4d6 70%); box-shadow: 0 4px 8px rgba(0,0,0,.4), inset 0 0 0 5px #fff, inset 0 0 0 7px #d8d1bf; }
-  .yb-card .ico { font-size: 38px; }
+  .yb-card .plate { width: 92px; height: 70px; display: flex; align-items: center; justify-content: center; }
+  .yb-art { width: 92px; height: 65px; filter: drop-shadow(0 4px 3px rgba(0,0,0,.55)); }
   .yb-card .nm { color: #fff; font-weight: 800; font-size: 11.5px; line-height: 1.2; text-align: center; text-shadow: 0 1px 2px #000; max-width: ${CARD_W}px; }
   .yb-card .rr { font-size: 10px; font-weight: 800; color: #ddd; text-shadow: 0 1px 2px #000; }
-  .yb-card.R .plate { box-shadow: 0 4px 8px rgba(0,0,0,.4), inset 0 0 0 5px #bfe3ff, inset 0 0 0 7px #4aa0e0, 0 0 14px #4aa0e0; } .yb-card.R .rr { color: #8fd0ff; }
-  .yb-card.SR .plate { box-shadow: 0 4px 8px rgba(0,0,0,.4), inset 0 0 0 5px #e6d2ff, inset 0 0 0 7px #8a4ae0, 0 0 18px #a56bff; } .yb-card.SR .rr { color: #cfa8ff; }
-  .yb-card.UR .plate { background: radial-gradient(circle at 35% 30%, #fff6c8, #ffd04a 75%); box-shadow: 0 4px 8px rgba(0,0,0,.4), inset 0 0 0 5px #fff0a8, inset 0 0 0 7px #e0a000, 0 0 24px #ffcf33; animation: yb-glow 1.2s ease-in-out infinite; } .yb-card.UR .rr { color: #ffd966; }
-  @keyframes yb-glow { 0%, 100% { filter: brightness(1); } 50% { filter: brightness(1.25); } }
-  @media (prefers-reduced-motion: reduce) { .yb-card.UR .plate { animation: none; } }
+  .yb-card.R .art, .yb-card.R .yb-art { filter: drop-shadow(0 0 6px #4aa0e0) drop-shadow(0 4px 3px rgba(0,0,0,.55)); } .yb-card.R .rr { color: #8fd0ff; }
+  .yb-card.SR .yb-art { filter: drop-shadow(0 0 8px #a56bff) drop-shadow(0 4px 3px rgba(0,0,0,.55)); } .yb-card.SR .rr { color: #cfa8ff; }
+  .yb-card.UR .yb-art { filter: drop-shadow(0 0 10px #ffcf33) drop-shadow(0 4px 3px rgba(0,0,0,.55)); animation: yb-glow 1.2s ease-in-out infinite; } .yb-card.UR .rr { color: #ffd966; }
+  @keyframes yb-glow { 0%, 100% { filter: drop-shadow(0 0 6px #ffcf33) drop-shadow(0 4px 3px rgba(0,0,0,.55)); } 50% { filter: drop-shadow(0 0 16px #ffe27a) drop-shadow(0 4px 3px rgba(0,0,0,.55)); } }
+  @media (prefers-reduced-motion: reduce) { .yb-card.UR .yb-art { animation: none; } }
   .yb-legend { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; font-size: 11.5px; font-weight: 800; } .yb-legend span { border-radius: 999px; padding: 2px 10px; background: #eee; color: #444; }
   .yb-legend .R { background: #dff0ff; color: #14507a; } .yb-legend .SR { background: #eadfff; color: #5a2aa0; } .yb-legend .UR { background: #fff0b8; color: #7a5200; }
   .yb-msg { font-size: 13px; line-height: 1.7; color: #2c6a3a; min-height: 20px; }
   .yb-sheet { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; z-index: 60; padding: 16px; }
   .yb-box { width: 100%; max-width: 380px; max-height: 92vh; overflow: auto; background: #fff; border-radius: 16px; padding: 16px; border-top: 8px solid #bbb; } .yb-box.R { border-color: #4aa0e0; } .yb-box.SR { border-color: #8a4ae0; } .yb-box.UR { border-color: #e0a000; }
+  .yb-look { display: flex; justify-content: center; margin: 4px 0; background: repeating-linear-gradient(90deg, #5b4a3a 0 22px, #4c3d30 22px 44px); border-radius: 10px; padding: 6px 0; } .yb-look .yb-art { width: 120px; height: 85px; }
   .yb-rar { font-size: 11.5px; font-weight: 900; color: #777; } .yb-box h3 { margin: 2px 0 6px; font-size: 18px; } .yb-d { font-size: 12.5px; line-height: 1.7; color: #555; margin: 0 0 8px; }
   .yb-cmp { background: #fff8e8; border-radius: 10px; padding: 8px 10px; font-size: 13px; } .yb-cmp > b { display: block; margin-bottom: 4px; font-size: 12.5px; }
   .yb-st { display: grid; grid-template-columns: 64px 1fr 18px 1fr 44px; gap: 4px; align-items: center; padding: 2px 0; text-align: center; } .yb-st span { text-align: left; } .yb-st i { font-style: normal; color: #999; }
