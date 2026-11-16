@@ -18,8 +18,8 @@ import { renderLottery, stopLottery } from "./yulottery.js?v=20261027-draw1";
 import { renderBankuji, stopBankuji, BANKUJI_SALE_MS } from "./yubankuji.js?v=20261027-pass1";
 import { renderYacht, stopYacht } from "./yuyacht.js?v=20261026-yacht6";
 import { renderBilliards, stopBilliards } from "./yubilliards.js?v=20261112-all1";
-import { renderKeshi, stopKeshi } from "./yukeshi.js?v=20261116-belt1";
-import { eraserIcon, keshiLeagueTag } from "./yukeshi-core.js?v=20261106-fair1";
+import { renderKeshi, stopKeshi } from "./yukeshi.js?v=20261116-belt2";
+import { eraserIcon, keshiLeagueTag } from "./yukeshi-core.js?v=20261116-belt2";
 /* 🌈 確変台のパネル（台の一覧の上）。抽選・先着・通知設定。Worker の kaku* アクションを呼んで表示するだけ */
 import { kakuInit, kakuPanelHtml, kakuBind, kakuMachineInfo, startKaku, stopKaku, refreshKaku } from "./yukaku.js?v=20261027-move2";
 /* ⭐ サポーター：確変台の見た目と当たり演出（自分の画面だけ。当たりやすさ・結果には関わらない） */

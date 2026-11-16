@@ -6641,47 +6641,55 @@ async function keshiBuyMany(deps, uid, body) {
 }
 /* =========================================================
    🍣 パーツを探す（回転寿司のベルトコンベア）
-   ・12秒ごとに1つ、パーツが流れてきて、50秒かけて端まで流れると消える。流れてくるパーツは、時刻だけで決まる（だれが見ても同じ。保存も読み取りもなし）。
+   ・12秒ごとに1つ、パーツが流れてきて、50秒かけて端まで流れると消える。流れてくるパーツは、端末ごとの種と時刻で、端末の中で決まる（端末ごとに違う。サーバーは、開くときに種を1つ渡すだけ。保存も読み取りもなし）。
    ・ほとんどは、ショップにあるふつうのパーツ。ときどき、レア（R）・スーパーレア（SR）・ウルトラレア（UR）の、高くて強いパーツ（ここでしか買えない）が流れる。
-   ・買えるのは、いま流れているパーツだけ（買うときに、サーバーが、その時刻のパーツかどうかを確かめる）。買っただけでは付けない（付けるのは、改造の画面）。
+   ・買えるのは、いま流れているパーツだけ（買うときに、サーバーが、種の署名と、その時刻のパーツかどうかを確かめる）。買っただけでは付けない（付けるのは、改造の画面）。
    ・いまは最上位管理者だけが使える。
 ========================================================= */
-export const KESHI_BELT = { tickMs: 12000, travelMs: 50000, aheadMs: 90000, graceMs: 3000, rates: { UR: 0.02, SR: 0.06, R: 0.16 } };
-function keshiHash01(k, salt) {
-  let h = (Math.imul(k | 0, 2654435761) ^ Math.imul(salt | 0, 40503)) >>> 0;
+export const KESHI_BELT = { tickMs: 12000, travelMs: 50000, tokenMs: 6 * 3600000, graceMs: 3000, rates: { UR: 0.02, SR: 0.06, R: 0.16 } };
+/* 流れるパーツは、端末ごとの「種」と時刻から決まる。種は、ベルトを開くときにサーバーが1つ渡す（署名つき）ので、端末ごとに流れるパーツが違う。
+   画面（yukeshi-core.js の keshiBeltItemView）も同じ計算をして、流れるパーツを端末の中で決める（毎回サーバーに聞かない）。
+   買うときは、種の署名・時刻・パーツが合っているかを、サーバーが確かめる */
+function keshiHash01(k, seed, n) {
+  let h = (Math.imul(k | 0, 2654435761) ^ Math.imul(((seed | 0) + n) | 0, 40503)) >>> 0;
   h = Math.imul(h ^ (h >>> 16), 2246822507) >>> 0;
   h = Math.imul(h ^ (h >>> 13), 3266489909) >>> 0;
   h = (h ^ (h >>> 16)) >>> 0;
   return h / 4294967296;
 }
 const keshiBeltPool = (rare) => KESHI_SLOTS.flatMap((slot) => KESHI_PARTS[slot].filter((p) => (rare ? p.rare === rare : p.price > 0 && !p.limited)).map((p) => ({ slot, p })));
-export function keshiBeltItem(tick) {
-  const r = keshiHash01(tick, 1), { UR, SR, R } = KESHI_BELT.rates;
+const keshiBeltPartPublic = ({ slot, p }) => ({ slot, id: p.id, name: p.name, price: p.price, m: p.m, s: p.s, b: p.b, z: p.z, desc: p.desc });
+export const keshiBeltPoolPublic = () => Object.fromEntries(["N", "R", "SR", "UR"].map((r) => [r, keshiBeltPool(r === "N" ? null : r).map(keshiBeltPartPublic)]));
+export function keshiBeltItem(seed, tick) {
+  const r = keshiHash01(tick, seed, 1), { UR, SR, R } = KESHI_BELT.rates;
   const rarity = r < UR ? "UR" : r < UR + SR ? "SR" : r < UR + SR + R ? "R" : "N";
   const pool = keshiBeltPool(rarity === "N" ? null : rarity);
-  const pick = pool[Math.min(pool.length - 1, Math.floor(keshiHash01(tick, 2) * pool.length))];
+  const pick = pool[Math.min(pool.length - 1, Math.floor(keshiHash01(tick, seed, 2) * pool.length))];
   return { tick, startMs: tick * KESHI_BELT.tickMs, slot: pick.slot, rarity, part: pick.p };
 }
-const keshiBeltPublic = (it) => ({ tick: it.tick, startMs: it.startMs, slot: it.slot, rarity: it.rarity, id: it.part.id, name: it.part.name, price: it.part.price, m: it.part.m, s: it.part.s, b: it.part.b, z: it.part.z, desc: it.part.desc });
 async function keshiBeltGate(deps, uid) {
   const g = await keshiGate(deps, uid);
   if (g) return g;
   return slotIsTopAdmin(deps, uid) ? null : { status: 403, error: "not_published" };
 }
+/* ベルトを開く：端末ごとの種（署名つき）と、流れるパーツの一覧・割合・速さを渡す。Firestore は読まない */
 async function keshiBelt(deps, uid) {
   const g = await keshiBeltGate(deps, uid);
   if (g) return g;
   const now = deps.now(), B = KESHI_BELT;
-  const items = [];
-  for (let k = Math.floor((now - B.travelMs) / B.tickMs); k <= Math.floor((now + B.aheadMs) / B.tickMs); k++) items.push(keshiBeltPublic(keshiBeltItem(k)));
-  return { ok: true, items, tickMs: B.tickMs, travelMs: B.travelMs, serverNowMs: now };
+  const seed = Math.floor((deps.random || Math.random)() * 4294967296) | 0, expiresMs = now + B.tokenMs;
+  const token = await slotSignSession({ k: "keshiBelt", u: uid, s: seed, e: expiresMs }, deps.slotSecret);
+  return { ok: true, token, seed, expiresMs, pool: keshiBeltPoolPublic(), rates: B.rates, tickMs: B.tickMs, travelMs: B.travelMs, serverNowMs: now };
 }
 async function keshiBeltBuy(deps, uid, body) {
   const g = await keshiBeltGate(deps, uid);
   if (g) return g;
   const tick = Number(body?.tick), slot = String(body?.slot || ""), id = String(body?.part || "");
   if (!Number.isInteger(tick)) return { status: 400, error: "bad_request" };
-  const it = keshiBeltItem(tick), now = deps.now();
+  const tk = await slotVerifySession(body?.token, deps.slotSecret), now = deps.now();
+  if (!tk || tk.k !== "keshiBelt" || tk.u !== uid || !Number.isInteger(tk.s)) return { status: 400, error: "bad_request" };
+  if (now > tk.e) return { status: 409, error: "expired" };
+  const it = keshiBeltItem(tk.s, tick);
   if (it.slot !== slot || it.part.id !== id) return { status: 400, error: "bad_request" };
   if (now < it.startMs || now >= it.startMs + KESHI_BELT.travelMs + KESHI_BELT.graceMs) return { status: 409, error: "gone" };   // もう流れていった（まだ流れてきていない）
   const part = it.part;

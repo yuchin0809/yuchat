@@ -3,10 +3,11 @@
    ・ベルトの右端から、パーツが次々に流れてきて、左端まで流れると消える。パーツの上に値段が書いてある。
    ・ふつうのパーツが多く、ときどき、レア（R）・スーパーレア（SR）・ウルトラレア（UR）の、高くて強いパーツが流れる。
    ・パーツをタップすると、付けたときの強さが出て、「買う」「買わない」を選べる。
-   ・何が流れるか・買えるかは、すべて Worker（keshiBelt / keshiBeltBuy）が決める。このファイルは、流れる様子を描くだけ。
+   ・何が流れるかは、端末ごとの種（ベルトを開くときに Worker（keshiBelt）が1つ渡す）と時刻から、この端末の中で決める（端末ごとに違う）。
+     買えるかどうかは、Worker（keshiBeltBuy）が、種の署名と時刻とパーツを確かめて決める。
    ・いまは管理者だけが使える（Worker が確かめる）。
 ========================================================= */
-import { keshiStatsView, keshiPunchView, eraserIcon } from "./yukeshi-core.js?v=20261106-fair1";
+import { keshiStatsView, keshiPunchView, keshiBeltItemView } from "./yukeshi-core.js?v=20261116-belt2";
 
 const SLOT_NAMES = { body: "本体", edge: "ふち", sole: "そこ", weight: "おもり" };
 const SLOT_ICONS = { body: "🧽", edge: "🖼️", sole: "👟", weight: "⚖️" };
@@ -22,7 +23,7 @@ export function renderBelt(c) {
   stopBelt();
   injectStyles();
   const my = run, esc = c.esc, root = c.root;
-  let st = c.st, table = c.table, busy = false, offset = 0, tickMs = 6000, travelMs = 60000, fetchedAt = 0;
+  let st = c.st, table = c.table, busy = false, offset = 0, B = null;
   const items = new Map(), els = new Map();
   const yen = (n) => `🪙 ${Number(n).toLocaleString("ja-JP")}`;
 
@@ -35,12 +36,12 @@ export function renderBelt(c) {
   $("#ybBack").addEventListener("click", () => { stopBelt(); c.onBack(); });
 
   const nowMs = () => Date.now() + offset;
-  async function refresh() {
+  async function open() {
     try {
       const r = await c.api("keshiBelt");
       if (my !== run) return;
-      offset = r.serverNowMs - Date.now(); tickMs = r.tickMs; travelMs = r.travelMs; fetchedAt = Date.now();
-      r.items.forEach((it) => items.set(it.tick, it));
+      offset = r.serverNowMs - Date.now(); B = r;
+      items.clear(); els.forEach((e) => e.remove()); els.clear();
       $("#ybLoad")?.remove();
     } catch (e) {
       if (my !== run) return;
@@ -56,13 +57,16 @@ export function renderBelt(c) {
     return el;
   }
 
+  const t0Expired = () => !busy && !root.querySelector(".yb-sheet") && nowMs() > B.expiresMs - 300000;   // 種の期限が近づいたら、シートを開いていないときに、新しい種をもらう
+
   function frame() {
     if (my !== run || !root.isConnected) return;
     const lane = $("#ybLane");
-    if (lane) {
+    if (lane && B) {
       const W = lane.clientWidth, t = nowMs();
+      for (let k = Math.floor((t - B.travelMs) / B.tickMs); k <= Math.floor(t / B.tickMs); k++) if (!items.has(k)) items.set(k, keshiBeltItemView(B.pool, B.rates, B.tickMs, B.seed, k));
       items.forEach((it, tick) => {
-        const p = (t - it.startMs) / travelMs;
+        const p = (t - it.startMs) / B.travelMs;
         if (p < 0 || p >= 1) {
           const old = els.get(tick); if (old) { old.remove(); els.delete(tick); }
           if (p >= 1) items.delete(tick);
@@ -73,7 +77,7 @@ export function renderBelt(c) {
         el.style.transform = `translateX(${(W - p * (W + CARD_W)).toFixed(1)}px)`;
       });
     }
-    if (fetchedAt && Date.now() - fetchedAt > 55000) { fetchedAt = Date.now(); refresh(); }
+    if (B && t0Expired()) { B = null; open(); }
     requestAnimationFrame(frame);
   }
 
@@ -101,21 +105,21 @@ export function renderBelt(c) {
       if (!e.target.hasAttribute("data-yes") || busy) return;
       busy = true; e.target.disabled = true;
       try {
-        const r = await c.api("keshiBeltBuy", { tick: it.tick, slot: it.slot, part: it.id });
+        const r = await c.api("keshiBeltBuy", { token: B.token, tick: it.tick, slot: it.slot, part: it.id });
         st = { ...st, ...r }; if (r.table) table = r.table;
         $("#ybCoins").textContent = yen(st.coins);
         el.remove();
         const m = $("#ybMsg"); if (m) m.innerHTML = `✅ <b>${esc(it.name)}</b> を買いました！（付けるときは「消しゴムの改造」の画面から）`;
       } catch (err) {
         const code = err && err.code;
-        const msg = { gone: "このパーツは、流れていってしまいました。", insufficient_coins: "コインが足りません。", already_owned: "もう持っています。", seated: "ゆうスロの席に着いているあいだは買えません。", busy: "混み合っています。もう一度お試しください。", not_published: "このページは、まだ公開されていません。" }[code] || "買えませんでした。";
+        const msg = { gone: "このパーツは、流れていってしまいました。", expired: "ベルトを入れ替えます。もう一度お試しください。", insufficient_coins: "コインが足りません。", already_owned: "もう持っています。", seated: "ゆうスロの席に着いているあいだは買えません。", busy: "混み合っています。もう一度お試しください。", not_published: "このページは、まだ公開されていません。" }[code] || "買えませんでした。";
         alert(msg); el.remove();
       } finally { busy = false; }
     });
     root.appendChild(el);
   }
 
-  refresh().then(() => { if (my === run) requestAnimationFrame(frame); });
+  open().then(() => { if (my === run) requestAnimationFrame(frame); });
 }
 
 function injectStyles() {
