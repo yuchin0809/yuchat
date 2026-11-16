@@ -389,7 +389,7 @@ test("ベルトコンベア：流れるパーツは、種と時刻で決まる�
     if (a.rarity === "N") assert.ok(a.part.price > 0 && !a.part.limited, "ふつうは、ショップにあるパーツ");
     else assert.ok(a.part.limited && a.part.rare === a.rarity, "レアは、ベルトだけのパーツ");
   }
-  assert.ok(counts.N > 260000 && counts.R > 24000 && counts.SR > 5000 && counts.UR > 600 && counts.LR >= 10 && counts.LR < 200 && counts.LR < counts.UR && counts.UR < counts.SR && counts.SR < counts.R, JSON.stringify(counts));
+  assert.ok(counts.N > 270000 && counts.R > 14000 && counts.SR > 2500 && counts.UR > 300 && counts.LR >= 8 && counts.LR < 120 && counts.LR < counts.UR && counts.UR < counts.SR && counts.SR < counts.R, JSON.stringify(counts));
   let diff = 0; for (let k = 0; k < 200; k++) if (keshiBeltItem(1, k).part.id !== keshiBeltItem(2, k).part.id) diff++;
   assert.ok(diff > 100, "種が違えば、流れるパーツも違う");
   const ctx = setup({ coins: 100000 });
