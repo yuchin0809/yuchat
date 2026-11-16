@@ -482,3 +482,23 @@ test("ミューテーションを買う：値段が高く、持ち物には、�
   const wrong = await ctx.act(1, { action: "keshiBeltBuy", token: belt.token, tick: it.tick, slot: it.slot, part: it.part.id.replace(/@.$/, "") });
   assert.equal(wrong.error, "bad_request", "印を外して買うことはできない");
 });
+
+test("消しゴムの名前：10文字まで。つけた名前は残り、空にすると消える。使えない言葉・長すぎる名前は断る", async () => {
+  const ctx = setup({ coins: 1000 });
+  assert.equal((await ctx.act(1, { action: "keshiState" })).name, "", "はじめは名前なし");
+  const r = await ctx.act(1, { action: "keshiName", name: "  ゆうたの相棒  " });
+  assert.equal(r.ok, true); assert.equal(r.name, "ゆうたの相棒"); assert.equal(r.saved, true);
+  assert.equal((await ctx.act(1, { action: "keshiState" })).name, "ゆうたの相棒", "保存されている");
+  assert.equal(ctx.fs.plain("yuslotKeshi/id1").name, "ゆうたの相棒");
+  assert.equal((await ctx.act(1, { action: "keshiName", name: "あいうえおかきくけこ" })).name, "あいうえおかきくけこ", "ちょうど10文字");
+  assert.equal((await ctx.act(1, { action: "keshiName", name: "あいうえおかきくけこさ" })).error, "bad_request", "11文字は断る");
+  assert.equal((await ctx.act(1, { action: "keshiName", name: "死ね" })).error, "ng_word", "使えない言葉");
+  assert.equal((await ctx.act(1, { action: "keshiName", name: 123 })).error, "bad_request");
+  assert.equal((await ctx.act(1, { action: "keshiName", name: "" })).name, "", "空にすると名前なし");
+  /* 名前をつけても、買ったパーツ・付けているパーツは変わらず、買ったあとも名前は残る */
+  await ctx.act(1, { action: "keshiName", name: "ピカ丸" });
+  const b = await ctx.act(1, { action: "keshiBuy", slot: "body", part: "pro" });
+  assert.equal(b.ok, true); assert.equal(b.name, "ピカ丸"); assert.deepEqual(ctx.fs.plain("yuslotKeshi/id1").owned, ["body:pro"]);
+  const closed = setup({ keshi: false });
+  assert.equal((await closed.act(1, { action: "keshiName", name: "x" })).error, "not_published");
+});
