@@ -2,7 +2,7 @@
    実行：node --test "notify-worker/test/*.test.mjs" */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { KESHI_PARTS, KESHI_SLOTS, KESHI_DEFAULT_EQ, keshiStats, resetYuslotCacheForTest, handleYuslotAction } from "../worker.js";
+import { KESHI_BELT, keshiBeltItem, keshiBeltPoolPublic, KESHI_PARTS, KESHI_SLOTS, KESHI_DEFAULT_EQ, keshiStats, resetYuslotCacheForTest, handleYuslotAction } from "../worker.js";
 
 console.warn = () => {};
 
@@ -250,7 +250,7 @@ test("画面用の強さの計算（yukeshi-core.js）は、サーバーの計�
     const eq = { body, edge, sole, weight };
     assert.deepEqual(keshiStatsView(table, eq), keshiStats(eq), JSON.stringify(eq)); n++;
   }
-  assert.equal(n, 6 ** 4, "限定パーツも含めた、全部の組み合わせ");
+  assert.equal(n, 9 ** 4, "限定パーツも含めた、全部の組み合わせ");
 });
 
 /* ===== リーグ戦（エントリーだけ） ===== */
@@ -377,4 +377,63 @@ test("最強決定戦の開催の状態（画面用 keshiLeaguePhase）：第1�
   p = keshiLeaguePhase(JST(2026, 10, 30, 15, 10), F); assert.deepEqual([p.phase, p.no, p.startMs], ["between", 2, JST(2026, 11, 2, 0)]);
   assert.equal(keshiLeagueTag(JST(2026, 10, 31, 12)), "次回 11/2（月）スタート");
   p = keshiLeaguePhase(JST(2026, 11, 2, 0), F); assert.deepEqual([p.phase, p.no], ["live", 2]);
+});
+
+/* ===== 🍣 パーツを探す（ベルトコンベア） ===== */
+test("ベルトコンベア：流れるパーツは、種と時刻で決まる（端末ごとに違う）。ほとんどはふつうで、ときどきレア。レアはここでしか買えない", async () => {
+  const counts = { N: 0, R: 0, SR: 0, UR: 0 };
+  for (let k = 1000; k < 21000; k++) {
+    const a = keshiBeltItem(12345, k), b = keshiBeltItem(12345, k);
+    assert.deepEqual(a, b, "同じ種・同じ時刻なら同じパーツ");
+    counts[a.rarity]++;
+    if (a.rarity === "N") assert.ok(a.part.price > 0 && !a.part.limited, "ふつうは、ショップにあるパーツ");
+    else assert.ok(a.part.limited && a.part.rare === a.rarity, "レアは、ベルトだけのパーツ");
+  }
+  assert.ok(counts.N > 14000 && counts.R > 2500 && counts.SR > 800 && counts.UR > 200 && counts.UR < counts.SR && counts.SR < counts.R, JSON.stringify(counts));
+  let diff = 0; for (let k = 0; k < 200; k++) if (keshiBeltItem(1, k).part.id !== keshiBeltItem(2, k).part.id) diff++;
+  assert.ok(diff > 100, "種が違えば、流れるパーツも違う");
+  const ctx = setup({ coins: 100000 });
+  assert.equal((await ctx.act(1, { action: "keshiBuy", slot: "body", part: "meteor" })).error, "not_for_sale", "ショップでは買えない");
+});
+
+test("画面用のベルトの計算（yukeshi-core.js）は、サーバーの計算と、たくさんの種・時刻で同じ", async () => {
+  const { keshiBeltItemView } = await import("../../yukeshi-core.js");
+  const pool = keshiBeltPoolPublic();
+  for (const seed of [0, 1, -7, 123456789, -2147483648, 2147483647]) for (let k = 50000; k < 50400; k++) {
+    const s = keshiBeltItem(seed, k), v = keshiBeltItemView(pool, KESHI_BELT.rates, KESHI_BELT.tickMs, seed, k);
+    assert.deepEqual([v.tick, v.startMs, v.rarity, v.slot, v.id, v.price, v.m, v.s, v.b, v.z], [s.tick, s.startMs, s.rarity, s.slot, s.part.id, s.part.price, s.part.m, s.part.s, s.part.b, s.part.z], `${seed}:${k}`);
+  }
+});
+
+test("ベルトコンベア：いまは最上位管理者だけ。流れているパーツだけ買えて、買っても付かない。ほかの人の種・流れ去ったものは買えない", async () => {
+  const ctx = setup({ coins: 100000 });
+  ctx.fs.put("users/admin", encF({ uid: ADMIN, name: "admin", coins: 100000 }));
+  const as = (body) => handleYuslotAction(ctx.deps, ADMIN, { username: "admin", ...body });
+  assert.equal((await ctx.act(1, { action: "keshiBelt" })).error, "not_published", "ふつうの人にはまだ見えない");
+  assert.equal((await ctx.act(1, { action: "keshiBeltBuy", token: "x", tick: 1, slot: "body", part: "pro" })).error, "not_published");
+  assert.equal((await ctx.act(1, { action: "keshiState" })).belt, false);
+  assert.equal((await as({ action: "keshiState" })).belt, true);
+  const belt = await as({ action: "keshiBelt" });
+  assert.equal(belt.ok, true); assert.ok(belt.token && Number.isInteger(belt.seed) && belt.pool.N.length > 10 && belt.pool.UR.length === 4);
+  const now = ctx.state.now, B = KESHI_BELT;
+  const k0 = Math.floor((now - 20000) / B.tickMs);
+  let it = keshiBeltItem(belt.seed, k0);
+  assert.ok(it.startMs <= now && now < it.startMs + B.travelMs, "いま流れている");
+  assert.equal((await as({ action: "keshiBeltBuy", token: belt.token, tick: it.tick, slot: it.slot, part: "x" })).error, "bad_request", "違うパーツは買えない");
+  assert.equal((await as({ action: "keshiBeltBuy", token: belt.token + "x", tick: it.tick, slot: it.slot, part: it.part.id })).error, "bad_request", "種の署名が違う");
+  const other = keshiBeltItem(belt.seed + 1, k0);
+  if (other.part.id !== it.part.id || other.slot !== it.slot) assert.equal((await as({ action: "keshiBeltBuy", token: belt.token, tick: other.tick, slot: other.slot, part: other.part.id })).error, "bad_request", "ほかの種のパーツは買えない");
+  if (it.part.price === 0) it = keshiBeltItem(belt.seed, k0 + 1);
+  const r = await as({ action: "keshiBeltBuy", token: belt.token, tick: it.tick, slot: it.slot, part: it.part.id });
+  assert.equal(r.ok, true, JSON.stringify(r)); assert.equal(r.coins, 100000 - it.part.price);
+  assert.equal(r.eq[it.slot], KESHI_DEFAULT_EQ[it.slot], "買っただけでは付かない");
+  assert.ok(r.have[it.slot].includes(it.part.id));
+  assert.equal((await as({ action: "keshiBeltBuy", token: belt.token, tick: it.tick, slot: it.slot, part: it.part.id })).error, "already_owned");
+  const old = keshiBeltItem(belt.seed, Math.floor((now - B.travelMs - 20000) / B.tickMs));
+  assert.equal((await as({ action: "keshiBeltBuy", token: belt.token, tick: old.tick, slot: old.slot, part: old.part.id })).error, "gone", "流れ去った");
+  const fut = keshiBeltItem(belt.seed, Math.floor((now + 30000) / B.tickMs));
+  assert.equal((await as({ action: "keshiBeltBuy", token: belt.token, tick: fut.tick, slot: fut.slot, part: fut.part.id })).error, "gone", "まだ流れてきていない");
+  ctx.state.now = belt.expiresMs + 1000;
+  const late = keshiBeltItem(belt.seed, Math.floor(ctx.state.now / B.tickMs));
+  assert.equal((await as({ action: "keshiBeltBuy", token: belt.token, tick: late.tick, slot: late.slot, part: late.part.id })).error, "expired", "種の期限切れ");
 });
