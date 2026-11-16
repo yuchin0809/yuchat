@@ -7,7 +7,8 @@
      買えるかどうかは、Worker（keshiBeltBuy）が、種の署名と時刻とパーツを確かめて決める。
    ・いまは管理者だけが使える（Worker が確かめる）。
 ========================================================= */
-import { keshiStatsView, keshiPunchView, keshiBeltItemView } from "./yukeshi-core.js?v=20261116-belt3";
+import { createPartsStage } from "./yukeshi3d.js?v=20261116-belt4";
+import { keshiStatsView, keshiPunchView, keshiBeltItemView } from "./yukeshi-core.js?v=20261116-belt4";
 
 const SLOT_NAMES = { body: "本体", edge: "ふち", sole: "そこ", weight: "おもり" };
 const STAT_NAMES = [["m", "重さ"], ["s", "すべり"], ["b", "反発"], ["z", "大きさ"]];
@@ -36,16 +37,16 @@ function partSvg(slot, id) {
     : `<rect x="22" y="16" width="44" height="30" rx="5" fill="${c}" ${rim}/><rect x="22" y="16" width="44" height="30" rx="5" fill="url(#ybShine)"/>`;
   return `<svg class="yb-art" viewBox="0 0 88 62" aria-hidden="true">${defs}${g}</svg>`;
 }
-let run = 0, stylesDone = false;
+let run = 0, stylesDone = false, cur3d = null;
 
-export function stopBelt() { run++; }
+export function stopBelt() { run++; if (cur3d) { try { cur3d.dispose(); } catch (_) {} cur3d = null; } }
 
 /* c：{ root, esc, api, table, st（keshiState の結果）, onBack } */
 export function renderBelt(c) {
   stopBelt();
   injectStyles();
   const my = run, esc = c.esc, root = c.root;
-  let st = c.st, table = c.table, busy = false, offset = 0, B = null;
+  let st = c.st, table = c.table, busy = false, offset = 0, B = null, stage = null;   // stage：パーツの3D表示（読めない端末では null。そのときは、平らな絵）
   const items = new Map(), els = new Map();
   const yen = (n) => `🪙 ${Number(n).toLocaleString("ja-JP")}`;
 
@@ -74,7 +75,7 @@ export function renderBelt(c) {
   function makeCard(it) {
     const el = document.createElement("button");
     el.type = "button"; el.className = `yb-card ${it.rarity}`;
-    el.innerHTML = `<span class="pr">${yen(it.price)}</span><span class="plate">${partSvg(it.slot, it.id)}</span><span class="nm">${esc(it.name)}</span><span class="rr">${it.rarity === "N" ? SLOT_NAMES[it.slot] : `${RARITY[it.rarity]}`}</span>`;
+    el.innerHTML = `<span class="pr">${yen(it.price)}</span><span class="plate">${stage ? "" : partSvg(it.slot, it.id)}</span><span class="nm">${esc(it.name)}</span><span class="rr">${it.rarity === "N" ? SLOT_NAMES[it.slot] : `${RARITY[it.rarity]}`}</span>`;
     el.addEventListener("click", () => openSheet(it));
     return el;
   }
@@ -91,13 +92,17 @@ export function renderBelt(c) {
         const p = (t - it.startMs) / B.travelMs;
         if (p < 0 || p >= 1) {
           const old = els.get(tick); if (old) { old.remove(); els.delete(tick); }
+          if (stage) stage.remove(tick);
           if (p >= 1) items.delete(tick);
           return;
         }
         let el = els.get(tick);
         if (!el) { el = makeCard(it); els.set(tick, el); lane.appendChild(el); }
-        el.style.transform = `translateX(${(W - p * (W + CARD_W)).toFixed(1)}px)`;
+        const x = W - p * (W + CARD_W);
+        el.style.transform = `translateX(${x.toFixed(1)}px)`;
+        if (stage) { if (!stage.has(tick)) stage.add(tick, it.slot, it.id, it.rarity); stage.move(tick, x + CARD_W / 2, 73); }
       });
+      if (stage) stage.render(performance.now());
     }
     if (B && t0Expired()) { B = null; open(); }
     requestAnimationFrame(frame);
@@ -113,7 +118,7 @@ export function renderBelt(c) {
     const row = (label, x, y) => { const d = Math.round((y - x) * 10) / 10; return `<div class="yb-st"><span>${label}</span><b>${x}</b><i>→</i><b>${y}</b><em class="${d > 0 ? "up" : d < 0 ? "down" : ""}">${d ? (d > 0 ? "▲" : "▼") + Math.abs(d) : ""}</em></div>`; };
     const el = document.createElement("div");
     el.className = "yb-sheet";
-    el.innerHTML = `<div class="yb-box ${it.rarity}"><div class="yb-rar">${RARITY[it.rarity]}</div><div class="yb-look ${it.rarity}">${partSvg(it.slot, it.id)}</div><h3>${esc(it.name)}</h3>
+    el.innerHTML = `<div class="yb-box ${it.rarity}"><div class="yb-rar">${RARITY[it.rarity]}</div><div class="yb-look ${it.rarity}" id="ybLook">${stage ? "" : partSvg(it.slot, it.id)}</div><h3>${esc(it.name)}</h3>
       <p class="yb-d">${SLOT_NAMES[it.slot]}のパーツ　${esc(it.desc)}<br>効き目：${esc(fx)}</p>
       <div class="yb-cmp"><b>いま付けている消しゴムに付けたら</b>
         ${STAT_NAMES.map(([k, l]) => row(l, a[k], b[k])).join("")}
@@ -139,9 +144,25 @@ export function renderBelt(c) {
       } finally { busy = false; }
     });
     root.appendChild(el);
+    if (stage) {   // 買う前の確認：パーツを大きく、3Dで回して見せる
+      const look = el.querySelector("#ybLook");
+      createPartsStage(look).then((s3) => {
+        if (!s3) { look.innerHTML = partSvg(it.slot, it.id); return; }
+        if (!el.isConnected) { s3.dispose(); return; }
+        s3.add("p", it.slot, it.id, it.rarity, it.slot === "weight" ? 70 : 130);
+        const loop = (t) => { if (!el.isConnected || my !== run) { s3.dispose(); return; } s3.move("p", look.clientWidth / 2, look.clientHeight / 2); s3.render(t); requestAnimationFrame(loop); };
+        requestAnimationFrame(loop);
+      }).catch(() => { look.innerHTML = partSvg(it.slot, it.id); });
+    }
   }
 
-  open().then(() => { if (my === run) requestAnimationFrame(frame); });
+  (async () => {
+    try { stage = await createPartsStage($("#ybLane")); } catch (_) { stage = null; }
+    if (my !== run) { if (stage) stage.dispose(); return; }
+    cur3d = stage;
+    await open();
+    if (my === run) requestAnimationFrame(frame);
+  })();
 }
 
 function injectStyles() {
@@ -170,7 +191,7 @@ function injectStyles() {
   .yb-msg { font-size: 13px; line-height: 1.7; color: #2c6a3a; min-height: 20px; }
   .yb-sheet { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; z-index: 60; padding: 16px; }
   .yb-box { width: 100%; max-width: 380px; max-height: 92vh; overflow: auto; background: #fff; border-radius: 16px; padding: 16px; border-top: 8px solid #bbb; } .yb-box.R { border-color: #4aa0e0; } .yb-box.SR { border-color: #8a4ae0; } .yb-box.UR { border-color: #e0a000; }
-  .yb-look { display: flex; justify-content: center; margin: 4px 0; background: repeating-linear-gradient(90deg, #5b4a3a 0 22px, #4c3d30 22px 44px); border-radius: 10px; padding: 6px 0; } .yb-look .yb-art { width: 120px; height: 85px; }
+  .yb-look { position: relative; min-height: 105px; display: flex; justify-content: center; align-items: center; margin: 4px 0; background: repeating-linear-gradient(90deg, #5b4a3a 0 22px, #4c3d30 22px 44px); border-radius: 10px; padding: 6px 0; } .yb-look .yb-art { width: 120px; height: 85px; }
   .yb-rar { font-size: 11.5px; font-weight: 900; color: #777; } .yb-box h3 { margin: 2px 0 6px; font-size: 18px; } .yb-d { font-size: 12.5px; line-height: 1.7; color: #555; margin: 0 0 8px; }
   .yb-cmp { background: #fff8e8; border-radius: 10px; padding: 8px 10px; font-size: 13px; } .yb-cmp > b { display: block; margin-bottom: 4px; font-size: 12.5px; }
   .yb-st { display: grid; grid-template-columns: 64px 1fr 18px 1fr 44px; gap: 4px; align-items: center; padding: 2px 0; text-align: center; } .yb-st span { text-align: left; } .yb-st i { font-style: normal; color: #999; }

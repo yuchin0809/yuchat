@@ -30,7 +30,9 @@ export function eraserKit(T, RBG) {
   const std = (o) => new T.MeshStandardMaterial(o);
   const phys = (o) => new T.MeshPhysicalMaterial(o);
 
-  function build(eqIn, color) {
+  /* only：その枠のパーツだけを作る（ベルトコンベアで、パーツ単体を見せるとき）。ふちは、中が空洞の枠だけになる */
+  function build(eqIn, color, only) {
+    const want = (s) => !only || only === s;
     const eq = Object.fromEntries(Object.entries(eqIn || {}).map(([k, v]) => [k, String(v).replace(/~u$/, "")]));   // 中古（~u）も、見た目は同じ
     const g = new T.Group();
     const add = (geo, mat, x = 0, y = 0, z = 0) => { const m = new T.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; g.add(m); return m; };
@@ -45,18 +47,20 @@ export function eraserKit(T, RBG) {
       meteor: () => std({ color: 0x4a3b36, roughness: .6, metalness: .7, emissive: 0xff5a1a, emissiveIntensity: .25 }),
       ltd: () => phys({ color: 0x7fa3d6, roughness: .18, metalness: .95, clearcoat: 1, emissive: 0x16305a, emissiveIntensity: .35 })   // E賞の限定
     }[eq.body] || (() => std({ color: 0xf4f1ea }));
-    add(rbox(2.5, .72, 1.22, .1), body());
-    add(rbox(1.32, .8, 1.3, .06), std({ map: sleeveTex(SLEEVE_COLORS[color] || SLEEVE_COLORS[0]), roughness: .75 }));
-    const edge = eq.edge;
-    if (edge === "plastic") add(rbox(2.62, .26, 1.34, .08), phys({ color: 0x9fd8ff, transparent: true, opacity: .45, roughness: .1 }), 0, -.2, 0);
-    else if (edge === "band") { [-.98, .98].forEach((x) => add(rbox(.12, .8, 1.3, .05), std({ color: 0xd8262a, roughness: .55 }), x, 0, 0)); }
-    else if (edge === "metal") add(rbox(2.62, .28, 1.34, .06), std({ color: 0xb9c0c8, metalness: 1, roughness: .22 }), 0, -.2, 0);
-    else if (edge === "ltd") add(rbox(2.64, .3, 1.36, .08), phys({ color: 0xffc933, metalness: 1, roughness: .12, emissive: 0x7a5200, emissiveIntensity: .45 }), 0, -.2, 0);
-    else if (edge === "titanf") add(rbox(2.62, .28, 1.34, .06), std({ color: 0xc9ced6, metalness: 1, roughness: .12 }), 0, -.2, 0);
-    else if (edge === "mithril") add(rbox(2.64, .3, 1.36, .08), phys({ color: 0xcfe6ff, metalness: 1, roughness: .08, emissive: 0x3a6aff, emissiveIntensity: .4 }), 0, -.2, 0);
-    else if (edge === "aurora") add(rbox(2.66, .32, 1.38, .1), phys({ color: 0xb8ffe8, metalness: .6, roughness: .06, clearcoat: 1, emissive: 0xc04aff, emissiveIntensity: .55 }), 0, -.2, 0);
-    else if (edge === "crystal") add(rbox(2.64, .3, 1.36, .1), phys({ color: 0x66d0ff, transparent: true, opacity: .72, roughness: .05, clearcoat: 1, emissive: 0x1a6a9a, emissiveIntensity: .35 }), 0, -.2, 0);
-    const sole = eq.sole;
+    if (want("body")) add(rbox(2.5, .72, 1.22, .1), body());
+    if (!only) add(rbox(1.32, .8, 1.3, .06), std({ map: sleeveTex(SLEEVE_COLORS[color] || SLEEVE_COLORS[0]), roughness: .75 }));
+    const ring = () => { const sh = new T.Shape(); sh.moveTo(-1.32, -.68); sh.lineTo(1.32, -.68); sh.lineTo(1.32, .68); sh.lineTo(-1.32, .68); sh.closePath(); const hole = new T.Path(); hole.moveTo(-1.06, -.44); hole.lineTo(-1.06, .44); hole.lineTo(1.06, .44); hole.lineTo(1.06, -.44); hole.closePath(); sh.holes.push(hole); const gg = new T.ExtrudeGeometry(sh, { depth: .26, bevelEnabled: true, bevelSize: .03, bevelThickness: .03, bevelSegments: 2 }); gg.rotateX(-Math.PI / 2); gg.translate(0, -.13, 0); return gg; };
+    const addE = (geo, mat, x = 0, y = 0, z = 0) => (only === "edge" && eq.edge !== "band" ? add(ring(), mat, 0, 0, 0) : add(geo, mat, x, y, z));
+    const edge = want("edge") ? eq.edge : null;
+    if (edge === "plastic") addE(rbox(2.62, .26, 1.34, .08), phys({ color: 0x9fd8ff, transparent: true, opacity: .45, roughness: .1 }), 0, -.2, 0);
+    else if (edge === "band") { [-.98, .98].forEach((x) => addE(rbox(.12, .8, 1.3, .05), std({ color: 0xd8262a, roughness: .55 }), x, 0, 0)); }
+    else if (edge === "metal") addE(rbox(2.62, .28, 1.34, .06), std({ color: 0xb9c0c8, metalness: 1, roughness: .22 }), 0, -.2, 0);
+    else if (edge === "ltd") addE(rbox(2.64, .3, 1.36, .08), phys({ color: 0xffc933, metalness: 1, roughness: .12, emissive: 0x7a5200, emissiveIntensity: .45 }), 0, -.2, 0);
+    else if (edge === "titanf") addE(rbox(2.62, .28, 1.34, .06), std({ color: 0xc9ced6, metalness: 1, roughness: .12 }), 0, -.2, 0);
+    else if (edge === "mithril") addE(rbox(2.64, .3, 1.36, .08), phys({ color: 0xcfe6ff, metalness: 1, roughness: .08, emissive: 0x3a6aff, emissiveIntensity: .4 }), 0, -.2, 0);
+    else if (edge === "aurora") addE(rbox(2.66, .32, 1.38, .1), phys({ color: 0xb8ffe8, metalness: .6, roughness: .06, clearcoat: 1, emissive: 0xc04aff, emissiveIntensity: .55 }), 0, -.2, 0);
+    else if (edge === "crystal") addE(rbox(2.64, .3, 1.36, .1), phys({ color: 0x66d0ff, transparent: true, opacity: .72, roughness: .05, clearcoat: 1, emissive: 0x1a6a9a, emissiveIntensity: .35 }), 0, -.2, 0);
+    const sole = want("sole") ? eq.sole : null;
     if (sole === "tape") add(rbox(2.3, .07, 1.0, .02), std({ color: 0xf4d20a, roughness: .5 }), 0, -.4, 0);
     else if (sole === "wax") add(rbox(2.3, .08, 1.0, .03), phys({ color: 0xfff1c9, roughness: .2, clearcoat: .8 }), 0, -.4, 0);
     else if (sole === "teflon") add(rbox(2.34, .08, 1.04, .03), phys({ color: 0x131316, roughness: .12, clearcoat: 1 }), 0, -.4, 0);
@@ -65,7 +69,7 @@ export function eraserKit(T, RBG) {
     else if (sole === "linear") add(rbox(2.36, .1, 1.06, .05), phys({ color: 0x9ad0ff, roughness: .1, clearcoat: 1, emissive: 0x2a6aff, emissiveIntensity: .5 }), 0, -.42, 0);
     else if (sole === "zero") add(rbox(2.4, .12, 1.1, .06), phys({ color: 0xffffff, transparent: true, opacity: .5, roughness: .02, emissive: 0xaad0ff, emissiveIntensity: .6 }), 0, -.43, 0);
     else if (sole === "air") add(rbox(2.36, .13, 1.06, .06), phys({ color: 0xc4ecff, transparent: true, opacity: .6, roughness: .08 }), 0, -.42, 0);
-    const weight = eq.weight;
+    const weight = want("weight") ? eq.weight : null;
     if (weight === "coin") add(new T.CylinderGeometry(.3, .3, .06, 32), std({ color: 0xd9a233, metalness: 1, roughness: .3 }), .95, .39, .0);
     else if (weight === "bolt") add(new T.CylinderGeometry(.22, .22, .16, 6), std({ color: 0xaab0b8, metalness: 1, roughness: .3 }), .95, .44, 0);
     else if (weight === "lead") add(rbox(.62, .22, .5, .04), std({ color: 0x4a4d54, metalness: .6, roughness: .5 }), .95, .46, 0);
@@ -136,5 +140,57 @@ export async function createEraserStage(container) {
       if (!raf) raf = requestAnimationFrame(frame);
     },
     dispose() { alive = false; if (raf) cancelAnimationFrame(raf); disposeGroup(group); renderer.dispose(); canvas.remove(); }
+  };
+}
+
+/* パーツ単体の3D表示（ベルトコンベアで流れるパーツ・買う前の確認画面）。1つの canvas に、いくつものパーツを置いて、ゆっくり回す。
+   ・座標は画面のピクセル（x：左から、y：上から）。add(key, slot, id, rarity, size) で置き、move(key, x, y) で動かし、remove(key) で外す。
+   ・three.js が読めない端末では null を返す（呼び出し側が、平らな絵を出す）。 */
+export async function createPartsStage(container) {
+  if (!(await load3D())) return null;
+  const { T, RBG } = three();
+  let renderer;
+  try { renderer = new T.WebGLRenderer({ alpha: true, antialias: true, powerPreference: "low-power" }); } catch (_) { return null; }
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2)); renderer.outputColorSpace = T.SRGBColorSpace;
+  const canvas = renderer.domElement; canvas.className = "yk2-gl"; canvas.style.pointerEvents = "none"; container.appendChild(canvas);
+  const scene = new T.Scene(), cam = new T.OrthographicCamera(-100, 100, 100, -100, -2000, 2000); cam.position.z = 1000;
+  scene.add(new T.HemisphereLight(0xffffff, 0x8a6a40, 1.1));
+  const sun = new T.DirectionalLight(0xffffff, 2.2); sun.position.set(-3, 6, 4); scene.add(sun);
+  const kit = eraserKit(T, RBG);
+  { const env = kit.environment(renderer); if (env) scene.environment = env; }
+  const items = new Map(); let W = 0, H = 0, alive = true;
+  const reduced = (() => { try { return matchMedia("(prefers-reduced-motion: reduce)").matches; } catch (_) { return false; } })();
+  const DEFAULT = { body: "plain", edge: "paper", sole: "bare", weight: "none" };
+  function measure() {
+    const r = container.getBoundingClientRect(), w = Math.max(1, Math.round(r.width)), h = Math.max(1, Math.round(r.height));
+    if (w === W && h === H) return; W = w; H = h; renderer.setSize(w, h, false); canvas.style.width = w + "px"; canvas.style.height = h + "px";
+    Object.assign(cam, { left: -w / 2, right: w / 2, top: h / 2, bottom: -h / 2 }); cam.updateProjectionMatrix();
+  }
+  return {
+    add(key, slot, id, rarity, size) {
+      if (items.has(key)) return;
+      const g = kit.build({ ...DEFAULT, [slot]: id }, 0, slot);
+      const box = new T.Box3().setFromObject(g), c = box.getCenter(new T.Vector3()), s = box.getSize(new T.Vector3());
+      g.position.sub(c);
+      const pivot = new T.Group(); pivot.add(g);
+      const fit = (size || (slot === "weight" ? 46 : 86)) / Math.max(s.x, s.y, s.z, .01);
+      pivot.scale.setScalar(fit);
+      if (rarity && rarity !== "N") {   // レアは、足もとにやわらかい光の輪
+        const col = { R: 0x4aa0e0, SR: 0xa56bff, UR: 0xffcf33 }[rarity];
+        const halo = new T.Mesh(new T.CircleGeometry(Math.max(s.x, s.z) * .62, 32), new T.MeshBasicMaterial({ color: col, transparent: true, opacity: .35, depthWrite: false }));
+        halo.rotation.x = -Math.PI / 2; halo.position.y = -s.y / 2 - .05; pivot.add(halo);
+      }
+      scene.add(pivot);
+      items.set(key, { pivot, spin: (items.size * 1.7) % 6, fit });
+    },
+    move(key, x, y) { const it = items.get(key); if (it) it.pivot.position.set(x - W / 2, H / 2 - y, 0); },
+    remove(key) { const it = items.get(key); if (!it) return; scene.remove(it.pivot); kit.disposeGroup(it.pivot); items.delete(key); },
+    has: (key) => items.has(key),
+    render(t) {
+      if (!alive) return; measure();
+      items.forEach((it) => { it.pivot.rotation.set(.5, reduced ? .6 : it.spin + t / 1800, 0); });
+      renderer.render(scene, cam);
+    },
+    dispose() { alive = false; items.forEach((it) => kit.disposeGroup(it.pivot)); items.clear(); renderer.dispose(); canvas.remove(); }
   };
 }
