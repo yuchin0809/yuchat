@@ -40,6 +40,9 @@ export function eraserKit(T, RBG) {
       sand: () => std({ map: speckle("#b8b2a4", "#6e6a60", 160, 2.5), roughness: 1 }),
       pro: () => phys({ color: 0xfde7ee, roughness: .28, clearcoat: .7, clearcoatRoughness: .25 }),
       titan: () => std({ color: 0xd2d6dc, roughness: .28, metalness: .85 }),
+      carbon: () => std({ color: 0x23262b, roughness: .35, metalness: .4 }),
+      diamond: () => phys({ color: 0xcdf3ff, roughness: .05, metalness: .2, clearcoat: 1, emissive: 0x4a9ac0, emissiveIntensity: .3 }),
+      meteor: () => std({ color: 0x4a3b36, roughness: .6, metalness: .7, emissive: 0xff5a1a, emissiveIntensity: .25 }),
       ltd: () => phys({ color: 0x7fa3d6, roughness: .18, metalness: .95, clearcoat: 1, emissive: 0x16305a, emissiveIntensity: .35 })   // E賞の限定
     }[eq.body] || (() => std({ color: 0xf4f1ea }));
     add(rbox(2.5, .72, 1.22, .1), body());
@@ -49,18 +52,27 @@ export function eraserKit(T, RBG) {
     else if (edge === "band") { [-.98, .98].forEach((x) => add(rbox(.12, .8, 1.3, .05), std({ color: 0xd8262a, roughness: .55 }), x, 0, 0)); }
     else if (edge === "metal") add(rbox(2.62, .28, 1.34, .06), std({ color: 0xb9c0c8, metalness: 1, roughness: .22 }), 0, -.2, 0);
     else if (edge === "ltd") add(rbox(2.64, .3, 1.36, .08), phys({ color: 0xffc933, metalness: 1, roughness: .12, emissive: 0x7a5200, emissiveIntensity: .45 }), 0, -.2, 0);
+    else if (edge === "titanf") add(rbox(2.62, .28, 1.34, .06), std({ color: 0xc9ced6, metalness: 1, roughness: .12 }), 0, -.2, 0);
+    else if (edge === "mithril") add(rbox(2.64, .3, 1.36, .08), phys({ color: 0xcfe6ff, metalness: 1, roughness: .08, emissive: 0x3a6aff, emissiveIntensity: .4 }), 0, -.2, 0);
+    else if (edge === "aurora") add(rbox(2.66, .32, 1.38, .1), phys({ color: 0xb8ffe8, metalness: .6, roughness: .06, clearcoat: 1, emissive: 0xc04aff, emissiveIntensity: .55 }), 0, -.2, 0);
     else if (edge === "crystal") add(rbox(2.64, .3, 1.36, .1), phys({ color: 0x66d0ff, transparent: true, opacity: .72, roughness: .05, clearcoat: 1, emissive: 0x1a6a9a, emissiveIntensity: .35 }), 0, -.2, 0);
     const sole = eq.sole;
     if (sole === "tape") add(rbox(2.3, .07, 1.0, .02), std({ color: 0xf4d20a, roughness: .5 }), 0, -.4, 0);
     else if (sole === "wax") add(rbox(2.3, .08, 1.0, .03), phys({ color: 0xfff1c9, roughness: .2, clearcoat: .8 }), 0, -.4, 0);
     else if (sole === "teflon") add(rbox(2.34, .08, 1.04, .03), phys({ color: 0x131316, roughness: .12, clearcoat: 1 }), 0, -.4, 0);
     else if (sole === "ltd") add(rbox(2.36, .1, 1.06, .05), phys({ color: 0xff7a45, roughness: .2, clearcoat: 1, emissive: 0xff3c00, emissiveIntensity: .5 }), 0, -.42, 0);
+    else if (sole === "hover") add(rbox(2.34, .1, 1.04, .04), phys({ color: 0xdfffe8, transparent: true, opacity: .6, roughness: .08, emissive: 0x2aff8a, emissiveIntensity: .25 }), 0, -.42, 0);
+    else if (sole === "linear") add(rbox(2.36, .1, 1.06, .05), phys({ color: 0x9ad0ff, roughness: .1, clearcoat: 1, emissive: 0x2a6aff, emissiveIntensity: .5 }), 0, -.42, 0);
+    else if (sole === "zero") add(rbox(2.4, .12, 1.1, .06), phys({ color: 0xffffff, transparent: true, opacity: .5, roughness: .02, emissive: 0xaad0ff, emissiveIntensity: .6 }), 0, -.43, 0);
     else if (sole === "air") add(rbox(2.36, .13, 1.06, .06), phys({ color: 0xc4ecff, transparent: true, opacity: .6, roughness: .08 }), 0, -.42, 0);
     const weight = eq.weight;
     if (weight === "coin") add(new T.CylinderGeometry(.3, .3, .06, 32), std({ color: 0xd9a233, metalness: 1, roughness: .3 }), .95, .39, .0);
     else if (weight === "bolt") add(new T.CylinderGeometry(.22, .22, .16, 6), std({ color: 0xaab0b8, metalness: 1, roughness: .3 }), .95, .44, 0);
     else if (weight === "lead") add(rbox(.62, .22, .5, .04), std({ color: 0x4a4d54, metalness: .6, roughness: .5 }), .95, .46, 0);
     else if (weight === "ltd") add(rbox(.66, .28, .52, .05), std({ color: 0x5fe6cf, metalness: 1, roughness: .15, emissive: 0x0a6a5a, emissiveIntensity: .5 }), .95, .49, 0);
+    else if (weight === "tungsten") add(rbox(.62, .24, .5, .04), std({ color: 0x6b6f78, metalness: 1, roughness: .25 }), .95, .47, 0);
+    else if (weight === "platinum") add(rbox(.66, .28, .52, .05), std({ color: 0xe6edf2, metalness: 1, roughness: .1 }), .95, .49, 0);
+    else if (weight === "neutron") add(new T.SphereGeometry(.3, 24, 16), std({ color: 0x9ad0ff, metalness: .5, roughness: .1, emissive: 0x4aa0ff, emissiveIntensity: .9 }), .95, .55, 0);
     else if (weight === "gold") add(rbox(.66, .28, .52, .05), std({ color: 0xffc933, metalness: 1, roughness: .18 }), .95, .49, 0);
     return g;
   }

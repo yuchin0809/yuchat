@@ -3166,6 +3166,8 @@ export async function handleYuslotAction(deps, uid, body) {
       case "keshiBuy": return await keshiBuy(deps, uid, body);
       case "keshiEquip": return await keshiEquip(deps, uid, body);
       case "keshiBuyMany": return await keshiBuyMany(deps, uid, body);
+      case "keshiBelt": return await keshiBelt(deps, uid, body);
+      case "keshiBeltBuy": return await keshiBeltBuy(deps, uid, body);
       case "martStatus": return await martStatus(deps, uid);
       case "martMine": return await martMine(deps, uid, body);
       case "martList": return await martList(deps, uid, body);
@@ -6465,7 +6467,10 @@ export const KESHI_PARTS = {
     { id: "sand", name: "砂消し", price: 150, m: 4, s: -6, b: 2, z: 0, desc: "ざらざらで重く、すべりにくい" },
     { id: "pro", name: "高級ゴム", price: 600, m: 6, s: 6, b: 6, z: 0, desc: "全部がバランスよく強い" },
     { id: "titan", name: "チタン芯入り", price: 1800, m: 14, s: 8, b: 10, z: -2, desc: "芯が入った、重くて強い本体" },
-    { id: "ltd", name: "限定 ゆうメタル本体", price: 5000, m: 16, s: 10, b: 12, z: 0, desc: "ゆう番くじ E賞の限定品。重くて強い、特別な本体", limited: true }
+    { id: "carbon", name: "カーボン本体", price: 3200, m: 18, s: 10, b: 12, z: -2, desc: "軽くて硬い、レアな本体（ベルトで流れてくる）", limited: true, rare: "R" },
+    { id: "ltd", name: "限定 ゆうメタル本体", price: 5000, m: 16, s: 10, b: 12, z: 0, desc: "ゆう番くじ E賞の限定品。重くて強い、特別な本体", limited: true },
+    { id: "diamond", name: "ダイヤ入り本体", price: 9000, m: 24, s: 14, b: 16, z: 0, desc: "ダイヤを練り込んだ、スーパーレアな本体（ベルトで流れてくる）", limited: true, rare: "SR" },
+    { id: "meteor", name: "隕石本体", price: 24000, m: 32, s: 18, b: 22, z: 0, desc: "宇宙から落ちてきた石でできた、ウルトラレアな本体（ベルトで流れてくる）", limited: true, rare: "UR" }
   ],
   edge: [
     { id: "paper", name: "紙のカバー", price: 0, m: 0, s: 0, b: 0, z: 0, desc: "ふつうの紙のカバー" },
@@ -6473,7 +6478,10 @@ export const KESHI_PARTS = {
     { id: "band", name: "ゴムバンド", price: 200, m: 0, s: 0, b: 10, z: 0, desc: "ぶつかったときに強く弾く" },
     { id: "metal", name: "金属フレーム", price: 900, m: 10, s: 2, b: 12, z: 2, desc: "重くて、当たりに強い" },
     { id: "crystal", name: "クリスタルフレーム", price: 2500, m: 12, s: 10, b: 14, z: 2, desc: "すべって弾む、いちばん強いふち" },
-    { id: "ltd", name: "限定 ゆうゴールドフレーム", price: 5000, m: 12, s: 12, b: 16, z: 2, desc: "ゆう番くじ E賞の限定品。金色に輝く、特別なふち", limited: true }
+    { id: "titanf", name: "チタンフレーム", price: 3500, m: 14, s: 12, b: 16, z: 2, desc: "かるくて丈夫なレアなふち（ベルトで流れてくる）", limited: true, rare: "R" },
+    { id: "ltd", name: "限定 ゆうゴールドフレーム", price: 5000, m: 12, s: 12, b: 16, z: 2, desc: "ゆう番くじ E賞の限定品。金色に輝く、特別なふち", limited: true },
+    { id: "mithril", name: "ミスリルフレーム", price: 9500, m: 18, s: 16, b: 22, z: 2, desc: "青白く光るスーパーレアなふち（ベルトで流れてくる）", limited: true, rare: "SR" },
+    { id: "aurora", name: "オーロラフレーム", price: 25000, m: 24, s: 20, b: 28, z: 3, desc: "虹色にゆれるウルトラレアなふち（ベルトで流れてくる）", limited: true, rare: "UR" }
   ],
   sole: [
     { id: "bare", name: "そのまま", price: 0, m: 0, s: 0, b: 0, z: 0, desc: "なにも付けていない" },
@@ -6481,7 +6489,10 @@ export const KESHI_PARTS = {
     { id: "wax", name: "ワックス", price: 250, m: -2, s: 14, b: 0, z: 0, desc: "よくすべる" },
     { id: "teflon", name: "テフロンシート", price: 1000, m: -4, s: 24, b: 0, z: 0, desc: "ものすごくすべる" },
     { id: "air", name: "エアクッション底", price: 2200, m: -6, s: 28, b: 4, z: 0, desc: "ほとんど摩擦がない" },
-    { id: "ltd", name: "限定 ゆうジェットソール", price: 5000, m: -6, s: 30, b: 6, z: 0, desc: "ゆう番くじ E賞の限定品。ジェット噴射のようにすべる底", limited: true }
+    { id: "hover", name: "ホバーソール", price: 3400, m: -6, s: 34, b: 6, z: 0, desc: "空気で浮くようにすべるレアな底（ベルトで流れてくる）", limited: true, rare: "R" },
+    { id: "ltd", name: "限定 ゆうジェットソール", price: 5000, m: -6, s: 30, b: 6, z: 0, desc: "ゆう番くじ E賞の限定品。ジェット噴射のようにすべる底", limited: true },
+    { id: "linear", name: "リニアソール", price: 9000, m: -8, s: 42, b: 8, z: 0, desc: "磁石の力ですべるスーパーレアな底（ベルトで流れてくる）", limited: true, rare: "SR" },
+    { id: "zero", name: "ゼロ摩擦ソール", price: 24000, m: -10, s: 52, b: 10, z: 0, desc: "まったく摩擦がないウルトラレアな底（ベルトで流れてくる）", limited: true, rare: "UR" }
   ],
   weight: [
     { id: "none", name: "なし", price: 0, m: 0, s: 0, b: 0, z: 0, desc: "おもりなし" },
@@ -6489,7 +6500,10 @@ export const KESHI_PARTS = {
     { id: "bolt", name: "ボルト", price: 300, m: 14, s: 0, b: 0, z: -1, desc: "しっかり重くなる" },
     { id: "lead", name: "鉛のおもり", price: 1200, m: 24, s: -2, b: 0, z: -2, desc: "かなり重くなる" },
     { id: "gold", name: "金のおもり", price: 3000, m: 32, s: 0, b: 4, z: -3, desc: "いちばん重い" },
-    { id: "ltd", name: "限定 ゆうオリハルコン", price: 5000, m: 34, s: 0, b: 6, z: -3, desc: "ゆう番くじ E賞の限定品。伝説の金属でできた、いちばん重いおもり", limited: true }
+    { id: "tungsten", name: "タングステン", price: 3800, m: 40, s: 0, b: 5, z: -3, desc: "とても重いレアなおもり（ベルトで流れてくる）", limited: true, rare: "R" },
+    { id: "ltd", name: "限定 ゆうオリハルコン", price: 5000, m: 34, s: 0, b: 6, z: -3, desc: "ゆう番くじ E賞の限定品。伝説の金属でできた、いちばん重いおもり", limited: true },
+    { id: "platinum", name: "プラチナのおもり", price: 10000, m: 50, s: 0, b: 8, z: -4, desc: "ずっしり重いスーパーレアなおもり（ベルトで流れてくる）", limited: true, rare: "SR" },
+    { id: "neutron", name: "中性子星のかけら", price: 26000, m: 64, s: 0, b: 12, z: -5, desc: "ありえないほど重いウルトラレアなおもり（ベルトで流れてくる）", limited: true, rare: "UR" }
   ]
 };
 /* limited：ゆう番くじ E賞の限定品。ショップでは買えない・ゆうマートでも売れない。持っている人の一覧にだけ出る（price は、無料のパーツと区別するための目安） */
@@ -6566,7 +6580,7 @@ async function keshiState(deps, uid, body) {
   if (me.error) return me.error;
   const cur = await keshiLoad(deps, uid);
   /* league：ショップの「最強決定戦」の大きなバナー用（エントリー済みか・賞金・開催の始まり）。追加の読み取りはない */
-  return { ...keshiView(cur, Number(decodeFields(me.raw.fields).coins || 0), deps.now()), table: keshiTable(cur), league: { entered: cur.league === true, prizes: KESHI_LEAGUE_PRIZES, sets: KESHI_LEAGUE_SETS, firstMs: KESHI_LEAGUE_FIRST_MS } };
+  return { ...keshiView(cur, Number(decodeFields(me.raw.fields).coins || 0), deps.now()), belt: slotIsTopAdmin(deps, uid), table: keshiTable(cur), league: { entered: cur.league === true, prizes: KESHI_LEAGUE_PRIZES, sets: KESHI_LEAGUE_SETS, firstMs: KESHI_LEAGUE_FIRST_MS } };
 }
 function keshiWrite(deps, uid, cur, fields) {
   const fs = deps.firestore;
@@ -6625,6 +6639,67 @@ async function keshiBuyMany(deps, uid, body) {
   catch (error) { if (isRetryableCommitError(error)) return { status: 409, error: "busy" }; throw error; }
   return { ...keshiView({ ...cur, owned, eq }, coins - total, deps.now()), bought: buy.map(([slot, id]) => ({ slot, part: id, price: KESHI_PART_BY[slot][id].price })), spent: total };
 }
+/* =========================================================
+   🍣 パーツを探す（回転寿司のベルトコンベア）
+   ・12秒ごとに1つ、パーツが流れてきて、50秒かけて端まで流れると消える。流れてくるパーツは、時刻だけで決まる（だれが見ても同じ。保存も読み取りもなし）。
+   ・ほとんどは、ショップにあるふつうのパーツ。ときどき、レア（R）・スーパーレア（SR）・ウルトラレア（UR）の、高くて強いパーツ（ここでしか買えない）が流れる。
+   ・買えるのは、いま流れているパーツだけ（買うときに、サーバーが、その時刻のパーツかどうかを確かめる）。買っただけでは付けない（付けるのは、改造の画面）。
+   ・いまは最上位管理者だけが使える。
+========================================================= */
+export const KESHI_BELT = { tickMs: 12000, travelMs: 50000, aheadMs: 90000, graceMs: 3000, rates: { UR: 0.02, SR: 0.06, R: 0.16 } };
+function keshiHash01(k, salt) {
+  let h = (Math.imul(k | 0, 2654435761) ^ Math.imul(salt | 0, 40503)) >>> 0;
+  h = Math.imul(h ^ (h >>> 16), 2246822507) >>> 0;
+  h = Math.imul(h ^ (h >>> 13), 3266489909) >>> 0;
+  h = (h ^ (h >>> 16)) >>> 0;
+  return h / 4294967296;
+}
+const keshiBeltPool = (rare) => KESHI_SLOTS.flatMap((slot) => KESHI_PARTS[slot].filter((p) => (rare ? p.rare === rare : p.price > 0 && !p.limited)).map((p) => ({ slot, p })));
+export function keshiBeltItem(tick) {
+  const r = keshiHash01(tick, 1), { UR, SR, R } = KESHI_BELT.rates;
+  const rarity = r < UR ? "UR" : r < UR + SR ? "SR" : r < UR + SR + R ? "R" : "N";
+  const pool = keshiBeltPool(rarity === "N" ? null : rarity);
+  const pick = pool[Math.min(pool.length - 1, Math.floor(keshiHash01(tick, 2) * pool.length))];
+  return { tick, startMs: tick * KESHI_BELT.tickMs, slot: pick.slot, rarity, part: pick.p };
+}
+const keshiBeltPublic = (it) => ({ tick: it.tick, startMs: it.startMs, slot: it.slot, rarity: it.rarity, id: it.part.id, name: it.part.name, price: it.part.price, m: it.part.m, s: it.part.s, b: it.part.b, z: it.part.z, desc: it.part.desc });
+async function keshiBeltGate(deps, uid) {
+  const g = await keshiGate(deps, uid);
+  if (g) return g;
+  return slotIsTopAdmin(deps, uid) ? null : { status: 403, error: "not_published" };
+}
+async function keshiBelt(deps, uid) {
+  const g = await keshiBeltGate(deps, uid);
+  if (g) return g;
+  const now = deps.now(), B = KESHI_BELT;
+  const items = [];
+  for (let k = Math.floor((now - B.travelMs) / B.tickMs); k <= Math.floor((now + B.aheadMs) / B.tickMs); k++) items.push(keshiBeltPublic(keshiBeltItem(k)));
+  return { ok: true, items, tickMs: B.tickMs, travelMs: B.travelMs, serverNowMs: now };
+}
+async function keshiBeltBuy(deps, uid, body) {
+  const g = await keshiBeltGate(deps, uid);
+  if (g) return g;
+  const tick = Number(body?.tick), slot = String(body?.slot || ""), id = String(body?.part || "");
+  if (!Number.isInteger(tick)) return { status: 400, error: "bad_request" };
+  const it = keshiBeltItem(tick), now = deps.now();
+  if (it.slot !== slot || it.part.id !== id) return { status: 400, error: "bad_request" };
+  if (now < it.startMs || now >= it.startMs + KESHI_BELT.travelMs + KESHI_BELT.graceMs) return { status: 409, error: "gone" };   // もう流れていった（まだ流れてきていない）
+  const part = it.part;
+  const me = await loadMyUser(deps.firestore, uid, body?.username);
+  if (me.error) return me.error;
+  const cur = await keshiLoad(deps, uid);
+  if (cur.owned.includes(`${slot}:${id}`)) return { status: 409, error: "already_owned" };
+  const coins = Number(decodeFields(me.raw.fields).coins || 0);
+  if (coins < part.price) return { status: 409, error: "insufficient_coins" };
+  if (await lotterySeatedElsewhere(deps, uid, now)) return { status: 409, error: "seated" };
+  const owned = [...cur.owned, `${slot}:${id}`];
+  const writes = keshiWrite(deps, uid, cur, { owned, eq: cur.eq, color: cur.color, n: me.name });
+  writes.unshift({ update: { name: deps.firestore.docName(`users/${me.name}`), fields: { coins: restInt(coins - part.price) } }, updateMask: { fieldPaths: ["coins"] }, currentDocument: { updateTime: me.raw.updateTime } });
+  try { await deps.firestore.commit(writes); }
+  catch (error) { if (isRetryableCommitError(error)) return { status: 409, error: "busy" }; throw error; }
+  return { ...keshiView({ ...cur, owned }, coins - part.price, now), table: keshiTable({ ...cur, owned }), bought: { slot, part: id, price: part.price } };
+}
+
 /* 付けるパーツと色を決める（持っているものだけ） */
 async function keshiEquip(deps, uid, body) {
   const g = await keshiGate(deps, uid);

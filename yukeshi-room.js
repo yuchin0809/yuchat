@@ -6,7 +6,7 @@
    ・3Dの机と消しゴムは three.js（ヨットと同じもの）。3D が使えない端末では、対戦できない（メッセージを出す）。
 ========================================================= */
 import { load3D, three } from "./yuyacht3d.js?v=20261023-3d1";
-import { eraserKit } from "./yukeshi3d.js?v=20261026-ltd10";
+import { eraserKit } from "./yukeshi3d.js?v=20261116-belt1";
 import { keshiSimStepper, KESHI_DESK, KESHI_DT, eraserIcon } from "./yukeshi-core.js?v=20261106-fair1";
 
 const TOP_Y = -0.4;   // 机の上の面の高さ
