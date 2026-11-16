@@ -7,8 +7,8 @@
      買えるかどうかは、Worker（keshiBeltBuy）が、種の署名と時刻とパーツを確かめて決める。
    ・ベータ版。
 ========================================================= */
-import { createPartsStage } from "./yukeshi3d.js?v=20261116-belt6";
-import { keshiStatsView, keshiPunchView, keshiBeltItemView } from "./yukeshi-core.js?v=20261116-belt6";
+import { createPartsStage } from "./yukeshi3d.js?v=20261116-belt7";
+import { keshiStatsView, keshiPunchView, keshiBeltItemView } from "./yukeshi-core.js?v=20261116-belt7";
 
 const SLOT_NAMES = { body: "本体", edge: "ふち", sole: "そこ", weight: "おもり" };
 const STAT_NAMES = [["m", "重さ"], ["s", "すべり"], ["b", "反発"], ["z", "大きさ"]];
@@ -42,6 +42,75 @@ const IS_IPAD = (() => { try { return /iPad/.test(navigator.userAgent) || (navig
 const SPEED = IS_IPAD ? 1.15 : 1;
 let run = 0, stylesDone = false, cur3d = null;
 
+/* =========================================================
+   演出（出現・購入）：画面の光・揺れ・バナー・紙吹雪・音・振動。レアなほど派手になる
+   ・段階（level）：1＝レア／ゴールド、2＝スーパーレア／ダイヤ、3＝ウルトラレア／レインボー、4＝トップレア
+   ・音は、端末の中で作る（音の素材は使わない）。最初にタップするまで、スマホは音を出せない。右上のボタンで、音を切れる
+   ・「動きを減らす」設定の端末では、光・揺れ・紙吹雪を出さない（バナーと音だけ）
+========================================================= */
+const RLEVEL = { N: 0, R: 1, SR: 2, UR: 3, LR: 4 }, MLEVEL = { "": 0, g: 1, d: 2, r: 3 };
+const levelOf = (it) => Math.max(RLEVEL[it.rarity] || 0, MLEVEL[it.mut || ""] || 0);
+const LCOL = ["#ffffff", "#4aa0e0", "#a56bff", "#ffcf33", "#ff7ae0"];
+const reducedMotion = () => { try { return matchMedia("(prefers-reduced-motion: reduce)").matches; } catch (_) { return false; } };
+let actx = null, muted = false;
+try { muted = localStorage.getItem("yb_mute") === "1"; } catch (_) {}
+function unlockAudio() {
+  try { actx = actx || new (window.AudioContext || window.webkitAudioContext)(); if (actx.state === "suspended") actx.resume(); } catch (_) { actx = null; }
+}
+function tone(freq, at, dur, type = "sine", vol = .1) {
+  if (muted || !actx || actx.state !== "running") return;
+  try {
+    const o = actx.createOscillator(), g = actx.createGain(), t0 = actx.currentTime + at;
+    o.type = type; o.frequency.value = freq; g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(vol, t0 + .01); g.gain.exponentialRampToValueAtTime(.0001, t0 + dur);
+    o.connect(g); g.connect(actx.destination); o.start(t0); o.stop(t0 + dur + .05);
+  } catch (_) {}
+}
+const NOTES = [523, 659, 784, 1047, 1319, 1568];
+function sfxSpawn(level) { for (let i = 0; i < Math.min(NOTES.length, level + 1); i++) tone(NOTES[i], i * .07, .18, i % 2 ? "triangle" : "sine", .09 + level * .02); if (level >= 3) tone(220, 0, .5, "sawtooth", .05); }
+function sfxBuy(level) { tone(1318, 0, .09, "square", .07); tone(1760, .09, .2, "square", .07); for (let i = 0; i < level + 1; i++) tone(NOTES[Math.min(i, 5)] * 2, .25 + i * .08, .25, "triangle", .08); }
+const vibrate = (p) => { try { if (!muted && navigator.vibrate) navigator.vibrate(p); } catch (_) {} };
+
+function fxOverlay() {
+  let el = document.getElementById("ybFx");
+  if (!el) { el = document.createElement("div"); el.id = "ybFx"; el.className = "yb-fx"; document.body.appendChild(el); }
+  return el;
+}
+function flash(level) {
+  if (reducedMotion()) return;
+  const f = document.createElement("div"); f.className = `yb-flash l${level}`; fxOverlay().appendChild(f); setTimeout(() => f.remove(), 900);
+}
+function banner(text, level) {
+  const el = document.createElement("div"); el.className = `yb-banner l${level}`; el.textContent = text; fxOverlay().appendChild(el); setTimeout(() => el.remove(), level >= 3 ? 2600 : 1800);
+}
+function shake(root, level) {
+  if (reducedMotion() || level < 3) return;
+  root.classList.remove("yb-shake"); void root.offsetWidth; root.classList.add("yb-shake"); setTimeout(() => root.classList.remove("yb-shake"), 700);
+}
+function confetti(level, from) {
+  if (reducedMotion()) return;
+  const layer = fxOverlay(), n = 18 + level * 16, cols = level >= 4 ? ["#ff7ae0", "#ffe27a", "#7affd4", "#7ab8ff", "#c88aff", "#fff"] : level === 3 ? ["#ffcf33", "#ffe27a", "#fff", "#ff9a33"] : level === 2 ? ["#a56bff", "#e0c8ff", "#fff"] : ["#4aa0e0", "#bfe3ff", "#fff", "#ffd966"];
+  for (let i = 0; i < n; i++) {
+    const p = document.createElement("i"), ang = Math.random() * Math.PI * 2, d = 90 + Math.random() * (140 + level * 40);
+    p.className = i % 5 === 0 ? "yb-conf coin" : "yb-conf"; if (i % 5 === 0) p.textContent = "🪙";
+    p.style.cssText = `left:${from.x}px;top:${from.y}px;background:${i % 5 === 0 ? "none" : cols[i % cols.length]};--dx:${Math.cos(ang) * d}px;--dy:${Math.sin(ang) * d - 60}px;--rot:${Math.random() * 720 - 360}deg;animation-delay:${Math.random() * .12}s`;
+    layer.appendChild(p); setTimeout(() => p.remove(), 1700);
+  }
+}
+const RAR_TEXT = { R: "レア", SR: "スーパーレア", UR: "ウルトラレア", LR: "トップレア" };
+function fxSpawn(it, root, defs) {
+  const level = levelOf(it); if (level === 0) return;
+  sfxSpawn(level); flash(level); shake(root, level);
+  const name = it.mut && defs && defs[it.mut] ? defs[it.mut].name : "";
+  if (level >= 2 || it.mut) banner(`${it.mut ? `✨${name}　` : ""}${it.rarity !== "N" ? `${RAR_TEXT[it.rarity]}出現！` : "出現！"}`, level);
+  vibrate(level >= 3 ? [40, 30, 80] : 25);
+}
+function fxBuy(it, root, at) {
+  const level = levelOf(it);
+  sfxBuy(level); vibrate(level >= 3 ? [60, 40, 60, 40, 120] : [30, 30, 50]);
+  flash(Math.max(1, level - 1)); confetti(level, at); shake(root, level);
+  banner(`GET！　${it.name}`, Math.max(2, level));
+}
+
 export function stopBelt() { run++; if (cur3d) { try { cur3d.dispose(); } catch (_) {} cur3d = null; } }
 
 /* c：{ root, esc, api, table, st（keshiState の結果）, onBack } */
@@ -50,16 +119,18 @@ export function renderBelt(c) {
   injectStyles();
   const my = run, esc = c.esc, root = c.root;
   let st = c.st, table = c.table, busy = false, offset = 0, B = null, stage = null;   // stage：パーツの3D表示（読めない端末では null。そのときは、平らな絵）
-  const items = new Map(), els = new Map();
+  const items = new Map(), els = new Map(), fxDone = new Set();
   const yen = (n) => `🪙 ${Number(n).toLocaleString("ja-JP")}`;
 
-  root.innerHTML = `<div class="yb-head"><button type="button" class="yw-back" id="ybBack">← 消しゴムの改造へ</button><h2>🍣 パーツを探す</h2><div class="yb-coins" id="ybCoins">${yen(st.coins)}</div></div>
+  root.innerHTML = `<div class="yb-head"><button type="button" class="yw-back" id="ybBack">← 消しゴムの改造へ</button><h2>🍣 パーツを探す</h2><button type="button" class="yb-snd" id="ybSnd" aria-label="音">${muted ? "🔇" : "🔊"}</button><div class="yb-coins" id="ybCoins">${yen(st.coins)}</div></div>
     <p class="yb-note">ベルトコンベアに、パーツが流れてきます。気になるパーツをタップすると、強さが見られて、買えます。流れていったパーツは、もう買えません。</p>
     <div class="yb-belt" id="ybBelt"><div class="yb-lane" id="ybLane"></div><div class="yb-load" id="ybLoad">ベルトを動かしています…</div></div>
     <div class="yb-legend"><span class="N">ふつう</span><span class="R">レア</span><span class="SR">スーパーレア</span><span class="UR">ウルトラレア</span><span class="LR">トップレア</span></div>
     <div class="yb-msg" id="ybMsg"></div>`;
   const $ = (s) => root.querySelector(s);
   $("#ybBack").addEventListener("click", () => { stopBelt(); c.onBack(); });
+  root.addEventListener("pointerdown", unlockAudio);
+  $("#ybSnd").addEventListener("click", () => { muted = !muted; try { localStorage.setItem("yb_mute", muted ? "1" : "0"); } catch (_) {} $("#ybSnd").textContent = muted ? "🔇" : "🔊"; if (!muted) { unlockAudio(); tone(880, 0, .12); } });
 
   const nowMs = () => Date.now() + offset;
   async function open() {
@@ -77,8 +148,8 @@ export function renderBelt(c) {
 
   function makeCard(it) {
     const el = document.createElement("button");
-    el.type = "button"; el.className = `yb-card ${it.rarity}`;
-    el.innerHTML = `<span class="pr">${yen(it.price)}</span><span class="plate">${stage ? "" : partSvg(it.slot, it.id)}</span><span class="nm">${esc(it.name)}</span><span class="rr">${it.rarity === "N" ? SLOT_NAMES[it.slot] : `${RARITY[it.rarity]}`}</span>`;
+    el.type = "button"; el.className = `yb-card ${it.rarity}${it.mut ? ` mut-${it.mut}` : ""}`;
+    el.innerHTML = `<span class="pr">${yen(it.price)}</span><span class="plate">${stage ? "" : partSvg(it.slot, it.id)}</span><span class="nm">${esc(it.name)}</span><span class="rr">${it.mut ? "✨ " : ""}${it.rarity === "N" ? SLOT_NAMES[it.slot] : `${RARITY[it.rarity]}`}</span>`;
     el.addEventListener("click", () => openSheet(it));
     return el;
   }
@@ -90,7 +161,7 @@ export function renderBelt(c) {
     const lane = $("#ybLane");
     if (lane && B) {
       const W = lane.clientWidth, t = nowMs();
-      for (let k = Math.floor((t - B.travelMs / SPEED) / B.tickMs); k <= Math.floor(t / B.tickMs); k++) if (!items.has(k)) items.set(k, keshiBeltItemView(B.pool, B.rates, B.tickMs, B.seed, k));
+      for (let k = Math.floor((t - B.travelMs / SPEED) / B.tickMs); k <= Math.floor(t / B.tickMs); k++) if (!items.has(k)) items.set(k, keshiBeltItemView(B.pool, B.rates, B.tickMs, B.seed, k, B.mutRates, B.mutDefs));
       items.forEach((it, tick) => {
         const p = ((t - it.startMs) / B.travelMs) * SPEED;
         if (p < 0 || p >= 1) {
@@ -100,7 +171,7 @@ export function renderBelt(c) {
           return;
         }
         let el = els.get(tick);
-        if (!el) { el = makeCard(it); els.set(tick, el); lane.appendChild(el); }
+        if (!el) { el = makeCard(it); els.set(tick, el); lane.appendChild(el); if (p < 0.2 && !fxDone.has(tick)) { fxDone.add(tick); fxSpawn(it, root, B.mutDefs); } }
         const x = W - p * (W + CARD_W);
         el.style.transform = `translateX(${x.toFixed(1)}px)`;
         if (stage) { if (!stage.has(tick)) stage.add(tick, it.slot, it.id, it.rarity); stage.move(tick, x + CARD_W / 2, 73); }
@@ -139,6 +210,8 @@ export function renderBelt(c) {
         st = { ...st, ...r }; if (r.table) table = r.table;
         $("#ybCoins").textContent = yen(st.coins);
         el.remove();
+        const rb = $("#ybBelt").getBoundingClientRect(); fxBuy(it, root, { x: rb.left + rb.width / 2, y: rb.top + rb.height / 2 });
+        const cb = $("#ybCoins"); if (cb) { cb.classList.add("pop"); setTimeout(() => cb.classList.remove("pop"), 600); }
         const m = $("#ybMsg"); if (m) m.innerHTML = `✅ <b>${esc(it.name)}</b> を買いました！（付けるときは「消しゴムの改造」の画面から）`;
       } catch (err) {
         const code = err && err.code;
@@ -171,8 +244,22 @@ export function renderBelt(c) {
 function injectStyles() {
   if (stylesDone) return; stylesDone = true;
   const css = `
-  .yb-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; } .yb-head h2 { margin: 6px 0 4px; font-size: 20px; flex: 1; }
+  .yb-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; } .yb-head h2 { margin: 6px 0 4px; font-size: 20px; flex: 1 1 auto; white-space: nowrap; }
   .yb-coins { font-weight: 800; background: #fff6d8; border: 1px solid #f0dc9a; border-radius: 999px; padding: 4px 12px; font-size: 14px; }
+  .yb-snd { border: none; background: #eee; border-radius: 999px; width: 34px; height: 30px; font-size: 16px; cursor: pointer; } .yb-coins { transition: transform .3s; } .yb-coins.pop { transform: scale(1.35); }
+  .yb-card.mut-g .pr { background: linear-gradient(90deg, #ffe27a, #ffc933); } .yb-card.mut-g .nm { color: #ffe27a; }
+  .yb-card.mut-d .pr { background: linear-gradient(90deg, #bff4ff, #6ad0ff); } .yb-card.mut-d .nm { color: #bff4ff; }
+  .yb-card.mut-r .pr { background: linear-gradient(90deg, #ff9aa8, #ffe27a, #8affc8, #8ac8ff, #c88aff); } .yb-card.mut-r .nm { background: linear-gradient(90deg, #ff9aa8, #ffe27a, #8affc8, #8ac8ff, #c88aff); -webkit-background-clip: text; background-clip: text; color: transparent; text-shadow: none; font-weight: 900; }
+  .yb-fx { position: fixed; inset: 0; pointer-events: none; z-index: 90; overflow: hidden; }
+  .yb-flash { position: absolute; inset: 0; opacity: 0; animation: yb-flash .7s ease-out; } .yb-flash.l1 { background: radial-gradient(circle, rgba(74,160,224,.35), transparent 70%); } .yb-flash.l2 { background: radial-gradient(circle, rgba(165,107,255,.5), transparent 70%); } .yb-flash.l3 { background: radial-gradient(circle, rgba(255,207,51,.7), transparent 75%); } .yb-flash.l4 { background: linear-gradient(120deg, rgba(255,122,224,.7), rgba(255,226,122,.7), rgba(122,255,212,.7), rgba(122,184,255,.7)); }
+  @keyframes yb-flash { 0% { opacity: 0; } 15% { opacity: 1; } 100% { opacity: 0; } }
+  .yb-banner { position: absolute; left: 50%; top: 24%; transform: translateX(-50%); white-space: nowrap; max-width: 94vw; overflow: hidden; text-overflow: ellipsis; padding: 8px 22px; border-radius: 999px; font-weight: 900; color: #fff; font-size: 18px; text-shadow: 0 2px 0 rgba(0,0,0,.4); box-shadow: 0 6px 20px rgba(0,0,0,.4); animation: yb-banner 1.8s ease-out forwards; }
+  .yb-banner.l1 { background: #3a86c8; } .yb-banner.l2 { background: linear-gradient(90deg, #7a4ad6, #b57aff); font-size: min(22px, 4.6vw); } .yb-banner.l3 { background: linear-gradient(90deg, #e0a000, #ffd34a); color: #4a3000; text-shadow: none; font-size: min(26px, 4.8vw); animation-duration: 2.6s; } .yb-banner.l4 { background: linear-gradient(90deg, #ff4aa0, #ffb84a, #4aff9a, #4a9aff, #b04aff); font-size: min(30px, 5vw); animation-duration: 2.6s; }
+  @keyframes yb-banner { 0% { opacity: 0; transform: translateX(-50%) scale(.3); } 12% { opacity: 1; transform: translateX(-50%) scale(1.15); } 22% { transform: translateX(-50%) scale(1); } 85% { opacity: 1; } 100% { opacity: 0; transform: translateX(-50%) translateY(-14px) scale(1); } }
+  .yb-conf { position: absolute; width: 9px; height: 13px; border-radius: 2px; animation: yb-conf 1.5s cubic-bezier(.2,.7,.3,1) forwards; } .yb-conf.coin { width: auto; height: auto; font-size: 18px; }
+  @keyframes yb-conf { 0% { transform: translate(0, 0) rotate(0); opacity: 1; } 70% { opacity: 1; } 100% { transform: translate(var(--dx), calc(var(--dy) + 220px)) rotate(var(--rot)); opacity: 0; } }
+  .yb-shake { animation: yb-shake .6s; } @keyframes yb-shake { 0%, 100% { transform: translate(0, 0); } 15% { transform: translate(-7px, 3px); } 30% { transform: translate(6px, -4px); } 45% { transform: translate(-5px, -3px); } 60% { transform: translate(5px, 4px); } 80% { transform: translate(-2px, 1px); } }
+  @media (prefers-reduced-motion: reduce) { .yb-flash, .yb-conf, .yb-shake { animation: none; display: none; } }
   .yb-note { color: #666; font-size: 12.5px; line-height: 1.7; margin: 4px 0 10px; }
   .yb-belt { position: relative; height: 176px; border-radius: 16px; overflow: hidden; background: repeating-linear-gradient(90deg, #5b4a3a 0 22px, #4c3d30 22px 44px); box-shadow: inset 0 6px 14px rgba(0,0,0,.45), 0 4px 14px rgba(0,0,0,.2); border: 4px solid #2f2620; }
   .yb-belt::before, .yb-belt::after { content: ""; position: absolute; left: 0; right: 0; height: 10px; background: linear-gradient(#cfd3d8, #8d939b); z-index: 2; } .yb-belt::before { top: 0; } .yb-belt::after { bottom: 0; }
