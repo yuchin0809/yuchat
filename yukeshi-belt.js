@@ -7,8 +7,8 @@
      買えるかどうかは、Worker（keshiBeltBuy）が、種の署名と時刻とパーツを確かめて決める。
    ・ベータ版。
 ========================================================= */
-import { createPartsStage } from "./yukeshi3d.js?v=20261116-belt5";
-import { keshiStatsView, keshiPunchView, keshiBeltItemView } from "./yukeshi-core.js?v=20261116-belt5";
+import { createPartsStage } from "./yukeshi3d.js?v=20261116-belt6";
+import { keshiStatsView, keshiPunchView, keshiBeltItemView } from "./yukeshi-core.js?v=20261116-belt6";
 
 const SLOT_NAMES = { body: "本体", edge: "ふち", sole: "そこ", weight: "おもり" };
 const STAT_NAMES = [["m", "重さ"], ["s", "すべり"], ["b", "反発"], ["z", "大きさ"]];
@@ -37,6 +37,9 @@ function partSvg(slot, id) {
     : `<rect x="22" y="16" width="44" height="30" rx="5" fill="${c}" ${rim}/><rect x="22" y="16" width="44" height="30" rx="5" fill="url(#ybShine)"/>`;
   return `<svg class="yb-art" viewBox="0 0 88 62" aria-hidden="true">${defs}${g}</svg>`;
 }
+/* iPad だけ、ベルトの速さを1.15倍にする（スマホはそのまま）。iPadOS は「Mac」を名乗ることがあるので、タッチ対応の Mac も iPad とみなす */
+const IS_IPAD = (() => { try { return /iPad/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1); } catch (_) { return false; } })();
+const SPEED = IS_IPAD ? 1.15 : 1;
 let run = 0, stylesDone = false, cur3d = null;
 
 export function stopBelt() { run++; if (cur3d) { try { cur3d.dispose(); } catch (_) {} cur3d = null; } }
@@ -87,9 +90,9 @@ export function renderBelt(c) {
     const lane = $("#ybLane");
     if (lane && B) {
       const W = lane.clientWidth, t = nowMs();
-      for (let k = Math.floor((t - B.travelMs) / B.tickMs); k <= Math.floor(t / B.tickMs); k++) if (!items.has(k)) items.set(k, keshiBeltItemView(B.pool, B.rates, B.tickMs, B.seed, k));
+      for (let k = Math.floor((t - B.travelMs / SPEED) / B.tickMs); k <= Math.floor(t / B.tickMs); k++) if (!items.has(k)) items.set(k, keshiBeltItemView(B.pool, B.rates, B.tickMs, B.seed, k));
       items.forEach((it, tick) => {
-        const p = (t - it.startMs) / B.travelMs;
+        const p = ((t - it.startMs) / B.travelMs) * SPEED;
         if (p < 0 || p >= 1) {
           const old = els.get(tick); if (old) { old.remove(); els.delete(tick); }
           if (stage) stage.remove(tick);
