@@ -132,11 +132,15 @@ function beltHash01(k, seed, n) {
   h = (h ^ (h >>> 16)) >>> 0;
   return h / 4294967296;
 }
-export function keshiBeltItemView(pool, rates, tickMs, seed, tick) {
+export function keshiBeltItemView(pool, rates, tickMs, seed, tick, mutRates, mutDefs) {
   const r = beltHash01(tick, seed, 1);
   const { LR, UR, SR, R } = rates;
   const rarity = r < LR ? "LR" : r < LR + UR ? "UR" : r < LR + UR + SR ? "SR" : r < LR + UR + SR + R ? "R" : "N";
   const list = pool[rarity];
   const p = list[Math.min(list.length - 1, Math.floor(beltHash01(tick, seed, 2) * list.length))];
-  return { tick, startMs: tick * tickMs, rarity, ...p };
+  const mr = beltHash01(tick, seed, 3);
+  const mut = mutRates ? (mr < mutRates.r ? "r" : mr < mutRates.r + mutRates.d ? "d" : mr < mutRates.r + mutRates.d + mutRates.g ? "g" : "") : "";
+  if (!mut) return { tick, startMs: tick * tickMs, rarity, mut, ...p };
+  const D = mutDefs[mut], up = (v) => (v > 0 ? Math.round(v * D.stat) : v);   // ミューテーション：増える点数と値段が大きくなる（サーバーの keshiPartOf と同じ計算）
+  return { tick, startMs: tick * tickMs, rarity, mut, ...p, id: `${p.id}@${mut}`, name: `${D.name}${p.name}`, price: p.price * D.price, m: up(p.m), s: up(p.s), b: up(p.b), z: up(p.z) };
 }

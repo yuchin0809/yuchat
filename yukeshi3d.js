@@ -33,7 +33,8 @@ export function eraserKit(T, RBG) {
   /* only：その枠のパーツだけを作る（ベルトコンベアで、パーツ単体を見せるとき）。ふちは、中が空洞の枠だけになる */
   function build(eqIn, color, only) {
     const want = (s) => !only || only === s;
-    const eq = Object.fromEntries(Object.entries(eqIn || {}).map(([k, v]) => [k, String(v).replace(/~u$/, "")]));   // 中古（~u）も、見た目は同じ
+    const eq = Object.fromEntries(Object.entries(eqIn || {}).map(([k, v]) => [k, String(v).replace(/(~u|@[gdr])$/, "")]));   // 中古（~u）・ミューテーション（@g など）も、見た目は同じ（ミューテーションは、あとで色をつける）
+    const mutKey = only ? (/@([gdr])$/.exec(String(eqIn?.[only] || "")) || [])[1] : null;
     const g = new T.Group();
     const add = (geo, mat, x = 0, y = 0, z = 0) => { const m = new T.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; g.add(m); return m; };
     const body = {
@@ -94,6 +95,11 @@ export function eraserKit(T, RBG) {
     else if (weight === "osmium") add(rbox(.66, .28, .52, .05), std({ color: 0x3a4a6a, metalness: 1, roughness: .2, emissive: 0x0a1a3a, emissiveIntensity: .4 }), .95, .49, 0);
     else if (weight === "blackholew") add(new T.SphereGeometry(.3, 24, 16), std({ color: 0x050308, metalness: .3, roughness: .3, emissive: 0x7a2aff, emissiveIntensity: 1 }), .95, .55, 0);
     else if (weight === "gold") add(rbox(.66, .28, .52, .05), std({ color: 0xffc933, metalness: 1, roughness: .18 }), .95, .49, 0);
+    if (mutKey) {   // ミューテーション：ゴールド・ダイヤ・レインボーの光をつける（レインボーは、色がだんだん変わる）
+      const glow = { g: 0xc89000, d: 0x2ab0ff, r: 0xff40c0 }[mutKey];
+      g.userData.mut = mutKey; g.userData.mats = [];
+      g.traverse((o) => { if (o.material && o.material.emissive) { o.material.emissive.set(glow); o.material.emissiveIntensity = Math.max(o.material.emissiveIntensity || 0, mutKey === "r" ? .6 : .5); g.userData.mats.push(o.material); } });
+    }
     return g;
   }
   const disposeGroup = (g) => g && g.traverse((o) => { if (o.material) { (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => { m.map && m.map.dispose(); m.dispose(); }); } });
@@ -197,14 +203,14 @@ export async function createPartsStage(container) {
         halo.rotation.x = -Math.PI / 2; halo.position.y = -s.y / 2 - .05; pivot.add(halo);
       }
       scene.add(pivot);
-      items.set(key, { pivot, spin: (items.size * 1.7) % 6, fit });
+      items.set(key, { pivot, spin: (items.size * 1.7) % 6, fit, rainbow: g.userData.mut === "r" ? g.userData.mats : null });
     },
     move(key, x, y) { const it = items.get(key); if (it) it.pivot.position.set(x - W / 2, H / 2 - y, 0); },
     remove(key) { const it = items.get(key); if (!it) return; scene.remove(it.pivot); kit.disposeGroup(it.pivot); items.delete(key); },
     has: (key) => items.has(key),
     render(t) {
       if (!alive) return; measure();
-      items.forEach((it) => { it.pivot.rotation.set(.5, reduced ? .6 : it.spin + t / 1800, 0); });
+      items.forEach((it) => { it.pivot.rotation.set(.5, reduced ? .6 : it.spin + t / 1800, 0); if (it.rainbow) it.rainbow.forEach((m) => m.emissive.setHSL((t / 1500) % 1, 1, .5)); });
       renderer.render(scene, cam);
     },
     dispose() { alive = false; items.forEach((it) => kit.disposeGroup(it.pivot)); items.clear(); renderer.dispose(); canvas.remove(); }

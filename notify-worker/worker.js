@@ -6533,12 +6533,27 @@ export const KESHI_DEFAULT_EQ = Object.freeze({ body: "plain", edge: "paper", so
    画面（yukeshi-core.js の keshiStatsView）も同じ計算をする。 */
 export const KESHI_USED_RATE = 0.92;
 const keshiBaseId = (id) => String(id).replace(/~u$/, "");
+/* ミューテーション（ベルトコンベアで、ときどき流れてくる特別なパーツ）：id の後ろに @g（ゴールド）・@d（ダイヤ）・@r（レインボー）を付けて表す（例：pro@g）。
+   増える点数が×1.25・×1.5・×2 になり、値段は ×2・×4・×10。減る点数はそのまま。ゆうマートでは売れない。画面（yukeshi-core.js の keshiBeltItemView）も同じ計算をする */
+export const KESHI_MUT = { g: { name: "ゴールド", stat: 1.25, price: 2 }, d: { name: "ダイヤ", stat: 1.5, price: 4 }, r: { name: "レインボー", stat: 2, price: 10 } };
+export const KESHI_MUT_RATES = { r: 0.003, d: 0.015, g: 0.06 };
+const keshiMutOf = (id) => { const m = /@([gdr])$/.exec(String(id)); return m ? m[1] : ""; };
 const keshiIsUsedId = (id) => /~u$/.test(String(id));
 const keshiUsedCache = new Map();
 function keshiPartOf(slot, id) {
   if (typeof id !== "string") return null;
-  const base = KESHI_PART_BY[slot]?.[keshiBaseId(id)];
+  const mut = keshiMutOf(id);
+  const base = KESHI_PART_BY[slot]?.[mut ? id.slice(0, -2) : keshiBaseId(id)];
   if (!base) return null;
+  if (mut) {
+    if (base.price === 0) return null;   // 無料のパーツには、ミューテーションがない
+    const key = `${slot}:${id}`;
+    if (!keshiUsedCache.has(key)) {
+      const D = KESHI_MUT[mut], up = (v) => (v > 0 ? Math.round(v * D.stat) : v);
+      keshiUsedCache.set(key, { ...base, id, name: `${D.name}${base.name}`, m: up(base.m), s: up(base.s), b: up(base.b), z: up(base.z), price: base.price * D.price, mut });
+    }
+    return keshiUsedCache.get(key);
+  }
   if (!keshiIsUsedId(id)) return base;
   if (base.price === 0) return null;   // 無料のパーツには中古がない
   const key = `${slot}:${id}`;
@@ -6579,14 +6594,16 @@ function keshiView(cur, coins, now) {
   KESHI_SLOTS.forEach((slot) => {
     have[slot] = KESHI_PARTS[slot].filter((p) => p.price === 0 || cur.owned.includes(`${slot}:${p.id}`)).map((p) => p.id);
     KESHI_PARTS[slot].forEach((p) => { if (p.price > 0 && cur.owned.includes(`${slot}:${p.id}~u`)) have[slot].push(`${p.id}~u`); });   // 中古のパーツ
+    keshiOwnedMut(cur, slot).forEach((id) => have[slot].push(id));   // ミューテーションのパーツ
   });
   const colorsHave = Array.from({ length: KESHI_COLOR_COUNT }, (_, i) => i).filter((i) => keshiColorOwned(cur.owned, i));
   return { ok: true, coins, have, eq: cur.eq, color: cur.color, colorsHave, stats: keshiStats(cur.eq), serverNowMs: now };
 }
 /* 持っている中古のパーツは、その人の一覧に（新品の後ろに）足す */
+const keshiOwnedMut = (cur, slot) => (cur ? cur.owned.filter((o) => o.startsWith(`${slot}:`) && keshiMutOf(o)).map((o) => o.slice(slot.length + 1)).filter((id) => keshiPartOf(slot, id)) : []);
 const keshiTable = (cur) => {
   const shown = (slot) => KESHI_PARTS[slot].filter((p) => !p.limited || (cur && cur.owned.includes(`${slot}:${p.id}`)));   // 限定品は、持っている人にだけ見える
-  const parts = cur ? Object.fromEntries(KESHI_SLOTS.map((slot) => [slot, [...shown(slot), ...KESHI_PARTS[slot].filter((p) => p.price > 0 && !p.limited && cur.owned.includes(`${slot}:${p.id}~u`)).map((p) => ({ ...keshiPartOf(slot, `${p.id}~u`), price: 0 }))]])) : Object.fromEntries(KESHI_SLOTS.map((slot) => [slot, shown(slot)]));
+  const parts = cur ? Object.fromEntries(KESHI_SLOTS.map((slot) => [slot, [...shown(slot), ...KESHI_PARTS[slot].filter((p) => p.price > 0 && !p.limited && cur.owned.includes(`${slot}:${p.id}~u`)).map((p) => ({ ...keshiPartOf(slot, `${p.id}~u`), price: 0 })), ...keshiOwnedMut(cur, slot).map((id) => ({ ...keshiPartOf(slot, id), price: 0 }))]])) : Object.fromEntries(KESHI_SLOTS.map((slot) => [slot, shown(slot)]));
   return { slots: KESHI_SLOTS, parts, colors: KESHI_COLORS, limitedColors: KESHI_LIMITED_COLORS.map((c) => c.name), base: KESHI_BASE, usedRate: KESHI_USED_RATE };
 };
 async function keshiState(deps, uid, body) {
@@ -6642,8 +6659,8 @@ async function keshiBuyMany(deps, uid, body) {
   const me = await loadMyUser(deps.firestore, uid, body?.username);
   if (me.error) return me.error;
   const cur = await keshiLoad(deps, uid);
-  if (Object.entries(picks).some(([slot, id]) => (keshiIsUsedId(id) || KESHI_PART_BY[slot][id]?.limited) && !cur.owned.includes(`${slot}:${id}`))) return { status: 409, error: "not_owned" };   // 中古はゆうマートで、限定品はゆう番くじで手に入れるもの。ショップでは買えない
-  const buy = Object.entries(picks).filter(([slot, id]) => !keshiIsUsedId(id) && !keshiIsFree(slot, id) && !cur.owned.includes(`${slot}:${id}`));
+  if (Object.entries(picks).some(([slot, id]) => (keshiIsUsedId(id) || keshiMutOf(id) || KESHI_PART_BY[slot][id]?.limited) && !cur.owned.includes(`${slot}:${id}`))) return { status: 409, error: "not_owned" };   // 中古はゆうマートで、限定品はゆう番くじで手に入れるもの。ショップでは買えない
+  const buy = Object.entries(picks).filter(([slot, id]) => !keshiIsUsedId(id) && !keshiMutOf(id) && !keshiIsFree(slot, id) && !cur.owned.includes(`${slot}:${id}`));
   const total = buy.reduce((sum, [slot, id]) => sum + KESHI_PART_BY[slot][id].price, 0);
   const coins = Number(decodeFields(me.raw.fields).coins || 0);
   if (buy.length && coins < total) return { status: 409, error: "insufficient_coins" };
@@ -6681,7 +6698,9 @@ export function keshiBeltItem(seed, tick) {
   const rarity = r < LR ? "LR" : r < LR + UR ? "UR" : r < LR + UR + SR ? "SR" : r < LR + UR + SR + R ? "R" : "N";
   const pool = keshiBeltPool(rarity === "N" ? null : rarity);
   const pick = pool[Math.min(pool.length - 1, Math.floor(keshiHash01(tick, seed, 2) * pool.length))];
-  return { tick, startMs: tick * KESHI_BELT.tickMs, slot: pick.slot, rarity, part: pick.p };
+  const mr = keshiHash01(tick, seed, 3), M = KESHI_MUT_RATES;
+  const mut = mr < M.r ? "r" : mr < M.r + M.d ? "d" : mr < M.r + M.d + M.g ? "g" : "";
+  return { tick, startMs: tick * KESHI_BELT.tickMs, slot: pick.slot, rarity, mut, part: mut ? keshiPartOf(pick.slot, `${pick.p.id}@${mut}`) : pick.p };
 }
 /* ベータ版：消しバトが公開されていれば、だれでも使える */
 const keshiBeltGate = (deps, uid) => keshiGate(deps, uid);
@@ -6692,7 +6711,7 @@ async function keshiBelt(deps, uid) {
   const now = deps.now(), B = KESHI_BELT;
   const seed = Math.floor((deps.random || Math.random)() * 4294967296) | 0, expiresMs = now + B.tokenMs;
   const token = await slotSignSession({ k: "keshiBelt", u: uid, s: seed, e: expiresMs }, deps.slotSecret);
-  return { ok: true, token, seed, expiresMs, pool: keshiBeltPoolPublic(), rates: B.rates, tickMs: B.tickMs, travelMs: B.travelMs, serverNowMs: now };
+  return { ok: true, token, seed, expiresMs, pool: keshiBeltPoolPublic(), rates: B.rates, mutRates: KESHI_MUT_RATES, mutDefs: KESHI_MUT, tickMs: B.tickMs, travelMs: B.travelMs, serverNowMs: now };
 }
 async function keshiBeltBuy(deps, uid, body) {
   const g = await keshiBeltGate(deps, uid);
