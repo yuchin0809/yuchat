@@ -6467,10 +6467,14 @@ export const KESHI_PARTS = {
     { id: "sand", name: "砂消し", price: 150, m: 4, s: -6, b: 2, z: 0, desc: "ざらざらで重く、すべりにくい" },
     { id: "pro", name: "高級ゴム", price: 600, m: 6, s: 6, b: 6, z: 0, desc: "全部がバランスよく強い" },
     { id: "titan", name: "チタン芯入り", price: 1800, m: 14, s: 8, b: 10, z: -2, desc: "芯が入った、重くて強い本体" },
+    { id: "gel", name: "ジェル本体", price: 3000, m: 12, s: 14, b: 16, z: 2, desc: "ぷるぷるでよく弾むレアな本体（ベルトで流れてくる）", limited: true, rare: "R" },
     { id: "carbon", name: "カーボン本体", price: 3200, m: 18, s: 10, b: 12, z: -2, desc: "軽くて硬い、レアな本体（ベルトで流れてくる）", limited: true, rare: "R" },
+    { id: "bamboo", name: "竹炭本体", price: 3400, m: 20, s: 8, b: 10, z: -2, desc: "黒くて重いレアな本体（ベルトで流れてくる）", limited: true, rare: "R" },
     { id: "ltd", name: "限定 ゆうメタル本体", price: 5000, m: 16, s: 10, b: 12, z: 0, desc: "ゆう番くじ E賞の限定品。重くて強い、特別な本体", limited: true },
+    { id: "ruby", name: "ルビー本体", price: 8500, m: 22, s: 12, b: 22, z: 0, desc: "赤い宝石でできたスーパーレアな本体（ベルトで流れてくる）", limited: true, rare: "SR" },
     { id: "diamond", name: "ダイヤ入り本体", price: 9000, m: 24, s: 14, b: 16, z: 0, desc: "ダイヤを練り込んだ、スーパーレアな本体（ベルトで流れてくる）", limited: true, rare: "SR" },
-    { id: "meteor", name: "隕石本体", price: 24000, m: 32, s: 18, b: 22, z: 0, desc: "宇宙から落ちてきた石でできた、ウルトラレアな本体（ベルトで流れてくる）", limited: true, rare: "UR" }
+    { id: "meteor", name: "隕石本体", price: 24000, m: 32, s: 18, b: 22, z: 0, desc: "宇宙から落ちてきた石でできた、ウルトラレアな本体（ベルトで流れてくる）", limited: true, rare: "UR" },
+    { id: "dragon", name: "ドラゴン本体", price: 60000, m: 40, s: 24, b: 28, z: 0, desc: "伝説のドラゴンのうろこでできた、トップレアな本体（ベルトで流れてくる）", limited: true, rare: "LR" }
   ],
   edge: [
     { id: "paper", name: "紙のカバー", price: 0, m: 0, s: 0, b: 0, z: 0, desc: "ふつうの紙のカバー" },
@@ -6478,10 +6482,14 @@ export const KESHI_PARTS = {
     { id: "band", name: "ゴムバンド", price: 200, m: 0, s: 0, b: 10, z: 0, desc: "ぶつかったときに強く弾く" },
     { id: "metal", name: "金属フレーム", price: 900, m: 10, s: 2, b: 12, z: 2, desc: "重くて、当たりに強い" },
     { id: "crystal", name: "クリスタルフレーム", price: 2500, m: 12, s: 10, b: 14, z: 2, desc: "すべって弾む、いちばん強いふち" },
+    { id: "neon", name: "ネオンフレーム", price: 3300, m: 13, s: 14, b: 14, z: 2, desc: "光るレアなふち（ベルトで流れてくる）", limited: true, rare: "R" },
     { id: "titanf", name: "チタンフレーム", price: 3500, m: 14, s: 12, b: 16, z: 2, desc: "かるくて丈夫なレアなふち（ベルトで流れてくる）", limited: true, rare: "R" },
+    { id: "carbonf", name: "カーボンフレーム", price: 3600, m: 16, s: 10, b: 16, z: 2, desc: "黒くて硬いレアなふち（ベルトで流れてくる）", limited: true, rare: "R" },
     { id: "ltd", name: "限定 ゆうゴールドフレーム", price: 5000, m: 12, s: 12, b: 16, z: 2, desc: "ゆう番くじ E賞の限定品。金色に輝く、特別なふち", limited: true },
+    { id: "rubyf", name: "ルビーフレーム", price: 9000, m: 18, s: 14, b: 24, z: 2, desc: "赤い宝石のスーパーレアなふち（ベルトで流れてくる）", limited: true, rare: "SR" },
     { id: "mithril", name: "ミスリルフレーム", price: 9500, m: 18, s: 16, b: 22, z: 2, desc: "青白く光るスーパーレアなふち（ベルトで流れてくる）", limited: true, rare: "SR" },
-    { id: "aurora", name: "オーロラフレーム", price: 25000, m: 24, s: 20, b: 28, z: 3, desc: "虹色にゆれるウルトラレアなふち（ベルトで流れてくる）", limited: true, rare: "UR" }
+    { id: "aurora", name: "オーロラフレーム", price: 25000, m: 24, s: 20, b: 28, z: 3, desc: "虹色にゆれるウルトラレアなふち（ベルトで流れてくる）", limited: true, rare: "UR" },
+    { id: "blackhole", name: "ブラックホールフレーム", price: 60000, m: 30, s: 26, b: 36, z: 4, desc: "すべてを吸い込む、トップレアなふち（ベルトで流れてくる）", limited: true, rare: "LR" }
   ],
   sole: [
     { id: "bare", name: "そのまま", price: 0, m: 0, s: 0, b: 0, z: 0, desc: "なにも付けていない" },
@@ -6489,10 +6497,14 @@ export const KESHI_PARTS = {
     { id: "wax", name: "ワックス", price: 250, m: -2, s: 14, b: 0, z: 0, desc: "よくすべる" },
     { id: "teflon", name: "テフロンシート", price: 1000, m: -4, s: 24, b: 0, z: 0, desc: "ものすごくすべる" },
     { id: "air", name: "エアクッション底", price: 2200, m: -6, s: 28, b: 4, z: 0, desc: "ほとんど摩擦がない" },
+    { id: "gelsole", name: "ジェルソール", price: 3100, m: -4, s: 30, b: 10, z: 0, desc: "ぷるぷるですべるレアな底（ベルトで流れてくる）", limited: true, rare: "R" },
     { id: "hover", name: "ホバーソール", price: 3400, m: -6, s: 34, b: 6, z: 0, desc: "空気で浮くようにすべるレアな底（ベルトで流れてくる）", limited: true, rare: "R" },
+    { id: "roller", name: "ローラーソール", price: 3500, m: -6, s: 32, b: 8, z: 0, desc: "コロコロ転がるレアな底（ベルトで流れてくる）", limited: true, rare: "R" },
     { id: "ltd", name: "限定 ゆうジェットソール", price: 5000, m: -6, s: 30, b: 6, z: 0, desc: "ゆう番くじ E賞の限定品。ジェット噴射のようにすべる底", limited: true },
     { id: "linear", name: "リニアソール", price: 9000, m: -8, s: 42, b: 8, z: 0, desc: "磁石の力ですべるスーパーレアな底（ベルトで流れてくる）", limited: true, rare: "SR" },
-    { id: "zero", name: "ゼロ摩擦ソール", price: 24000, m: -10, s: 52, b: 10, z: 0, desc: "まったく摩擦がないウルトラレアな底（ベルトで流れてくる）", limited: true, rare: "UR" }
+    { id: "plasma", name: "プラズマソール", price: 9200, m: -8, s: 44, b: 10, z: 0, desc: "びりびり光るスーパーレアな底（ベルトで流れてくる）", limited: true, rare: "SR" },
+    { id: "zero", name: "ゼロ摩擦ソール", price: 24000, m: -10, s: 52, b: 10, z: 0, desc: "まったく摩擦がないウルトラレアな底（ベルトで流れてくる）", limited: true, rare: "UR" },
+    { id: "antigrav", name: "反重力ソール", price: 60000, m: -14, s: 66, b: 14, z: 0, desc: "机から浮くように進む、トップレアな底（ベルトで流れてくる）", limited: true, rare: "LR" }
   ],
   weight: [
     { id: "none", name: "なし", price: 0, m: 0, s: 0, b: 0, z: 0, desc: "おもりなし" },
@@ -6500,10 +6512,14 @@ export const KESHI_PARTS = {
     { id: "bolt", name: "ボルト", price: 300, m: 14, s: 0, b: 0, z: -1, desc: "しっかり重くなる" },
     { id: "lead", name: "鉛のおもり", price: 1200, m: 24, s: -2, b: 0, z: -2, desc: "かなり重くなる" },
     { id: "gold", name: "金のおもり", price: 3000, m: 32, s: 0, b: 4, z: -3, desc: "いちばん重い" },
+    { id: "mercury", name: "水銀のおもり", price: 3600, m: 36, s: 0, b: 6, z: -3, desc: "とろりと重いレアなおもり（ベルトで流れてくる）", limited: true, rare: "R" },
     { id: "tungsten", name: "タングステン", price: 3800, m: 40, s: 0, b: 5, z: -3, desc: "とても重いレアなおもり（ベルトで流れてくる）", limited: true, rare: "R" },
+    { id: "diamondw", name: "ダイヤのおもり", price: 4200, m: 38, s: 0, b: 10, z: -3, desc: "きらきら光るレアなおもり（ベルトで流れてくる）", limited: true, rare: "R" },
     { id: "ltd", name: "限定 ゆうオリハルコン", price: 5000, m: 34, s: 0, b: 6, z: -3, desc: "ゆう番くじ E賞の限定品。伝説の金属でできた、いちばん重いおもり", limited: true },
     { id: "platinum", name: "プラチナのおもり", price: 10000, m: 50, s: 0, b: 8, z: -4, desc: "ずっしり重いスーパーレアなおもり（ベルトで流れてくる）", limited: true, rare: "SR" },
-    { id: "neutron", name: "中性子星のかけら", price: 26000, m: 64, s: 0, b: 12, z: -5, desc: "ありえないほど重いウルトラレアなおもり（ベルトで流れてくる）", limited: true, rare: "UR" }
+    { id: "osmium", name: "オスミウム", price: 10500, m: 54, s: 0, b: 6, z: -4, desc: "世界でいちばん重い金属のひとつ、スーパーレアなおもり（ベルトで流れてくる）", limited: true, rare: "SR" },
+    { id: "neutron", name: "中性子星のかけら", price: 26000, m: 64, s: 0, b: 12, z: -5, desc: "ありえないほど重いウルトラレアなおもり（ベルトで流れてくる）", limited: true, rare: "UR" },
+    { id: "blackholew", name: "ブラックホールのかけら", price: 60000, m: 80, s: 0, b: 16, z: -6, desc: "ありえない重さの、トップレアなおもり（ベルトで流れてくる）", limited: true, rare: "LR" }
   ]
 };
 /* limited：ゆう番くじ E賞の限定品。ショップでは買えない・ゆうマートでも売れない。持っている人の一覧にだけ出る（price は、無料のパーツと区別するための目安） */
@@ -6580,7 +6596,7 @@ async function keshiState(deps, uid, body) {
   if (me.error) return me.error;
   const cur = await keshiLoad(deps, uid);
   /* league：ショップの「最強決定戦」の大きなバナー用（エントリー済みか・賞金・開催の始まり）。追加の読み取りはない */
-  return { ...keshiView(cur, Number(decodeFields(me.raw.fields).coins || 0), deps.now()), belt: slotIsTopAdmin(deps, uid), table: keshiTable(cur), league: { entered: cur.league === true, prizes: KESHI_LEAGUE_PRIZES, sets: KESHI_LEAGUE_SETS, firstMs: KESHI_LEAGUE_FIRST_MS } };
+  return { ...keshiView(cur, Number(decodeFields(me.raw.fields).coins || 0), deps.now()), belt: true, table: keshiTable(cur), league: { entered: cur.league === true, prizes: KESHI_LEAGUE_PRIZES, sets: KESHI_LEAGUE_SETS, firstMs: KESHI_LEAGUE_FIRST_MS } };
 }
 function keshiWrite(deps, uid, cur, fields) {
   const fs = deps.firestore;
@@ -6641,12 +6657,12 @@ async function keshiBuyMany(deps, uid, body) {
 }
 /* =========================================================
    🍣 パーツを探す（回転寿司のベルトコンベア）
-   ・12秒ごとに1つ、パーツが流れてきて、50秒かけて端まで流れると消える。流れてくるパーツは、端末ごとの種と時刻で、端末の中で決まる（端末ごとに違う。サーバーは、開くときに種を1つ渡すだけ。保存も読み取りもなし）。
-   ・ほとんどは、ショップにあるふつうのパーツ。ときどき、レア（R）・スーパーレア（SR）・ウルトラレア（UR）の、高くて強いパーツ（ここでしか買えない）が流れる。
+   ・4秒ごとに1つ、パーツが流れてきて、16秒かけて端まで流れると消える。流れてくるパーツは、端末ごとの種と時刻で、端末の中で決まる（端末ごとに違う。サーバーは、開くときに種を1つ渡すだけ。保存も読み取りもなし）。
+   ・ほとんどは、ショップにあるふつうのパーツ。ときどき、レア（R）・スーパーレア（SR）・ウルトラレア（UR）・トップレア（LR。ほとんど出ない）の、高くて強いパーツ（ここでしか買えない）が流れる。
    ・買えるのは、いま流れているパーツだけ（買うときに、サーバーが、種の署名と、その時刻のパーツかどうかを確かめる）。買っただけでは付けない（付けるのは、改造の画面）。
-   ・いまは最上位管理者だけが使える。
+   ・ベータ版として、消しバトが公開されていればだれでも使える。
 ========================================================= */
-export const KESHI_BELT = { tickMs: 12000, travelMs: 50000, tokenMs: 6 * 3600000, graceMs: 3000, rates: { UR: 0.02, SR: 0.06, R: 0.16 } };
+export const KESHI_BELT = { tickMs: 4000, travelMs: 16000, tokenMs: 6 * 3600000, graceMs: 3000, rates: { LR: 0.0002, UR: 0.003, SR: 0.02, R: 0.09 } };
 /* 流れるパーツは、端末ごとの「種」と時刻から決まる。種は、ベルトを開くときにサーバーが1つ渡す（署名つき）ので、端末ごとに流れるパーツが違う。
    画面（yukeshi-core.js の keshiBeltItemView）も同じ計算をして、流れるパーツを端末の中で決める（毎回サーバーに聞かない）。
    買うときは、種の署名・時刻・パーツが合っているかを、サーバーが確かめる */
@@ -6659,19 +6675,16 @@ function keshiHash01(k, seed, n) {
 }
 const keshiBeltPool = (rare) => KESHI_SLOTS.flatMap((slot) => KESHI_PARTS[slot].filter((p) => (rare ? p.rare === rare : p.price > 0 && !p.limited)).map((p) => ({ slot, p })));
 const keshiBeltPartPublic = ({ slot, p }) => ({ slot, id: p.id, name: p.name, price: p.price, m: p.m, s: p.s, b: p.b, z: p.z, desc: p.desc });
-export const keshiBeltPoolPublic = () => Object.fromEntries(["N", "R", "SR", "UR"].map((r) => [r, keshiBeltPool(r === "N" ? null : r).map(keshiBeltPartPublic)]));
+export const keshiBeltPoolPublic = () => Object.fromEntries(["N", "R", "SR", "UR", "LR"].map((r) => [r, keshiBeltPool(r === "N" ? null : r).map(keshiBeltPartPublic)]));
 export function keshiBeltItem(seed, tick) {
-  const r = keshiHash01(tick, seed, 1), { UR, SR, R } = KESHI_BELT.rates;
-  const rarity = r < UR ? "UR" : r < UR + SR ? "SR" : r < UR + SR + R ? "R" : "N";
+  const r = keshiHash01(tick, seed, 1), { LR, UR, SR, R } = KESHI_BELT.rates;
+  const rarity = r < LR ? "LR" : r < LR + UR ? "UR" : r < LR + UR + SR ? "SR" : r < LR + UR + SR + R ? "R" : "N";
   const pool = keshiBeltPool(rarity === "N" ? null : rarity);
   const pick = pool[Math.min(pool.length - 1, Math.floor(keshiHash01(tick, seed, 2) * pool.length))];
   return { tick, startMs: tick * KESHI_BELT.tickMs, slot: pick.slot, rarity, part: pick.p };
 }
-async function keshiBeltGate(deps, uid) {
-  const g = await keshiGate(deps, uid);
-  if (g) return g;
-  return slotIsTopAdmin(deps, uid) ? null : { status: 403, error: "not_published" };
-}
+/* ベータ版：消しバトが公開されていれば、だれでも使える */
+const keshiBeltGate = (deps, uid) => keshiGate(deps, uid);
 /* ベルトを開く：端末ごとの種（署名つき）と、流れるパーツの一覧・割合・速さを渡す。Firestore は読まない */
 async function keshiBelt(deps, uid) {
   const g = await keshiBeltGate(deps, uid);

@@ -123,7 +123,7 @@ export function keshiPunchView(table, eq) {
 }
 
 /* 🍣 パーツを探す（ベルトコンベア）：流れるパーツを、端末の中で決める。サーバー（notify-worker/worker.js の keshiBeltItem）と同じ計算。
-   ・seed：ベルトを開くときにサーバーが渡す端末ごとの種。pool：{ N, R, SR, UR }（それぞれ、パーツの一覧）、rates：{ UR, SR, R }
+   ・seed：ベルトを開くときにサーバーが渡す端末ごとの種。pool：{ N, R, SR, UR, LR }（それぞれ、パーツの一覧）、rates：{ LR, UR, SR, R }
    ・同じ答えになることは、notify-worker/test/keshi.test.mjs が確かめる */
 function beltHash01(k, seed, n) {
   let h = (Math.imul(k | 0, 2654435761) ^ Math.imul(((seed | 0) + n) | 0, 40503)) >>> 0;
@@ -134,7 +134,8 @@ function beltHash01(k, seed, n) {
 }
 export function keshiBeltItemView(pool, rates, tickMs, seed, tick) {
   const r = beltHash01(tick, seed, 1);
-  const rarity = r < rates.UR ? "UR" : r < rates.UR + rates.SR ? "SR" : r < rates.UR + rates.SR + rates.R ? "R" : "N";
+  const { LR, UR, SR, R } = rates;
+  const rarity = r < LR ? "LR" : r < LR + UR ? "UR" : r < LR + UR + SR ? "SR" : r < LR + UR + SR + R ? "R" : "N";
   const list = pool[rarity];
   const p = list[Math.min(list.length - 1, Math.floor(beltHash01(tick, seed, 2) * list.length))];
   return { tick, startMs: tick * tickMs, rarity, ...p };

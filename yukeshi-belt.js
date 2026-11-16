@@ -5,22 +5,22 @@
    ・パーツをタップすると、付けたときの強さが出て、「買う」「買わない」を選べる。
    ・何が流れるかは、端末ごとの種（ベルトを開くときに Worker（keshiBelt）が1つ渡す）と時刻から、この端末の中で決める（端末ごとに違う）。
      買えるかどうかは、Worker（keshiBeltBuy）が、種の署名と時刻とパーツを確かめて決める。
-   ・いまは管理者だけが使える（Worker が確かめる）。
+   ・ベータ版。
 ========================================================= */
-import { createPartsStage } from "./yukeshi3d.js?v=20261116-belt4";
-import { keshiStatsView, keshiPunchView, keshiBeltItemView } from "./yukeshi-core.js?v=20261116-belt4";
+import { createPartsStage } from "./yukeshi3d.js?v=20261116-belt5";
+import { keshiStatsView, keshiPunchView, keshiBeltItemView } from "./yukeshi-core.js?v=20261116-belt5";
 
 const SLOT_NAMES = { body: "本体", edge: "ふち", sole: "そこ", weight: "おもり" };
 const STAT_NAMES = [["m", "重さ"], ["s", "すべり"], ["b", "反発"], ["z", "大きさ"]];
-const RARITY = { N: "ふつう", R: "レア", SR: "スーパーレア", UR: "ウルトラレア" };
+const RARITY = { N: "ふつう", R: "レア", SR: "スーパーレア", UR: "ウルトラレア", LR: "トップレア" };
 const CARD_W = 104;
 
 /* パーツの見た目（ベルトの上に置いてあるように、パーツだけを描く。ふちは、中が空洞の枠だけ） */
 const LOOK = {
-  body: { plain: "#f4f1ea", sponge: "#ffd84a", sand: "#b8b2a4", pro: "#fde7ee", titan: "#d2d6dc", carbon: "#2b2e34", diamond: "#cdf3ff", meteor: "#5a4640", ltd: "#7fa3d6" },
-  edge: { paper: "#ffffff", plastic: "#9fd8ff", band: "#d8262a", metal: "#b9c0c8", crystal: "#66d0ff", titanf: "#c9ced6", mithril: "#bcd8ff", aurora: "url(#ybAur)", ltd: "#ffc933" },
-  sole: { tape: "#f4d20a", wax: "#fff1c9", teflon: "#1c1c20", air: "#c4ecff", hover: "#c8ffdc", linear: "#8ccaff", zero: "#f4fbff", ltd: "#ff7a45" },
-  weight: { coin: "#d9a233", bolt: "#aab0b8", lead: "#4a4d54", gold: "#ffc933", tungsten: "#6b6f78", platinum: "#e6edf2", neutron: "#9ad0ff", ltd: "#5fe6cf" }
+  body: { plain: "#f4f1ea", sponge: "#ffd84a", sand: "#b8b2a4", pro: "#fde7ee", titan: "#d2d6dc", carbon: "#2b2e34", diamond: "#cdf3ff", meteor: "#5a4640", ltd: "#7fa3d6", gel: "#9fe8ff", bamboo: "#2e3a33", ruby: "#c2203a", dragon: "#2a6b3a" },
+  edge: { paper: "#ffffff", plastic: "#9fd8ff", band: "#d8262a", metal: "#b9c0c8", crystal: "#66d0ff", titanf: "#c9ced6", mithril: "#bcd8ff", aurora: "url(#ybAur)", ltd: "#ffc933", neon: "#39ff88", carbonf: "#2b2e34", rubyf: "#c2203a", blackhole: "#2a1450" },
+  sole: { tape: "#f4d20a", wax: "#fff1c9", teflon: "#1c1c20", air: "#c4ecff", hover: "#c8ffdc", linear: "#8ccaff", zero: "#f4fbff", ltd: "#ff7a45", roller: "#555a63", gelsole: "#aef0ff", plasma: "#ff6aff", antigrav: "#e6ffff" },
+  weight: { coin: "#d9a233", bolt: "#aab0b8", lead: "#4a4d54", gold: "#ffc933", tungsten: "#6b6f78", platinum: "#e6edf2", neutron: "#9ad0ff", ltd: "#5fe6cf", mercury: "#c9d1d9", diamondw: "#cdf3ff", osmium: "#3a4a6a", blackholew: "#1a1030" }
 };
 function partSvg(slot, id) {
   const c = (LOOK[slot] && LOOK[slot][id]) || "#ddd", rim = "stroke=\"rgba(0,0,0,.35)\" stroke-width=\"1.5\"";
@@ -33,7 +33,7 @@ function partSvg(slot, id) {
   else if (slot === "sole") g = `<rect x="6" y="26" width="76" height="9" rx="4" fill="${c}" ${rim}/><rect x="6" y="26" width="76" height="9" rx="4" fill="url(#ybShine)"/>`;
   else g = id === "coin" ? `<circle cx="44" cy="31" r="17" fill="${c}" ${rim}/><circle cx="44" cy="31" r="11" fill="none" stroke="rgba(0,0,0,.25)" stroke-width="2"/>`
     : id === "bolt" ? `<polygon points="44,12 60,21 60,41 44,50 28,41 28,21" fill="${c}" ${rim}/><circle cx="44" cy="31" r="6" fill="rgba(0,0,0,.3)"/>`
-    : id === "neutron" ? `<circle cx="44" cy="31" r="19" fill="${c}" ${rim}/><circle cx="44" cy="31" r="19" fill="url(#ybShine)"/><circle cx="44" cy="31" r="26" fill="none" stroke="#9ad0ff" stroke-opacity=".5" stroke-width="3"/>`
+    : id === "neutron" || id === "mercury" || id === "blackholew" ? `<circle cx="44" cy="31" r="19" fill="${c}" ${rim}/><circle cx="44" cy="31" r="19" fill="url(#ybShine)"/><circle cx="44" cy="31" r="26" fill="none" stroke="#9ad0ff" stroke-opacity=".5" stroke-width="3"/>`
     : `<rect x="22" y="16" width="44" height="30" rx="5" fill="${c}" ${rim}/><rect x="22" y="16" width="44" height="30" rx="5" fill="url(#ybShine)"/>`;
   return `<svg class="yb-art" viewBox="0 0 88 62" aria-hidden="true">${defs}${g}</svg>`;
 }
@@ -53,7 +53,7 @@ export function renderBelt(c) {
   root.innerHTML = `<div class="yb-head"><button type="button" class="yw-back" id="ybBack">← 消しゴムの改造へ</button><h2>🍣 パーツを探す</h2><div class="yb-coins" id="ybCoins">${yen(st.coins)}</div></div>
     <p class="yb-note">ベルトコンベアに、パーツが流れてきます。気になるパーツをタップすると、強さが見られて、買えます。流れていったパーツは、もう買えません。</p>
     <div class="yb-belt" id="ybBelt"><div class="yb-lane" id="ybLane"></div><div class="yb-load" id="ybLoad">ベルトを動かしています…</div></div>
-    <div class="yb-legend"><span class="N">ふつう</span><span class="R">レア</span><span class="SR">スーパーレア</span><span class="UR">ウルトラレア</span></div>
+    <div class="yb-legend"><span class="N">ふつう</span><span class="R">レア</span><span class="SR">スーパーレア</span><span class="UR">ウルトラレア</span><span class="LR">トップレア</span></div>
     <div class="yb-msg" id="ybMsg"></div>`;
   const $ = (s) => root.querySelector(s);
   $("#ybBack").addEventListener("click", () => { stopBelt(); c.onBack(); });
@@ -183,14 +183,16 @@ function injectStyles() {
   .yb-card .rr { font-size: 10px; font-weight: 800; color: #ddd; text-shadow: 0 1px 2px #000; }
   .yb-card.R .art, .yb-card.R .yb-art { filter: drop-shadow(0 0 6px #4aa0e0) drop-shadow(0 4px 3px rgba(0,0,0,.55)); } .yb-card.R .rr { color: #8fd0ff; }
   .yb-card.SR .yb-art { filter: drop-shadow(0 0 8px #a56bff) drop-shadow(0 4px 3px rgba(0,0,0,.55)); } .yb-card.SR .rr { color: #cfa8ff; }
+  .yb-card.LR .yb-art { filter: drop-shadow(0 0 12px #fff) drop-shadow(0 0 20px #ff7ae0) drop-shadow(0 4px 3px rgba(0,0,0,.55)); animation: yb-glow 0.8s ease-in-out infinite; } .yb-card.LR .rr { color: #ffb8f0; font-weight: 900; } .yb-card.LR .pr { background: linear-gradient(90deg, #ffe27a, #ffb8f0, #8ac8ff); }
   .yb-card.UR .yb-art { filter: drop-shadow(0 0 10px #ffcf33) drop-shadow(0 4px 3px rgba(0,0,0,.55)); animation: yb-glow 1.2s ease-in-out infinite; } .yb-card.UR .rr { color: #ffd966; }
   @keyframes yb-glow { 0%, 100% { filter: drop-shadow(0 0 6px #ffcf33) drop-shadow(0 4px 3px rgba(0,0,0,.55)); } 50% { filter: drop-shadow(0 0 16px #ffe27a) drop-shadow(0 4px 3px rgba(0,0,0,.55)); } }
-  @media (prefers-reduced-motion: reduce) { .yb-card.UR .yb-art { animation: none; } }
+  @media (prefers-reduced-motion: reduce) { .yb-card.UR .yb-art, .yb-card.LR .yb-art { animation: none; } }
   .yb-legend { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; font-size: 11.5px; font-weight: 800; } .yb-legend span { border-radius: 999px; padding: 2px 10px; background: #eee; color: #444; }
   .yb-legend .R { background: #dff0ff; color: #14507a; } .yb-legend .SR { background: #eadfff; color: #5a2aa0; } .yb-legend .UR { background: #fff0b8; color: #7a5200; }
+  .yb-legend .LR { background: linear-gradient(90deg, #ff9aa8, #ffe27a, #8affc8, #8ac8ff, #c88aff); color: #3a1a00; }
   .yb-msg { font-size: 13px; line-height: 1.7; color: #2c6a3a; min-height: 20px; }
   .yb-sheet { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; z-index: 60; padding: 16px; }
-  .yb-box { width: 100%; max-width: 380px; max-height: 92vh; overflow: auto; background: #fff; border-radius: 16px; padding: 16px; border-top: 8px solid #bbb; } .yb-box.R { border-color: #4aa0e0; } .yb-box.SR { border-color: #8a4ae0; } .yb-box.UR { border-color: #e0a000; }
+  .yb-box { width: 100%; max-width: 380px; max-height: 92vh; overflow: auto; background: #fff; border-radius: 16px; padding: 16px; border-top: 8px solid #bbb; } .yb-box.R { border-color: #4aa0e0; } .yb-box.SR { border-color: #8a4ae0; } .yb-box.UR { border-color: #e0a000; } .yb-box.LR { border-image: linear-gradient(90deg, #ff7ae0, #ffe27a, #7affd4, #7ab8ff) 1; }
   .yb-look { position: relative; min-height: 105px; display: flex; justify-content: center; align-items: center; margin: 4px 0; background: repeating-linear-gradient(90deg, #5b4a3a 0 22px, #4c3d30 22px 44px); border-radius: 10px; padding: 6px 0; } .yb-look .yb-art { width: 120px; height: 85px; }
   .yb-rar { font-size: 11.5px; font-weight: 900; color: #777; } .yb-box h3 { margin: 2px 0 6px; font-size: 18px; } .yb-d { font-size: 12.5px; line-height: 1.7; color: #555; margin: 0 0 8px; }
   .yb-cmp { background: #fff8e8; border-radius: 10px; padding: 8px 10px; font-size: 13px; } .yb-cmp > b { display: block; margin-bottom: 4px; font-size: 12.5px; }
