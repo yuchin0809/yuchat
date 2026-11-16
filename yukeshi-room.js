@@ -6,8 +6,8 @@
    ・3Dの机と消しゴムは three.js（ヨットと同じもの）。3D が使えない端末では、対戦できない（メッセージを出す）。
 ========================================================= */
 import { load3D, three } from "./yuyacht3d.js?v=20261023-3d1";
-import { eraserKit } from "./yukeshi3d.js?v=20261116-belt7";
-import { keshiSimStepper, KESHI_DESK, KESHI_DT, eraserIcon } from "./yukeshi-core.js?v=20261116-belt7";
+import { eraserKit } from "./yukeshi3d.js?v=20261116-name1";
+import { keshiSimStepper, KESHI_DESK, KESHI_DT, eraserIcon } from "./yukeshi-core.js?v=20261116-name1";
 
 const TOP_Y = -0.4;   // 机の上の面の高さ
 const ERASER_SCALE = 0.57;   // 机の上の消しゴムの大きさ（1人用の改造の画面の消しゴムを、この倍率に小さくする）
@@ -334,7 +334,7 @@ function roomError(e) {
 function drawHud() {
   const y = kr.y, me = myIdx(), esc = kr.esc; if (!y) return;
   const pips = (w) => [0, 1].map((k) => `<i class="${k < w ? "on" : ""}"></i>`).join("");
-  const side = (i) => `<div class="kb-p${me === i ? " me" : ""}${!y.done && y.cur === i ? " turn" : ""}"><span class="n">${esc(String(y.names[i] || "").slice(0, 8))}</span><span class="pips">${pips(y.wins[i])}</span><span class="rt">総合力 ${y.rt[i]}</span></div>`;
+  const side = (i) => `<div class="kb-p${me === i ? " me" : ""}${!y.done && y.cur === i ? " turn" : ""}"><span class="n">${esc(String(y.names[i] || "").slice(0, 8))}</span>${y.en && y.en[i] ? `<span class="en">「${esc(String(y.en[i]))}」</span>` : ""}<span class="pips">${pips(y.wins[i])}</span><span class="rt">総合力 ${y.rt[i]}</span></div>`;
   const top = $("#kbTop"); if (top) top.innerHTML = side(me === 1 ? 1 : 0) + `<div class="kb-mid">${y.done ? "終了" : `第${y.bout}本<small>${y.flicks}/10回</small>`}</div>` + side(me === 1 ? 0 : 1);
   const turn = $("#kbTurn"), mine = !y.done && y.cur === me;
   if (turn) { turn.classList.toggle("mine", mine); turn.innerHTML = y.done ? "対戦が終わりました" : mine ? `あなたの番です <span id="kbTimer" class="kb-timer"></span>` : `${esc(String(y.names[y.cur] || ""))}さんの番です <span id="kbTimer" class="kb-timer"></span>`; }
@@ -378,7 +378,7 @@ function injectStyles() {
   .kb-top { display: grid; grid-template-columns: 1fr auto 1fr; gap: 6px; align-items: stretch; margin-bottom: 6px; }
   .kb-p { background: #fff; border-radius: 12px; padding: 6px 10px; box-shadow: 0 2px 8px rgba(0,0,0,.07); display: flex; flex-direction: column; gap: 2px; min-width: 0; border: 2px solid transparent; }
   .kb-p.turn { border-color: #ffc933; } .kb-p.me .n { color: #14507a; }
-  .kb-p .n { font-weight: 800; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .kb-p .rt { font-size: 11px; color: #777; }
+  .kb-p .n { font-weight: 800; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .kb-p .rt { font-size: 11px; color: #777; } .kb-p .en { display: block; font-size: 11px; color: #777; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .kb-p .pips { display: flex; gap: 4px; } .kb-p .pips i { width: 14px; height: 14px; border-radius: 50%; border: 2px solid #d3a421; background: #fff; } .kb-p .pips i.on { background: #ffc933; }
   .kb-mid { display: flex; flex-direction: column; align-items: center; justify-content: center; font-weight: 800; font-size: 13px; padding: 0 4px; } .kb-mid small { font-weight: 600; color: #888; font-size: 10.5px; }
   .kb-turn { text-align: center; background: #3b3f46; color: #fff; border-radius: 10px; padding: 8px; font-weight: 800; margin-bottom: 8px; font-size: 14px; } .kb-turn.mine { background: #e0902f; }

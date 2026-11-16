@@ -3166,6 +3166,7 @@ export async function handleYuslotAction(deps, uid, body) {
       case "keshiBuy": return await keshiBuy(deps, uid, body);
       case "keshiEquip": return await keshiEquip(deps, uid, body);
       case "keshiBuyMany": return await keshiBuyMany(deps, uid, body);
+      case "keshiName": return await keshiName(deps, uid, body);
       case "keshiBelt": return await keshiBelt(deps, uid, body);
       case "keshiBeltBuy": return await keshiBeltBuy(deps, uid, body);
       case "martStatus": return await martStatus(deps, uid);
@@ -6578,12 +6579,19 @@ async function keshiGate(deps, uid) {
   return keshi || slotIsTopAdmin(deps, uid) ? null : { status: 403, error: "not_published" };
 }
 /* 消しゴムの書類（yuslotKeshi/{uid}）の中身を、安全な形にそろえる（持っていないパーツは付いていないことにする） */
+/* 消しゴムの名前：10文字まで。改行などの制御文字は取る */
+export const KESHI_NAME_MAX = 10;
+function keshiCleanName(v) {
+  if (typeof v !== "string") return "";
+  const t = v.normalize("NFKC").replace(/[\u0000-\u001f\u007f\u200b-\u200f\u2028\u2029\ufeff]/g, "").trim();
+  return Array.from(t).slice(0, KESHI_NAME_MAX).join("");
+}
 function keshiParse(d) {
   const owned = Array.isArray(d.owned) ? d.owned.filter((x) => typeof x === "string") : [];
   const eq = { ...KESHI_DEFAULT_EQ };
   KESHI_SLOTS.forEach((slot) => { const id = d.eq?.[slot]; if (typeof id === "string" && keshiPartOf(slot, id) && (keshiIsFree(slot, id) || owned.includes(`${slot}:${id}`))) eq[slot] = id; });
   const color = Number.isInteger(d.color) && d.color >= 0 && d.color < KESHI_COLOR_COUNT && keshiColorOwned(owned, d.color) ? d.color : 0;
-  return { owned, eq, color, league: d.league === true };
+  return { owned, eq, color, league: d.league === true, name: keshiCleanName(d.name) };
 }
 async function keshiLoad(deps, uid) {
   const raw = await deps.firestore.getRaw(`yuslotKeshi/${uid}`);
@@ -6597,7 +6605,7 @@ function keshiView(cur, coins, now) {
     keshiOwnedMut(cur, slot).forEach((id) => have[slot].push(id));   // ミューテーションのパーツ
   });
   const colorsHave = Array.from({ length: KESHI_COLOR_COUNT }, (_, i) => i).filter((i) => keshiColorOwned(cur.owned, i));
-  return { ok: true, coins, have, eq: cur.eq, color: cur.color, colorsHave, stats: keshiStats(cur.eq), serverNowMs: now };
+  return { ok: true, coins, have, eq: cur.eq, color: cur.color, name: cur.name || "", colorsHave, stats: keshiStats(cur.eq), serverNowMs: now };
 }
 /* 持っている中古のパーツは、その人の一覧に（新品の後ろに）足す */
 const keshiOwnedMut = (cur, slot) => (cur ? cur.owned.filter((o) => o.startsWith(`${slot}:`) && keshiMutOf(o)).map((o) => o.slice(slot.length + 1)).filter((id) => keshiPartOf(slot, id)) : []);
@@ -6738,6 +6746,22 @@ async function keshiBeltBuy(deps, uid, body) {
   try { await deps.firestore.commit(writes); }
   catch (error) { if (isRetryableCommitError(error)) return { status: 409, error: "busy" }; throw error; }
   return { ...keshiView({ ...cur, owned }, coins - part.price, now), table: keshiTable({ ...cur, owned }), bought: { slot, part: id, price: part.price } };
+}
+
+/* 消しゴムに名前をつける（10文字まで。空にすると名前なし）。使えない言葉は断る */
+async function keshiName(deps, uid, body) {
+  const g = await keshiGate(deps, uid);
+  if (g) return g;
+  if (typeof body?.name !== "string" || Array.from(body.name.normalize("NFKC").trim()).length > KESHI_NAME_MAX) return { status: 400, error: "bad_request" };
+  const name = keshiCleanName(body.name);
+  if (isNgText(name)) return { status: 400, error: "ng_word" };
+  const me = await loadMyUser(deps.firestore, uid, body?.username);
+  if (me.error) return me.error;
+  const cur = await keshiLoad(deps, uid);
+  const writes = keshiWrite(deps, uid, cur, { owned: cur.owned, eq: cur.eq, color: cur.color, n: me.name, name });
+  try { await deps.firestore.commit(writes); }
+  catch (error) { if (isRetryableCommitError(error)) return { status: 409, error: "busy" }; throw error; }
+  return { ...keshiView({ ...cur, name }, Number(decodeFields(me.raw.fields).coins || 0), deps.now()), saved: true };
 }
 
 /* 付けるパーツと色を決める（持っているものだけ） */
@@ -7910,13 +7934,13 @@ async function keshiLeagueNext(deps, data, cur, uid, week) {
   if (!nx || !nx.s[uid]) return out;
   const opps = [...new Set(nx.s[uid].o.filter(Boolean))];
   const raws = opps.length ? await deps.firestore.batchGet(opps.map((u) => `yuslotKeshi/${u}`)) : [];
-  const gear = new Map(opps.map((u, i) => { const c = keshiParse(raws[i] || {}); return [u, { eq: c.eq, color: c.color, stats: keshiStats(c.eq), parts: KESHI_SLOTS.map((slot) => { const pt = keshiPartOf(slot, c.eq[slot]); return pt ? pt.name + (/~u$/.test(String(c.eq[slot])) ? "（中古）" : "") : "—"; }) }]; }));
+  const gear = new Map(opps.map((u, i) => { const c = keshiParse(raws[i] || {}); return [u, { eq: c.eq, color: c.color, en: c.name || "", stats: keshiStats(c.eq), parts: KESHI_SLOTS.map((slot) => { const pt = keshiPartOf(slot, c.eq[slot]); return pt ? pt.name + (/~u$/.test(String(c.eq[slot])) ? "（中古）" : "") : "—"; }) }]; }));
   const rows = keshiLgRows(data.p || {}).filter((r) => r.w + r.l > 0), rankOf = new Map(rows.map((r, i) => [r.uid, i + 1]));
-  out.mine = { eq: cur.eq, color: cur.color, stats: keshiStats(cur.eq) };
+  out.mine = { eq: cur.eq, color: cur.color, en: cur.name || "", stats: keshiStats(cur.eq) };
   out.rounds = nx.s[uid].o.map((o) => {
     if (!o) return { rest: true };
     const v = (data.p && data.p[o]) || null, g = gear.get(o);
-    return { name: nx.s[o] ? nx.s[o].n : (v ? v.n : "?"), rank: rankOf.get(o) || 0, w: v ? v.w : 0, l: v ? v.l : 0, eq: g.eq, color: g.color, stats: g.stats, parts: g.parts };
+    return { name: nx.s[o] ? nx.s[o].n : (v ? v.n : "?"), rank: rankOf.get(o) || 0, w: v ? v.w : 0, l: v ? v.l : 0, eq: g.eq, color: g.color, en: g.en, stats: g.stats, parts: g.parts };
   });
   return out;
 }
@@ -8402,7 +8426,7 @@ async function keshiRoomNew(deps, room, now) {
   const st = cur.map((c) => keshiStats(c.eq));
   const starter = Math.floor(deps.random() * 2) % 2;   // 先に弾く人は、ルームを作った人とは関係なく、ランダム（ゲームを始めるたびに決める）。そのあとは1本ごとに交互（keshiRoomBoutEnd）
   return {
-    gid: slotRandomHex(6), order, names: room.members.slice(0, 2), eq: cur.map((c) => c.eq), color: cur.map((c) => c.color), rt: st.map((s) => s.rating), par: st.map(keshiPhys),
+    gid: slotRandomHex(6), order, names: room.members.slice(0, 2), eq: cur.map((c) => c.eq), color: cur.map((c) => c.color), en: cur.map((c) => c.name || ""), rt: st.map((s) => s.rating), par: st.map(keshiPhys),
     bout: 1, starter, cur: starter, flicks: 0, wins: [0, 0], hist: [], pos: keshiStartPos(), last: null, miss: [0, 0],
     deadline: now + KESHI_TURN_MS + 4000, at: now, done: false, winner: -1, reason: ""
   };

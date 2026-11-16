@@ -4,8 +4,8 @@
      このファイルは、画面（3Dの消しゴム・強さ・パーツの一覧）を描いて、「買う」「付ける」を頼むだけ。
    ・ゆうワールド（yuworld.js）から renderKeshi({ root, api, esc, openRooms, leagueFirst, onBack }) で開く。
 ========================================================= */
-import { keshiStatsView, keshiPunchView, keshiLeaguePhase, eraserIcon } from "./yukeshi-core.js?v=20261116-belt7";
-import { createEraserStage, SLEEVE_COLORS, sleeveCss } from "./yukeshi3d.js?v=20261116-belt7";
+import { keshiStatsView, keshiPunchView, keshiLeaguePhase, eraserIcon } from "./yukeshi-core.js?v=20261116-name1";
+import { createEraserStage, SLEEVE_COLORS, sleeveCss } from "./yukeshi3d.js?v=20261116-name1";
 
 const SLOT_NAMES = { body: "本体", edge: "ふち", sole: "そこ", weight: "おもり" };
 const STAT_NAMES = [["m", "重さ"], ["s", "すべり"], ["b", "反発"], ["z", "大きさ"]];
@@ -73,6 +73,7 @@ function drawShell() {
     <button type="button" class="yk2-league-btn yk2-prac-btn" id="ykPractice"><span>🎯</span><b>試し打ち</b><em>いま選んでいる組み合わせで</em></button>
     <p class="yk2-note">パーツを買って、自分だけの最強の消しゴムを作ろう！ パーツは、いくつか選んでまとめて買えます。</p>
     <div class="yk2-stagebox"><div class="yk2-stage" id="ykStage"><div class="yk2-fallback">${eraserIcon("ker-big")}</div></div><div class="yk2-rating" id="ykRating"></div></div>
+    <div class="yk2-namebar" id="ykName"></div>
     <div class="yk2-card"><div class="yk2-stats" id="ykStats"></div></div>
     <div class="yk2-tabs" id="ykTabs"></div>
     <div class="yk2-card"><div class="yk2-parts" id="ykParts"></div><div id="ykAct"></div></div>`;
@@ -101,7 +102,7 @@ async function openBelt() {
   if (busy) return;
   const my = token;
   stopKeshi();
-  try { belt = belt || await import("./yukeshi-belt.js?v=20261116-belt7"); }
+  try { belt = belt || await import("./yukeshi-belt.js?v=20261116-name1"); }
   catch (_) { alert("読み込めませんでした。通信環境をご確認のうえ、もう一度お試しください。"); drawShell(); return; }
   if (token !== my + 1) return;
   belt.renderBelt({ root: ctx.root, esc: ctx.esc, api: ctx.api, table, st, onBack: () => renderKeshi(ctx) });
@@ -110,10 +111,10 @@ async function openPractice() {
   if (busy) return;
   const pl = plan(), eq = previewEq(), color = st.color, my = token;
   stopKeshi();
-  try { practice = practice || await import("./yukeshi-practice.js?v=20261116-belt7"); }
+  try { practice = practice || await import("./yukeshi-practice.js?v=20261116-name1"); }
   catch (_) { alert("試し打ちを開けませんでした。通信環境をご確認のうえ、もう一度お試しください。"); drawShell(); return; }
   if (token !== my + 1) return;
-  practice.renderPractice({ root: ctx.root, esc: ctx.esc, table, eq, color, title: pl.slots.length ? `選んでいるパーツ：${pl.slots.map((slot) => pl.part(slot).name).join("・")}（まだ買っていないものも試せます）` : "いま付けているパーツ", onBack: () => drawShell() });
+  practice.renderPractice({ root: ctx.root, esc: ctx.esc, table, eq, color, name: st.name || "", title: pl.slots.length ? `選んでいるパーツ：${pl.slots.map((slot) => pl.part(slot).name).join("・")}（まだ買っていないものも試せます）` : "いま付けているパーツ", onBack: () => drawShell() });
 }
 function updateStage() { if (stage) stage.set(previewEq(), st.color); }
 const sign = (n) => (n > 0 ? "+" + n : String(n));
@@ -122,6 +123,7 @@ function effectText(p) { const t = STAT_NAMES.filter(([k]) => p[k]).map(([k, lab
 function draw() {
   const eq = previewEq(), cur = keshiStatsView(table, st.eq), pre = keshiStatsView(table, eq);
   $("#ykCoins").textContent = `🪙 ${st.coins.toLocaleString("ja-JP")}`;
+  if (!sel.naming) $("#ykName").innerHTML = `<span class="lb">🏷 名前</span><b class="nm">${st.name ? ctx.esc(st.name) : "（まだありません）"}</b><button type="button" class="yk2-name-btn" id="ykNameEdit">${st.name ? "変える" : "つける"}</button>`;
   $("#ykRating").innerHTML = `総合力 <b>${pre.rating}</b>${pre.rating !== cur.rating ? `<span class="${pre.rating > cur.rating ? "up" : "down"}">${pre.rating > cur.rating ? "▲" : "▼"}${Math.abs(pre.rating - cur.rating)}</span>` : ""}`;
   $("#ykStats").innerHTML = STAT_NAMES.map(([k, label]) => {
     const diff = pre[k] - cur[k];
@@ -157,6 +159,19 @@ function draw() {
   $("#ykResetPick")?.addEventListener("click", () => { sel.picks = { ...st.eq }; draw(); updateStage(); });
   ctx.root.querySelectorAll("[data-color]").forEach((b) => b.addEventListener("click", () => setColor(Number(b.dataset.color))));
   $("#ykApply")?.addEventListener("click", apply);
+  $("#ykNameEdit")?.addEventListener("click", editName);
+}
+/* 消しゴムの名前をつける（10文字まで）。書いているあいだは、名前の欄を描き直さない */
+function editName() {
+  const box = $("#ykName"); if (!box || busy) return;
+  sel.naming = true;
+  box.innerHTML = `<span class="lb">🏷 名前</span><input type="text" id="ykNameIn" class="yk2-name-in" maxlength="10" placeholder="10文字まで" value="${ctx.esc(st.name || "")}" autocomplete="off"><button type="button" class="yk2-name-btn ok" id="ykNameSave">保存</button><button type="button" class="yk2-name-btn" id="ykNameCancel">やめる</button>`;
+  const input = $("#ykNameIn"); input.focus(); input.select();
+  const done = () => { sel.naming = false; draw(); };
+  $("#ykNameCancel").addEventListener("click", done);
+  const save = async () => { const r = await call("keshiName", { name: input.value }); if (r) done(); };
+  $("#ykNameSave").addEventListener("click", save);
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); save(); } });
 }
 async function call(action, payload) {
   if (busy) return null;
@@ -177,7 +192,7 @@ async function apply() {
   if (r && r.bought) { ctx.root.querySelector("#ykCoins")?.classList.add("pop"); setTimeout(() => ctx.root.querySelector("#ykCoins")?.classList.remove("pop"), 600); }
 }
 function errorMsg(code) {
-  const m = { insufficient_coins: "コインが足りません。", seated: "ゆうスロの席に着いているあいだは買えません。席を立ってから、もう一度お試しください。", busy: "通信が重なりました。もう一度お試しください。", already_owned: "そのパーツはすでに持っています。", not_published: "消しバトは、ただいま非公開になりました。" };
+  const m = { ng_word: "使えない言葉が入っています。", bad_request: "名前は、10文字までです。", insufficient_coins: "コインが足りません。", seated: "ゆうスロの席に着いているあいだは買えません。席を立ってから、もう一度お試しください。", busy: "通信が重なりました。もう一度お試しください。", already_owned: "そのパーツはすでに持っています。", not_published: "消しバトは、ただいま非公開になりました。" };
   alert(m[code] || "うまくいきませんでした（" + (code || "エラー") + "）。もう一度お試しください。");
   if (code === "busy" || code === "already_owned") load(token);
 }
@@ -233,7 +248,7 @@ function compare(i) {
   const bar = (v, win) => `<i class="${win ? "win" : ""}" style="width:${Math.max(4, Math.min(100, v))}%"></i>`;
   const stat = rows.map(([label, key], n) => { const a = me.stats[key], b = r.stats[key]; return `<div class="yl2-cs${n === 0 ? " main" : ""}"><span class="bar l">${bar(a, a > b)}</span><b class="${a > b ? "win" : ""}">${a}</b><em>${label}</em><b class="${b > a ? "win" : ""}">${b}</b><span class="bar r">${bar(b, b > a)}</span></div>`; }).join("");
   const parts = ["body", "edge", "sole", "weight"].map((slot, n) => `<div><span>${SLOT_NAMES[slot]}</span><b>${ctx.esc((r.parts && r.parts[n]) || "—")}</b></div>`).join("");
-  const el = sheet(`第${i + 1}戦　戦力比較`, `<div class="yl2-cmp-head"><span>あなた</span><span>${ctx.esc(r.name)}</span></div>
+  const el = sheet(`第${i + 1}戦　戦力比較`, `<div class="yl2-cmp-head"><span>あなた${me.en ? `<small>「${ctx.esc(me.en)}」</small>` : ""}</span><span>${ctx.esc(r.name)}${r.en ? `<small>「${ctx.esc(r.en)}」</small>` : ""}</span></div>
     <div class="yl2-cmp-stage" id="ylCmpStage"></div>
     ${stat}
     <div class="yl2-cmp-parts"><b>${ctx.esc(r.name)} の消しゴム</b>${parts}</div>
@@ -368,6 +383,9 @@ function injectStyles() {
   .yl2-nx .no { font-weight: 900; font-size: 12px; color: #ffe08a; } .yl2-nx .who b { display: block; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .yl2-nx .who small { display: block; font-size: 11px; color: #cfc8ee; } .yl2-nx .who em { font-style: normal; color: #ffe08a; font-weight: 800; }
   .yl2-cmp { border: 2px solid #d4a93a; background: linear-gradient(#fff6d8, #f0cf6a); color: #5a3800; font-weight: 900; font-size: 12px; border-radius: 10px; padding: 6px 8px; cursor: pointer; }
   .yl2-eraser { border-radius: 8px; text-align: center; color: #fff; padding: 4px 2px; text-shadow: 0 1px 2px rgba(0,0,0,.7); box-shadow: inset 0 0 0 2px rgba(255,255,255,.55); } .yl2-eraser small { display: block; font-size: 9px; } .yl2-eraser b { font-size: 20px; }
+  .yl2-cmp-head small { display: block; font-weight: 600; font-size: 11px; color: #777; }
+  .yk2-namebar { display: flex; align-items: center; gap: 8px; margin: 8px 0 0; padding: 8px 12px; background: #fff; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,.07); font-size: 14px; } .yk2-namebar .lb { color: #777; font-size: 12px; white-space: nowrap; } .yk2-namebar .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .yk2-name-btn { border: none; background: #e9e4f6; color: #443; font-weight: 700; border-radius: 999px; padding: 6px 12px; font-size: 12px; cursor: pointer; white-space: nowrap; } .yk2-name-btn.ok { background: #e0902f; color: #fff; } .yk2-name-in { flex: 1; min-width: 0; font-size: 16px; padding: 6px 10px; border: 2px solid #e0902f; border-radius: 10px; }
   .yl2-cmp-head { display: flex; justify-content: space-between; font-weight: 800; font-size: 13px; margin-bottom: 4px; } .yl2-cmp-stage { position: relative; height: 170px; border-radius: 12px; background: linear-gradient(135deg, #c8964b, #8a5a1f); overflow: hidden; margin-bottom: 10px; }
   .yl2-cs { display: grid; grid-template-columns: 1fr 34px 52px 34px 1fr; gap: 4px; align-items: center; font-size: 13px; padding: 3px 0; text-align: center; } .yl2-cs.main { font-size: 15px; } .yl2-cs em { font-style: normal; color: #666; font-size: 12px; } .yl2-cs b { font-weight: 800; } .yl2-cs b.win { color: #d6401f; }
   .yl2-cs .bar { height: 9px; background: #ece7da; border-radius: 6px; overflow: hidden; display: flex; } .yl2-cs .bar.l { justify-content: flex-end; } .yl2-cs .bar i { display: block; height: 100%; background: #9aa0c8; } .yl2-cs .bar i.win { background: linear-gradient(90deg, #e0902f, #d6401f); }

@@ -7,8 +7,8 @@
      買えるかどうかは、Worker（keshiBeltBuy）が、種の署名と時刻とパーツを確かめて決める。
    ・ベータ版。
 ========================================================= */
-import { createPartsStage } from "./yukeshi3d.js?v=20261116-belt7";
-import { keshiStatsView, keshiPunchView, keshiBeltItemView } from "./yukeshi-core.js?v=20261116-belt7";
+import { createPartsStage } from "./yukeshi3d.js?v=20261116-name1";
+import { keshiStatsView, keshiPunchView, keshiBeltItemView } from "./yukeshi-core.js?v=20261116-name1";
 
 const SLOT_NAMES = { body: "本体", edge: "ふち", sole: "そこ", weight: "おもり" };
 const STAT_NAMES = [["m", "重さ"], ["s", "すべり"], ["b", "反発"], ["z", "大きさ"]];
@@ -75,6 +75,11 @@ function fxOverlay() {
   if (!el) { el = document.createElement("div"); el.id = "ybFx"; el.className = "yb-fx"; document.body.appendChild(el); }
   return el;
 }
+/* 派手な演出（スーパーレア以上）のあいだは、画面全体を暗い色でおおって、白い余白を見せない */
+function backdrop(level) {
+  if (level < 2) return;
+  const d = document.createElement("div"); d.className = `yb-dark l${level}`; fxOverlay().prepend(d); setTimeout(() => d.remove(), level >= 3 ? 2700 : 1900);
+}
 function flash(level) {
   if (reducedMotion()) return;
   const f = document.createElement("div"); f.className = `yb-flash l${level}`; fxOverlay().appendChild(f); setTimeout(() => f.remove(), 900);
@@ -99,7 +104,7 @@ function confetti(level, from) {
 const RAR_TEXT = { R: "レア", SR: "スーパーレア", UR: "ウルトラレア", LR: "トップレア" };
 function fxSpawn(it, root, defs) {
   const level = levelOf(it); if (level === 0) return;
-  sfxSpawn(level); flash(level); shake(root, level);
+  sfxSpawn(level); backdrop(level); flash(level); shake(root, level);
   const name = it.mut && defs && defs[it.mut] ? defs[it.mut].name : "";
   if (level >= 2 || it.mut) banner(`${it.mut ? `✨${name}　` : ""}${it.rarity !== "N" ? `${RAR_TEXT[it.rarity]}出現！` : "出現！"}`, level);
   vibrate(level >= 3 ? [40, 30, 80] : 25);
@@ -107,7 +112,7 @@ function fxSpawn(it, root, defs) {
 function fxBuy(it, root, at) {
   const level = levelOf(it);
   sfxBuy(level); vibrate(level >= 3 ? [60, 40, 60, 40, 120] : [30, 30, 50]);
-  flash(Math.max(1, level - 1)); confetti(level, at); shake(root, level);
+  backdrop(level); flash(Math.max(1, level - 1)); confetti(level, at); shake(root, level);
   banner(`GET！　${it.name}`, Math.max(2, level));
 }
 
@@ -251,6 +256,8 @@ function injectStyles() {
   .yb-card.mut-d .pr { background: linear-gradient(90deg, #bff4ff, #6ad0ff); } .yb-card.mut-d .nm { color: #bff4ff; }
   .yb-card.mut-r .pr { background: linear-gradient(90deg, #ff9aa8, #ffe27a, #8affc8, #8ac8ff, #c88aff); } .yb-card.mut-r .nm { background: linear-gradient(90deg, #ff9aa8, #ffe27a, #8affc8, #8ac8ff, #c88aff); -webkit-background-clip: text; background-clip: text; color: transparent; text-shadow: none; font-weight: 900; }
   .yb-fx { position: fixed; inset: 0; pointer-events: none; z-index: 90; overflow: hidden; }
+  .yb-dark { position: absolute; inset: 0; opacity: 0; animation: yb-dark 1.9s ease-in-out forwards; } .yb-dark.l2 { background: radial-gradient(circle at 50% 40%, rgba(120,70,220,.55), rgba(14,8,34,.9) 75%); } .yb-dark.l3 { background: radial-gradient(circle at 50% 40%, rgba(255,190,40,.55), rgba(30,16,2,.92) 75%); animation-duration: 2.7s; } .yb-dark.l4 { background: linear-gradient(135deg, rgba(255,74,160,.7), rgba(255,184,74,.6) 25%, rgba(74,255,154,.55) 50%, rgba(74,154,255,.6) 75%, rgba(176,74,255,.7)), #12081e; animation-duration: 2.7s; }
+  @keyframes yb-dark { 0% { opacity: 0; } 12% { opacity: 1; } 78% { opacity: 1; } 100% { opacity: 0; } }
   .yb-flash { position: absolute; inset: 0; opacity: 0; animation: yb-flash .7s ease-out; } .yb-flash.l1 { background: radial-gradient(circle, rgba(74,160,224,.35), transparent 70%); } .yb-flash.l2 { background: radial-gradient(circle, rgba(165,107,255,.5), transparent 70%); } .yb-flash.l3 { background: radial-gradient(circle, rgba(255,207,51,.7), transparent 75%); } .yb-flash.l4 { background: linear-gradient(120deg, rgba(255,122,224,.7), rgba(255,226,122,.7), rgba(122,255,212,.7), rgba(122,184,255,.7)); }
   @keyframes yb-flash { 0% { opacity: 0; } 15% { opacity: 1; } 100% { opacity: 0; } }
   .yb-banner { position: absolute; left: 50%; top: 24%; transform: translateX(-50%); white-space: nowrap; max-width: 94vw; overflow: hidden; text-overflow: ellipsis; padding: 8px 22px; border-radius: 999px; font-weight: 900; color: #fff; font-size: 18px; text-shadow: 0 2px 0 rgba(0,0,0,.4); box-shadow: 0 6px 20px rgba(0,0,0,.4); animation: yb-banner 1.8s ease-out forwards; }

@@ -5,8 +5,8 @@
    ・すべてこの端末の中だけで動く（通信・コイン・記録はなし）。動きの計算は、試合と同じ（yukeshi-core.js の keshiSimStepper）。
    ・ショップで選んでいるパーツのまま試せるので、買う前に試せる。
 ========================================================= */
-import { createBattleStage } from "./yukeshi-room.js?v=20261116-belt7";
-import { keshiSimStepper, keshiPhysView, keshiLaunchSpeedView, keshiStatsView, keshiPunchView, KESHI_DESK, KESHI_DT, eraserIcon } from "./yukeshi-core.js?v=20261116-belt7";
+import { createBattleStage } from "./yukeshi-room.js?v=20261116-name1";
+import { keshiSimStepper, keshiPhysView, keshiLaunchSpeedView, keshiStatsView, keshiPunchView, KESHI_DESK, KESHI_DT, eraserIcon } from "./yukeshi-core.js?v=20261116-name1";
 
 const START_YAW = [Math.PI / 2, -Math.PI / 2];
 const yawOf = (dx, dz) => Math.atan2(-dz, dx);
@@ -26,7 +26,7 @@ export function renderPractice(c) {
   const stats = keshiStatsView(c.table, c.eq), punch = keshiPunchView(c.table, c.eq), P = [keshiPhysView(stats), keshiPhysView(keshiStatsView(c.table, DEFAULT_EQ))];
   c.root.innerHTML = `<div class="kp-head"><button type="button" class="yw-back" id="kpBack">← 消しゴムの改造へ</button><h2>🎯 試し打ち</h2></div>
     <p class="kp-note">試合と同じ机で、自分の消しゴムを弾いてみよう。真ん中の黒い消しゴムは、初期装備のまま置いてあるだけで、動きません。机から落とすと、また真ん中に出てきます。</p>
-    <div class="kp-gear">${eraserIcon("ker-inline")} 試している消しゴム <b>総合力 ${stats.rating}</b><b>攻撃力 ×${punch.atk.toFixed(1)}</b><b>守り ×${punch.def.toFixed(1)}</b>${c.title ? `<span>${esc(c.title)}</span>` : ""}</div>
+    <div class="kp-gear">${eraserIcon("ker-inline")} 試している消しゴム${c.name ? `「${esc(c.name)}」` : ""} <b>総合力 ${stats.rating}</b><b>攻撃力 ×${punch.atk.toFixed(1)}</b><b>守り ×${punch.def.toFixed(1)}</b>${c.title ? `<span>${esc(c.title)}</span>` : ""}</div>
     <div class="kp-stage" id="kpStage"><div class="kp-loading">${eraserIcon("kp-ico")}<span>机を準備しています…</span></div><div class="kp-power" id="kpPower"><i></i></div></div>
     <div class="kp-score"><div><small>ふっとび距離</small><b id="kpDist">—</b></div><div><small>落とした回数</small><b id="kpDrops">0</b></div><div><small>弾いた回数</small><b id="kpShots">0</b></div></div>
     <p class="kp-hint" id="kpHint">画面を指で後ろに引っ張って、はなして弾こう（弱く引くと弱く、強く引くと強く弾く）。自分の消しゴムは、机から落ちるまで、止まった場所から続けて弾けます。</p>
