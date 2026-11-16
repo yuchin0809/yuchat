@@ -4,8 +4,8 @@
      このファイルは、画面（3Dの消しゴム・強さ・パーツの一覧）を描いて、「買う」「付ける」を頼むだけ。
    ・ゆうワールド（yuworld.js）から renderKeshi({ root, api, esc, openRooms, leagueFirst, onBack }) で開く。
 ========================================================= */
-import { keshiStatsView, keshiPunchView, keshiLeaguePhase, eraserIcon } from "./yukeshi-core.js?v=20261116-belt4";
-import { createEraserStage, SLEEVE_COLORS, sleeveCss } from "./yukeshi3d.js?v=20261116-belt4";
+import { keshiStatsView, keshiPunchView, keshiLeaguePhase, eraserIcon } from "./yukeshi-core.js?v=20261116-belt5";
+import { createEraserStage, SLEEVE_COLORS, sleeveCss } from "./yukeshi3d.js?v=20261116-belt5";
 
 const SLOT_NAMES = { body: "本体", edge: "ふち", sole: "そこ", weight: "おもり" };
 const STAT_NAMES = [["m", "重さ"], ["s", "すべり"], ["b", "反発"], ["z", "大きさ"]];
@@ -69,7 +69,7 @@ function drawShell() {
   ctx.root.innerHTML = `<div class="yk2-head"><button type="button" class="yw-back" id="ykBack">← お店の一覧</button><h2>${eraserIcon("ker-inline")} 消しバト</h2><div class="yk2-coins" id="ykCoins"></div></div>
     ${leagueBanner()}
     <button type="button" class="yk2-league-btn yk2-vs-btn" id="ykVs"><span>🥊</span><b>2人対戦</b><em>友達と1対1</em></button>
-    ${st.belt ? `<button type="button" class="yk2-league-btn yk2-belt-btn" id="ykBelt"><span>🍣</span><b>パーツを探す</b><em>管理者テスト中</em></button>` : ""}
+    ${st.belt ? `<button type="button" class="yk2-league-btn yk2-belt-btn" id="ykBelt"><span>🍣</span><b>パーツを探す</b><em>ベータ版</em></button>` : ""}
     <button type="button" class="yk2-league-btn yk2-prac-btn" id="ykPractice"><span>🎯</span><b>試し打ち</b><em>いま選んでいる組み合わせで</em></button>
     <p class="yk2-note">パーツを買って、自分だけの最強の消しゴムを作ろう！ パーツは、いくつか選んでまとめて買えます。</p>
     <div class="yk2-stagebox"><div class="yk2-stage" id="ykStage"><div class="yk2-fallback">${eraserIcon("ker-big")}</div></div><div class="yk2-rating" id="ykRating"></div></div>
@@ -96,12 +96,12 @@ function plan() {
   const toBuy = slots.filter((slot) => !st.have[slot].includes(sel.picks[slot]));
   return { slots, toBuy, part, total: toBuy.reduce((a, slot) => a + part(slot).price, 0) };
 }
-/* 🍣 パーツを探す（ベルトコンベア。いまは管理者だけ） */
+/* 🍣 パーツを探す（ベルトコンベア。ベータ版） */
 async function openBelt() {
   if (busy) return;
   const my = token;
   stopKeshi();
-  try { belt = belt || await import("./yukeshi-belt.js?v=20261116-belt4"); }
+  try { belt = belt || await import("./yukeshi-belt.js?v=20261116-belt5"); }
   catch (_) { alert("読み込めませんでした。通信環境をご確認のうえ、もう一度お試しください。"); drawShell(); return; }
   if (token !== my + 1) return;
   belt.renderBelt({ root: ctx.root, esc: ctx.esc, api: ctx.api, table, st, onBack: () => renderKeshi(ctx) });
@@ -110,7 +110,7 @@ async function openPractice() {
   if (busy) return;
   const pl = plan(), eq = previewEq(), color = st.color, my = token;
   stopKeshi();
-  try { practice = practice || await import("./yukeshi-practice.js?v=20261116-belt4"); }
+  try { practice = practice || await import("./yukeshi-practice.js?v=20261116-belt5"); }
   catch (_) { alert("試し打ちを開けませんでした。通信環境をご確認のうえ、もう一度お試しください。"); drawShell(); return; }
   if (token !== my + 1) return;
   practice.renderPractice({ root: ctx.root, esc: ctx.esc, table, eq, color, title: pl.slots.length ? `選んでいるパーツ：${pl.slots.map((slot) => pl.part(slot).name).join("・")}（まだ買っていないものも試せます）` : "いま付けているパーツ", onBack: () => drawShell() });

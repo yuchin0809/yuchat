@@ -45,6 +45,10 @@ export function eraserKit(T, RBG) {
       carbon: () => std({ color: 0x23262b, roughness: .35, metalness: .4 }),
       diamond: () => phys({ color: 0xcdf3ff, roughness: .05, metalness: .2, clearcoat: 1, emissive: 0x4a9ac0, emissiveIntensity: .3 }),
       meteor: () => std({ color: 0x4a3b36, roughness: .6, metalness: .7, emissive: 0xff5a1a, emissiveIntensity: .25 }),
+      gel: () => phys({ color: 0x9fe8ff, transparent: true, opacity: .8, roughness: .1, clearcoat: 1 }),
+      bamboo: () => std({ color: 0x2e3a33, roughness: .9 }),
+      ruby: () => phys({ color: 0xc2203a, roughness: .1, clearcoat: 1, emissive: 0x4a0010, emissiveIntensity: .4 }),
+      dragon: () => phys({ color: 0x2a6b3a, metalness: .85, roughness: .2, clearcoat: 1, emissive: 0x0a4a1a, emissiveIntensity: .5 }),
       ltd: () => phys({ color: 0x7fa3d6, roughness: .18, metalness: .95, clearcoat: 1, emissive: 0x16305a, emissiveIntensity: .35 })   // E賞の限定
     }[eq.body] || (() => std({ color: 0xf4f1ea }));
     if (want("body")) add(rbox(2.5, .72, 1.22, .1), body());
@@ -59,6 +63,10 @@ export function eraserKit(T, RBG) {
     else if (edge === "titanf") addE(rbox(2.62, .28, 1.34, .06), std({ color: 0xc9ced6, metalness: 1, roughness: .12 }), 0, -.2, 0);
     else if (edge === "mithril") addE(rbox(2.64, .3, 1.36, .08), phys({ color: 0xcfe6ff, metalness: 1, roughness: .08, emissive: 0x3a6aff, emissiveIntensity: .4 }), 0, -.2, 0);
     else if (edge === "aurora") addE(rbox(2.66, .32, 1.38, .1), phys({ color: 0xb8ffe8, metalness: .6, roughness: .06, clearcoat: 1, emissive: 0xc04aff, emissiveIntensity: .55 }), 0, -.2, 0);
+    else if (edge === "neon") addE(rbox(2.62, .28, 1.34, .08), phys({ color: 0x39ff88, roughness: .2, emissive: 0x18c060, emissiveIntensity: .9 }), 0, -.2, 0);
+    else if (edge === "carbonf") addE(rbox(2.62, .28, 1.34, .06), std({ color: 0x1e2024, roughness: .35, metalness: .5 }), 0, -.2, 0);
+    else if (edge === "rubyf") addE(rbox(2.64, .3, 1.36, .08), phys({ color: 0xc2203a, roughness: .1, clearcoat: 1, emissive: 0x6a0018, emissiveIntensity: .5 }), 0, -.2, 0);
+    else if (edge === "blackhole") addE(rbox(2.66, .32, 1.38, .1), phys({ color: 0x120a22, metalness: .9, roughness: .15, emissive: 0x7a2aff, emissiveIntensity: .8 }), 0, -.2, 0);
     else if (edge === "crystal") addE(rbox(2.64, .3, 1.36, .1), phys({ color: 0x66d0ff, transparent: true, opacity: .72, roughness: .05, clearcoat: 1, emissive: 0x1a6a9a, emissiveIntensity: .35 }), 0, -.2, 0);
     const sole = want("sole") ? eq.sole : null;
     if (sole === "tape") add(rbox(2.3, .07, 1.0, .02), std({ color: 0xf4d20a, roughness: .5 }), 0, -.4, 0);
@@ -68,6 +76,10 @@ export function eraserKit(T, RBG) {
     else if (sole === "hover") add(rbox(2.34, .1, 1.04, .04), phys({ color: 0xdfffe8, transparent: true, opacity: .6, roughness: .08, emissive: 0x2aff8a, emissiveIntensity: .25 }), 0, -.42, 0);
     else if (sole === "linear") add(rbox(2.36, .1, 1.06, .05), phys({ color: 0x9ad0ff, roughness: .1, clearcoat: 1, emissive: 0x2a6aff, emissiveIntensity: .5 }), 0, -.42, 0);
     else if (sole === "zero") add(rbox(2.4, .12, 1.1, .06), phys({ color: 0xffffff, transparent: true, opacity: .5, roughness: .02, emissive: 0xaad0ff, emissiveIntensity: .6 }), 0, -.43, 0);
+    else if (sole === "roller") add(rbox(2.34, .12, 1.04, .05), std({ color: 0x333840, metalness: .7, roughness: .3 }), 0, -.42, 0);
+    else if (sole === "gelsole") add(rbox(2.34, .12, 1.04, .05), phys({ color: 0xaef0ff, transparent: true, opacity: .7, roughness: .08 }), 0, -.42, 0);
+    else if (sole === "plasma") add(rbox(2.36, .1, 1.06, .05), phys({ color: 0xff6aff, roughness: .1, emissive: 0xc020ff, emissiveIntensity: .9 }), 0, -.42, 0);
+    else if (sole === "antigrav") add(rbox(2.4, .12, 1.1, .06), phys({ color: 0xffffff, transparent: true, opacity: .55, roughness: .02, emissive: 0x6affff, emissiveIntensity: .9 }), 0, -.43, 0);
     else if (sole === "air") add(rbox(2.36, .13, 1.06, .06), phys({ color: 0xc4ecff, transparent: true, opacity: .6, roughness: .08 }), 0, -.42, 0);
     const weight = want("weight") ? eq.weight : null;
     if (weight === "coin") add(new T.CylinderGeometry(.3, .3, .06, 32), std({ color: 0xd9a233, metalness: 1, roughness: .3 }), .95, .39, .0);
@@ -77,6 +89,10 @@ export function eraserKit(T, RBG) {
     else if (weight === "tungsten") add(rbox(.62, .24, .5, .04), std({ color: 0x6b6f78, metalness: 1, roughness: .25 }), .95, .47, 0);
     else if (weight === "platinum") add(rbox(.66, .28, .52, .05), std({ color: 0xe6edf2, metalness: 1, roughness: .1 }), .95, .49, 0);
     else if (weight === "neutron") add(new T.SphereGeometry(.3, 24, 16), std({ color: 0x9ad0ff, metalness: .5, roughness: .1, emissive: 0x4aa0ff, emissiveIntensity: .9 }), .95, .55, 0);
+    else if (weight === "mercury") add(new T.SphereGeometry(.27, 24, 16), std({ color: 0xc9d1d9, metalness: 1, roughness: .05 }), .95, .5, 0);
+    else if (weight === "diamondw") add(new T.OctahedronGeometry(.32), phys({ color: 0xcdf3ff, roughness: .02, clearcoat: 1, emissive: 0x4a9ac0, emissiveIntensity: .35 }), .95, .55, 0);
+    else if (weight === "osmium") add(rbox(.66, .28, .52, .05), std({ color: 0x3a4a6a, metalness: 1, roughness: .2, emissive: 0x0a1a3a, emissiveIntensity: .4 }), .95, .49, 0);
+    else if (weight === "blackholew") add(new T.SphereGeometry(.3, 24, 16), std({ color: 0x050308, metalness: .3, roughness: .3, emissive: 0x7a2aff, emissiveIntensity: 1 }), .95, .55, 0);
     else if (weight === "gold") add(rbox(.66, .28, .52, .05), std({ color: 0xffc933, metalness: 1, roughness: .18 }), .95, .49, 0);
     return g;
   }
@@ -176,7 +192,7 @@ export async function createPartsStage(container) {
       const fit = (size || (slot === "weight" ? 46 : 86)) / Math.max(s.x, s.y, s.z, .01);
       pivot.scale.setScalar(fit);
       if (rarity && rarity !== "N") {   // レアは、足もとにやわらかい光の輪
-        const col = { R: 0x4aa0e0, SR: 0xa56bff, UR: 0xffcf33 }[rarity];
+        const col = { R: 0x4aa0e0, SR: 0xa56bff, UR: 0xffcf33, LR: 0xff7ae0 }[rarity];
         const halo = new T.Mesh(new T.CircleGeometry(Math.max(s.x, s.z) * .62, 32), new T.MeshBasicMaterial({ color: col, transparent: true, opacity: .35, depthWrite: false }));
         halo.rotation.x = -Math.PI / 2; halo.position.y = -s.y / 2 - .05; pivot.add(halo);
       }
