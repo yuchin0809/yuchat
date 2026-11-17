@@ -2,7 +2,7 @@
    実行：node --test "notify-worker/test/*.test.mjs" */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { KESHI_BELT, KESHI_MUT, KESHI_MUT_RATES, keshiBeltItem, keshiBeltPoolPublic, KESHI_PARTS, KESHI_SLOTS, KESHI_DEFAULT_EQ, keshiStats, resetYuslotCacheForTest, handleYuslotAction } from "../worker.js";
+import { KESHI_BELT, KESHI_PRICE_CAP, KESHI_MUT, KESHI_MUT_RATES, keshiBeltItem, keshiBeltPoolPublic, KESHI_PARTS, KESHI_SLOTS, KESHI_DEFAULT_EQ, keshiStats, resetYuslotCacheForTest, handleYuslotAction } from "../worker.js";
 
 console.warn = () => {};
 
@@ -400,7 +400,7 @@ test("画面用のベルトの計算（yukeshi-core.js）は、サーバーの�
   const { keshiBeltItemView } = await import("../../yukeshi-core.js");
   const pool = keshiBeltPoolPublic();
   for (const seed of [0, 1, -7, 123456789, -2147483648, 2147483647]) for (let k = 50000; k < 52000; k++) {
-    const s = keshiBeltItem(seed, k), v = keshiBeltItemView(pool, KESHI_BELT.rates, KESHI_BELT.tickMs, seed, k, KESHI_MUT_RATES, KESHI_MUT);
+    const s = keshiBeltItem(seed, k), v = keshiBeltItemView(pool, KESHI_BELT.rates, KESHI_BELT.tickMs, seed, k, KESHI_MUT_RATES, KESHI_MUT, KESHI_PRICE_CAP);
     assert.deepEqual([v.tick, v.startMs, v.rarity, v.slot, v.mut, v.id, v.name, v.price, v.m, v.s, v.b, v.z], [s.tick, s.startMs, s.rarity, s.slot, s.mut, s.part.id, s.part.name, s.part.price, s.part.m, s.part.s, s.part.b, s.part.z], `${seed}:${k}`);
   }
 });
@@ -444,7 +444,7 @@ test("ミューテーション：ベルトで、ときどき、ゴールド・�
   for (let k = 1000; k < 201000; k++) { const it = keshiBeltItem(777, k); counts[it.mut]++; if (it.mut === "g" && it.part.m > 0 && !sample) sample = it; }
   assert.ok(counts.g > 10000 && counts.g < 14000 && counts.d > 2500 && counts.d < 3500 && counts.r > 400 && counts.r < 800, JSON.stringify(counts));
   const base = KESHI_PARTS[sample.slot].find((p) => `${p.id}@g` === sample.part.id);
-  assert.equal(sample.part.price, base.price * 2); assert.equal(sample.part.m, Math.round(base.m * 1.25)); assert.ok(sample.part.name.startsWith("ゴールド"));
+  assert.equal(sample.part.price, Math.min(KESHI_PRICE_CAP, base.price * 2)); assert.equal(sample.part.m, Math.round(base.m * 1.25)); assert.ok(sample.part.name.startsWith("ゴールド"));
   const ctx = setup({ coins: 10000000 });
   ctx.fs.put("users/admin", encF({ uid: ADMIN, name: "admin", coins: 10000000 }));
   const belt = await ctx.act(1, { action: "keshiBelt" });
@@ -501,4 +501,12 @@ test("消しゴムの名前：10文字まで。つけた名前は残り、空に
   assert.equal(b.ok, true); assert.equal(b.name, "ピカ丸"); assert.deepEqual(ctx.fs.plain("yuslotKeshi/id1").owned, ["body:pro"]);
   const closed = setup({ keshi: false });
   assert.equal((await closed.act(1, { action: "keshiName", name: "x" })).error, "not_published");
+});
+
+test("ベルトコンベア：どのパーツも、値段は 20,000 コインまで（ミューテーション付きも）", () => {
+  for (const slot of KESHI_SLOTS) KESHI_PARTS[slot].filter((p) => p.rare).forEach((p) => assert.ok(p.price <= KESHI_PRICE_CAP, `${p.id} ${p.price}`));
+  let max = 0, capped = 0;
+  for (let k = 1000; k < 121000; k++) { const it = keshiBeltItem(31337, k); max = Math.max(max, it.part.price); if (it.mut && it.part.price === KESHI_PRICE_CAP) capped++; }
+  assert.equal(max, KESHI_PRICE_CAP, "いちばん高いものが、ちょうど上限");
+  assert.ok(capped > 0, "ミューテーションで上限をこえるものは、上限に止まる");
 });

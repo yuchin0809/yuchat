@@ -7,8 +7,8 @@
      買えるかどうかは、Worker（keshiBeltBuy）が、種の署名と時刻とパーツを確かめて決める。
    ・ベータ版。
 ========================================================= */
-import { createPartsStage } from "./yukeshi3d.js?v=20261117-fix1";
-import { keshiStatsView, keshiPunchView, keshiBeltItemView } from "./yukeshi-core.js?v=20261117-fix1";
+import { createPartsStage } from "./yukeshi3d.js?v=20261117-cap1";
+import { keshiStatsView, keshiPunchView, keshiBeltItemView } from "./yukeshi-core.js?v=20261117-cap1";
 
 const SLOT_NAMES = { body: "本体", edge: "ふち", sole: "そこ", weight: "おもり" };
 const STAT_NAMES = [["m", "重さ"], ["s", "すべり"], ["b", "反発"], ["z", "大きさ"]];
@@ -166,7 +166,7 @@ export function renderBelt(c) {
     const lane = $("#blLane");
     if (lane && B) {
       const W = lane.clientWidth, t = nowMs();
-      for (let k = Math.floor((t - B.travelMs / SPEED) / B.tickMs); k <= Math.floor(t / B.tickMs); k++) if (!items.has(k)) items.set(k, keshiBeltItemView(B.pool, B.rates, B.tickMs, B.seed, k, B.mutRates, B.mutDefs));
+      for (let k = Math.floor((t - B.travelMs / SPEED) / B.tickMs); k <= Math.floor(t / B.tickMs); k++) if (!items.has(k)) items.set(k, keshiBeltItemView(B.pool, B.rates, B.tickMs, B.seed, k, B.mutRates, B.mutDefs, B.priceCap || Infinity));
       items.forEach((it, tick) => {
         const p = ((t - it.startMs) / B.travelMs) * SPEED;
         if (p < 0 || p >= 1) {
