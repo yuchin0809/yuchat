@@ -6611,7 +6611,7 @@ function keshiView(cur, coins, now) {
 const keshiOwnedMut = (cur, slot) => (cur ? cur.owned.filter((o) => o.startsWith(`${slot}:`) && keshiMutOf(o)).map((o) => o.slice(slot.length + 1)).filter((id) => keshiPartOf(slot, id)) : []);
 const keshiTable = (cur) => {
   const shown = (slot) => KESHI_PARTS[slot].filter((p) => !p.limited || (cur && cur.owned.includes(`${slot}:${p.id}`)));   // 限定品は、持っている人にだけ見える
-  const parts = cur ? Object.fromEntries(KESHI_SLOTS.map((slot) => [slot, [...shown(slot), ...KESHI_PARTS[slot].filter((p) => p.price > 0 && !p.limited && cur.owned.includes(`${slot}:${p.id}~u`)).map((p) => ({ ...keshiPartOf(slot, `${p.id}~u`), price: 0 })), ...keshiOwnedMut(cur, slot).map((id) => ({ ...keshiPartOf(slot, id), price: 0 }))]])) : Object.fromEntries(KESHI_SLOTS.map((slot) => [slot, shown(slot)]));
+  const parts = cur ? Object.fromEntries(KESHI_SLOTS.map((slot) => [slot, [...shown(slot), ...KESHI_PARTS[slot].filter((p) => p.price > 0 && (!p.limited || p.rare) && cur.owned.includes(`${slot}:${p.id}~u`)).map((p) => ({ ...keshiPartOf(slot, `${p.id}~u`), price: 0 })), ...keshiOwnedMut(cur, slot).map((id) => ({ ...keshiPartOf(slot, id), price: 0 }))]])) : Object.fromEntries(KESHI_SLOTS.map((slot) => [slot, shown(slot)]));
   return { slots: KESHI_SLOTS, parts, colors: KESHI_COLORS, limitedColors: KESHI_LIMITED_COLORS.map((c) => c.name), base: KESHI_BASE, usedRate: KESHI_USED_RATE };
 };
 async function keshiState(deps, uid, body) {
@@ -6821,7 +6821,12 @@ export const MART = {
 };
 const martFee = (price) => Math.floor(price / 100) * MART.feePct + Math.floor(((price % 100) * MART.feePct) / 100);   // price × 10% の切り捨て（とても大きな値段でも、ずれない計算）
 const martParts = () => KESHI_SLOTS.flatMap((slot) => KESHI_PARTS[slot].filter((p) => p.price > 0 && !p.limited).map((p) => ({ slot, id: p.id, price: p.price })));
-const martRef = (slot, id) => { const p = KESHI_PART_BY[slot]?.[keshiBaseId(id)]; return p && p.price > 0 ? Math.round(p.price * MART.usedMarket) : 0; };
+/* ゆうマートで売り買いできるパーツ：ショップのパーツと、ベルトコンベアのパーツ（レア・ミューテーション付き）。E賞などの限定品は、売れない（無料の初期パーツも売れない）。
+   ミューテーション付きは、中古にならず、そのままの姿で買った人の持ち物に入る（買った人の持ち物でも、ミューテーションのまま） */
+const martBasePart = (slot, id) => KESHI_PART_BY[slot]?.[keshiMutOf(id) ? String(id).slice(0, -2) : keshiBaseId(id)];
+const martPartSellable = (slot, id) => { const b = martBasePart(slot, id); return !!b && b.price > 0 && (!b.limited || !!b.rare) && !!keshiPartOf(slot, String(id)); };
+const martSoldId = (id) => (keshiMutOf(id) ? String(id) : `${keshiBaseId(id)}~u`);   // 売れたあとの、買った人の持ち物の id
+const martRef = (slot, id) => { const p = martPartSellable(slot, id) ? keshiPartOf(slot, String(id)) : null; return p && p.price > 0 ? Math.round(p.price * MART.usedMarket) : 0; };
 /* 出品の相場（種類ごと）。k：part（パーツ）／kaku（確変枠）／prize（番くじ景品） */
 function martRefOf(L) {
   if (L.k === "kaku") return Math.round((L.se - L.ss >= 20 * 60000 ? MART.kakuRef.long : MART.kakuRef.short) * (kakuIsWeekend(L.day) ? MART.kakuRef.weekend : 1));
@@ -6927,7 +6932,7 @@ const martLive = (L, now) => now < L.e && !martNpcBought(L, now);
 const martHasEnded = (m, now) => m.L.some((x) => x.au && now >= x.e) || Object.keys(m.NA).some((id) => { const r = martNpcAuctionById(id, now); return !r || r.ended; });
 const martNames = () => {
   const out = {};
-  KESHI_SLOTS.forEach((slot) => { out[slot] = KESHI_PARTS[slot].filter((p) => p.price > 0 && !p.limited).map((p) => ({ id: p.id, name: p.name, price: p.price, ref: martRef(slot, p.id), m: p.m, s: p.s, b: p.b, z: p.z })); });
+  KESHI_SLOTS.forEach((slot) => { out[slot] = KESHI_PARTS[slot].filter((p) => p.price > 0 && (!p.limited || p.rare)).map((p) => ({ id: p.id, name: p.name, price: p.price, ref: martRef(slot, p.id), m: p.m, s: p.s, b: p.b, z: p.z })); });
   return out;
 };
 const martView = (L, now, bids) => {
@@ -6936,7 +6941,7 @@ const martView = (L, now, bids) => {
   if (L.au) { const au = martAucView(L, L.na ? bids : L.au.bids || [], now); head.price = au.cur; head.au = au; }
   if (L.k === "kaku") return { ...head, day: L.day, ss: L.ss, se: L.se, machine: kakuMachineFor(L.day), ...(L.dutch ? { dutch: L.dutch } : {}) };
   if (L.k === "prize") return { ...head, pid: L.pid, prize: L.pz };
-  return { ...head, slot: L.slot, part: `${keshiBaseId(L.part)}~u` };   // 売れたら中古になるので、中古の姿で見せる
+  return { ...head, slot: L.slot, part: martSoldId(L.part) };   // 売れたら中古になるので、中古の姿で見せる（ミューテーション付きは、そのまま）
 };
 
 /* 一覧：だれでも見られる。読み取りは martIndex/open の1回だけ（数秒はメモリのものを使う） */
@@ -6953,7 +6958,7 @@ async function martStatus(deps, uid) {
     ...martNpcAuctions(now).map((A) => { const D = martNpcDeal(A, cur.m.ND, now); return { ...martView(D, now, cur.m.NA[A.id] || []), ...(D.deal ? { dealMine: D.deal.u === uid } : {}) }; }),
     ...(await martKakuNpcListings(deps, now)).map((L) => { const D = martNpcDeal(L, cur.m.ND, now); return { ...martView(D, now), ...(D.deal ? { dealMine: D.deal.u === uid } : {}) }; })
   ].sort((a, b) => b.t - a.t);
-  return { ok: true, serverNowMs: now, paused: cur.m.paused, isTopAdmin: admin, listings: list, mineCount: mine.length, table: martNames(), usedRate: KESHI_USED_RATE, feePct: MART.feePct, maxOpen: MART.maxOpen, auctionHours: MART.auc.hours };
+  return { ok: true, serverNowMs: now, paused: cur.m.paused, isTopAdmin: admin, listings: list, mineCount: mine.length, table: martNames(), mutDefs: KESHI_MUT, usedRate: KESHI_USED_RATE, feePct: MART.feePct, maxOpen: MART.maxOpen, auctionHours: MART.auc.hours };
 }
 
 /* 自分の画面：残高・出品できるパーツ・自分の出品（来ている値下げ依頼）・売れた記録。NPC に売れた出品は、ここで精算する */
@@ -6983,7 +6988,7 @@ async function martMine(deps, uid, body) {
     }
     const k = await keshiLoad(deps, uid);
     const coins = Number(decodeFields(me.raw.fields).coins || 0);
-    const sellable = k.owned.filter((o) => /^(body|edge|sole|weight):/.test(o)).map((o) => { const [slot, id] = o.split(":"); return { slot, part: id }; }).filter((x) => { const p = KESHI_PART_BY[x.slot]?.[keshiBaseId(x.part)]; return p && p.price > 0 && !p.limited; }).map((x) => ({ ...x, equipped: k.eq[x.slot] === x.part, ref: martRef(x.slot, x.part) }));
+    const sellable = k.owned.filter((o) => /^(body|edge|sole|weight):/.test(o)).map((o) => { const [slot, id] = o.split(":"); return { slot, part: id }; }).filter((x) => martPartSellable(x.slot, x.part)).map((x) => ({ ...x, equipped: k.eq[x.slot] === x.part, ref: martRef(x.slot, x.part) }));
     const listings = cur.m.L.filter((L) => L.u === uid).map((L) => ({
       ...martView(L, now), expired: now >= L.e,
       offers: (L.of || []).filter((o) => now - o.t < MART.offerMs).map((o) => ({ u: o.u, n: o.n, q: o.q, t: o.t })),
@@ -7009,7 +7014,7 @@ async function martList(deps, uid, body) {
   if (!["part", "kaku", "prize"].includes(kind)) return { status: 400, error: "bad_request" };
   if (auction && kind === "kaku") return { status: 409, error: "no_auction" };   // 確変枠はオークションにしない（精算が遅れると、枠が始まってしまうため）
   if (auction && !MART.auc.hours.includes(hours)) return { status: 400, error: "bad_request" };
-  if (kind === "part") { const base = KESHI_PART_BY[String(body?.slot || "")]?.[keshiBaseId(String(body?.part || ""))]; if (!base || base.price === 0 || base.limited || !keshiPartOf(String(body.slot), String(body.part))) return { status: 400, error: "bad_request" }; }
+  if (kind === "part" && !martPartSellable(String(body?.slot || ""), String(body?.part || ""))) return { status: 400, error: "bad_request" };
   if (!Number.isInteger(price) || price < 1 || !Number.isSafeInteger(price)) return { status: 400, error: "bad_price" };   // 値段の上限はない（コインが足りれば、いくらでも）
   const me = await loadMyUser(deps.firestore, uid, body?.username);
   if (me.error) return me.error;
@@ -7083,7 +7088,7 @@ async function martSellable(deps, uid) {
    手数料は売れた値段の 10%（出品した人が受け取るのは残り）。NPC が買うとき、コインはどこからも出ない（NPC に予算はない）。 */
 async function martExecute(deps, mcur, L, price, buyer) {
   const now = deps.now(), fs = deps.firestore, kind = L.k || "part";
-  const base = kind === "part" ? keshiBaseId(L.part) : "", key = `${L.slot}:${base}~u`;
+  const sold = kind === "part" ? martSoldId(L.part) : "", key = `${L.slot}:${sold}`;
   let buyerWrites = [], buyerName = buyer.npc || "", buyerUid = "";
   if (!buyer.npc) {
     const me = await loadMyUser(fs, buyer.uid, buyer.name);
@@ -7127,7 +7132,7 @@ async function martExecute(deps, mcur, L, price, buyer) {
   const err = await martCommit(deps, [...buyerWrites, ...sellerWrites, idx.write]);
   if (err) return err;
   if (L.k === "kaku") kakuDocCache.delete(L.day);
-  return { ok: true, price, fee, item: L.k === "kaku" || L.k === "prize" ? { k: L.k } : { slot: L.slot, part: `${base}~u` } };
+  return { ok: true, price, fee, item: L.k === "kaku" || L.k === "prize" ? { k: L.k } : { slot: L.slot, part: sold } };
 }
 
 async function martBuy(deps, uid, body) {
@@ -7335,7 +7340,7 @@ async function martBid(deps, uid, body) {
   const me = await loadMyUser(deps.firestore, uid, body?.username);
   if (me.error) return me.error;
   if (Number(decodeFields(me.raw.fields).coins || 0) < price) return { status: 409, error: "insufficient_coins" };
-  if (L.k !== "prize") { const k = await keshiLoad(deps, uid); if (k.owned.includes(`${L.slot}:${keshiBaseId(L.part)}~u`)) return { status: 409, error: "already_owned" }; }
+  if (L.k !== "prize") { const k = await keshiLoad(deps, uid); if (k.owned.includes(`${L.slot}:${martSoldId(L.part)}`)) return { status: 409, error: "already_owned" }; }
   const m = structuredClone(mcur.m), bid = { u: uid, n: me.name, q: price, t: now };
   if (na) m.NA[na] = [...bids, bid];
   else { const T = m.L.find((x) => x.i === id); T.au.bids = [...bids, bid]; if (T.e - now <= MART.auc.snipeMs) T.e = now + MART.auc.extendMs; }

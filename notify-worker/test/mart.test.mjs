@@ -801,3 +801,47 @@ test("人のオークションも、入札がないあいだは即決の値段�
   assert.equal((await t.act(0, { action: "martAnswer", id: b.id, who: "id1", accept: true })).error, "has_bids", "入札があとから入ったら、即決は受けられない");
   assert.equal((await t.act(2, { action: "martOffer", id: b.id, price: 9000 })).error, "has_bids");
 });
+
+test("ベルトコンベアのパーツ（レア・ミューテーション付き）も出品できる。レアは中古に、ミューテーション付きはそのまま買った人へ。E賞の限定品・無料は出品できない", async () => {
+  const t = setup({ owned: ["body:carbon", "weight:platinum", "body:pro@g", "edge:crystal@d", "body:ltd", "body:plain@g"] });
+  await t.act(0, { action: "keshiEquip", eq: { body: "pro@g" } });
+  /* 「出品する」の一覧に出る */
+  const mine = await t.act(0, { action: "martMine" });
+  const ids = mine.sellable.map((x) => `${x.slot}:${x.part}`);
+  for (const id of ["body:carbon", "weight:platinum", "body:pro@g", "edge:crystal@d"]) assert.ok(ids.includes(id), `${id} が一覧に出る`);
+  assert.ok(!ids.includes("body:ltd"), "E賞の限定品は出ない");
+  assert.ok(!ids.includes("body:plain@g"), "無料のパーツのミューテーションは出ない");
+  const g = mine.sellable.find((x) => x.part === "pro@g");
+  assert.equal(g.ref, Math.round(1200 * 0.75), "ミューテーションの相場は、値段（600×2）に合わせる");
+  const ms = await t.act(0, { action: "martStatus" });
+  assert.ok(ms.table.body.some((p) => p.id === "carbon"), "名前の表に、ベルトのレアも入る");
+  assert.equal(ms.mutDefs.g.price, 2);
+  assert.equal((await t.act(0, { action: "martList", slot: "body", part: "ltd", price: 100 })).error, "bad_request");
+  assert.equal((await t.act(0, { action: "martList", slot: "body", part: "plain@g", price: 100 })).error, "bad_request");
+  assert.equal((await t.act(0, { action: "martList", slot: "body", part: "carbon@x", price: 100 })).error, "bad_request");
+  /* ミューテーション付き：そのままの姿で買った人へ */
+  const lg = await t.act(0, { action: "martList", slot: "body", part: "pro@g", price: 2000 });
+  assert.equal(lg.ok, true);
+  assert.deepEqual(t.ownedOf(0).includes("body:pro@g"), false, "預かり");
+  assert.equal(t.fs.plain("yuslotKeshi/id0").eq.body, "plain", "付けていたら外れる");
+  const st = await t.act(1, { action: "martStatus" });
+  assert.equal(st.listings.find((x) => x.id === lg.id).part, "pro@g");
+  const rg = await t.act(1, { action: "martBuy", id: lg.id });
+  assert.equal(rg.ok, true, JSON.stringify(rg)); assert.equal(rg.item.part, "pro@g");
+  assert.ok(t.ownedOf(1).includes("body:pro@g"), "ミューテーションのまま");
+  const eq = await t.act(1, { action: "keshiEquip", eq: { body: "pro@g" } });
+  assert.equal(eq.eq.body, "pro@g");
+  /* レア：売れたら中古で買った人へ（一覧にも強さつきで出る） */
+  const lc = await t.act(0, { action: "martList", slot: "body", part: "carbon", price: 3000 });
+  assert.equal(lc.ok, true);
+  const rc = await t.act(2, { action: "martBuy", id: lc.id });
+  assert.equal(rc.ok, true); assert.equal(rc.item.part, "carbon~u");
+  assert.ok(t.ownedOf(2).includes("body:carbon~u"));
+  const s2 = await t.act(2, { action: "keshiState" });
+  assert.ok(s2.have.body.includes("carbon~u") && s2.table.parts.body.some((p) => p.id === "carbon~u" && p.m > 0), "レアの中古は、強さつきで一覧に出る");
+  assert.ok(!t.ownedOf(2).includes("body:carbon"), "新品は持たない");
+  /* 取り消すと、元の姿で戻る */
+  const lp = await t.act(0, { action: "martList", slot: "weight", part: "platinum", price: 5000 });
+  assert.equal((await t.act(0, { action: "martCancel", id: lp.id })).ok, true);
+  assert.ok(t.ownedOf(0).includes("weight:platinum"), "新品のまま戻る");
+});
