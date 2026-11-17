@@ -6,8 +6,8 @@
    ・3Dの机と消しゴムは three.js（ヨットと同じもの）。3D が使えない端末では、対戦できない（メッセージを出す）。
 ========================================================= */
 import { load3D, three } from "./yuyacht3d.js?v=20261023-3d1";
-import { eraserKit } from "./yukeshi3d.js?v=20261117-bt1";
-import { keshiSimStepper, KESHI_DESK, KESHI_DT, eraserIcon } from "./yukeshi-core.js?v=20261117-bt1";
+import { eraserKit } from "./yukeshi3d.js?v=20261117-legend1";
+import { keshiSimStepper, KESHI_DESK, KESHI_DT, eraserIcon } from "./yukeshi-core.js?v=20261117-legend1";
 
 const TOP_Y = -0.4;   // 机の上の面の高さ
 const ERASER_SCALE = 0.57;   // 机の上の消しゴムの大きさ（1人用の改造の画面の消しゴムを、この倍率に小さくする）
@@ -334,7 +334,7 @@ function roomError(e) {
 function drawHud() {
   const y = kr.y, me = myIdx(), esc = kr.esc; if (!y) return;
   const pips = (w) => [0, 1].map((k) => `<i class="${k < w ? "on" : ""}"></i>`).join("");
-  const side = (i) => `<div class="kb-p${me === i ? " me" : ""}${!y.done && y.cur === i ? " turn" : ""}"><span class="n">${esc(String(y.names[i] || "").slice(0, 8))}</span>${y.en && y.en[i] ? `<span class="en">「${esc(String(y.en[i]))}」</span>` : ""}<span class="pips">${pips(y.wins[i])}</span><span class="rt">総合力 ${y.rt[i]}</span></div>`;
+  const side = (i) => `<div class="kb-p${me === i ? " me" : ""}${!y.done && y.cur === i ? " turn" : ""}"><span class="n">${esc(String(y.names[i] || "").slice(0, 8))}${y.tt && y.tt[i] ? " 👑" : ""}</span>${y.en && y.en[i] ? `<span class="en">「${esc(String(y.en[i]))}」</span>` : ""}<span class="pips">${pips(y.wins[i])}</span><span class="rt">総合力 ${y.rt[i]}</span></div>`;
   const top = $("#kbTop"); if (top) top.innerHTML = side(me === 1 ? 1 : 0) + `<div class="kb-mid">${y.done ? "終了" : `第${y.bout}本<small>${y.flicks}/10回</small>`}</div>` + side(me === 1 ? 0 : 1);
   const turn = $("#kbTurn"), mine = !y.done && y.cur === me;
   if (turn) { turn.classList.toggle("mine", mine); turn.innerHTML = y.done ? "対戦が終わりました" : mine ? `あなたの番です <span id="kbTimer" class="kb-timer"></span>` : `${esc(String(y.names[y.cur] || ""))}さんの番です <span id="kbTimer" class="kb-timer"></span>`; }

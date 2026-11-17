@@ -45,7 +45,7 @@ const ticketLeft = (r) => Math.max(0, (TICKET_USES[r.kind] || 0) - Math.max(0, M
 function prizeLine(r) {
   const p = (st && st.prizes || []).find((x) => x.id === r.id) || {};
   const nm = r.name || p.name || (r.id === "L" ? "ラストワン賞" : `${r.id}賞`);
-  if (r.id === "L") return `${ICON.L} ${nm}（伝説セット）　確変の予約 残り${ticketLeft(r)}回・全5社5株はゆう株に入っています`;
+  if (r.id === "L") return `${ICON.L} ${nm}（伝説セット）　確変の予約 残り${ticketLeft(r)}回・全5社5株はゆう株に入っています・消しバトの伝説セット（限定パーツ一式・限定カラー・称号）は${r.setAt ? "受け取り済み" : "まだ受け取っていません"}`;
   if (r.kind === "stock") return `${ICON[r.id]} ${nm}　ゆう株 ${r.code} ${r.qty}株`;
   if (r.kind === "coin") return `${ICON[r.id]} ${nm}　ゆうコイン ${fmt(r.amount)}`;
   if (r.kind === "gear") return `${ICON[r.id]} ${nm}　消しバトの限定${GEAR[r.code] || "パーツ"}`;
@@ -189,8 +189,8 @@ function gridHtml(canBuy) {
 function mineHtml(mine) {
   const list = mine.prizes || [];
   if (!list.length) return `<div class="yb-card"><h3>🎒 もちもの</h3><p class="yb-small">まだ景品はありません。くじを引くと、ここに入ります。</p></div>`;
-  const usable = (r) => (r.kind === "gear" || r.kind === "color") && !(r.used > 0) && !st.adminPreview;   // E賞・F賞は、消しバトの持ちものに入れて使う
-  const rows = list.slice().reverse().map((r) => `<div class="yb-own${RARE.has(r.id) ? " rare" : ""}">${ctx.esc(prizeLine(r))}${r.used > 0 ? "（使用済み）" : ""}${usable(r) ? ` <button type="button" class="yb-use" data-use="${Number(r.n)}">消しバトで使う</button>` : ""}</div>`).join("");
+  const usable = (r) => ((r.kind === "gear" || r.kind === "color") && !(r.used > 0) || (r.kind === "last" && !r.setAt)) && !st.adminPreview;   // E賞・F賞は、消しバトの持ちものに入れて使う
+  const rows = list.slice().reverse().map((r) => `<div class="yb-own${RARE.has(r.id) ? " rare" : ""}">${ctx.esc(prizeLine(r))}${r.used > 0 && r.kind !== "last" ? "（使用済み）" : ""}${usable(r) ? ` <button type="button" class="yb-use" data-use="${Number(r.n)}">${r.kind === "last" ? "伝説セットを受け取る" : "消しバトで使う"}</button>` : ""}</div>`).join("");
   const coin = list.filter((r) => r.kind === "coin").reduce((s, r) => s + (r.amount || 0), 0);
   const stock = list.filter((r) => r.kind === "stock").reduce((s, r) => s + (r.qty || 0), 0);
   return `<div class="yb-card"><h3>🎒 もちもの（${fmt(list.length)}枚ぶん）</h3>
@@ -263,8 +263,9 @@ async function buy() {
 async function useGear(n) {
   if (busy) return;
   const rec = ((st && st.mine && st.mine.prizes) || []).find((r) => r.n === n);
-  const what = rec ? prizeLine(rec).replace(/^\S+\s+/, "") : "この景品";
-  if (!window.confirm(`${what} を、消しバトの持ちものに入れますか？（入れたあとは、消しバトのショップで付けられます）`)) return;
+  const isLast = !!(rec && rec.kind === "last");
+  const what = isLast ? "伝説セット（限定パーツ一式・限定カラー「レジェンド」・称号「👑 伝説」）" : rec ? prizeLine(rec).replace(/^\S+\s+/, "") : "この景品";
+  if (!window.confirm(`${what} を、消しバトの持ちものに入れますか？（入れたあとは、消しバトのショップで付けられます${isLast ? "。確変台の予約の回数は、そのままです" : ""}）`)) return;
   busy = true;
   try {
     const r = await ctx.api("bankujiUse", { n });

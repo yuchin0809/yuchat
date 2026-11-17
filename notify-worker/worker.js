@@ -4523,6 +4523,7 @@ async function bankujiUse(deps, uid, body) {
     const prizes = raw && Array.isArray(decodeFields(raw.fields).prizes) ? decodeFields(raw.fields).prizes : [];
     const rec = prizes.find((x) => x.n === n);
     if (!rec) return { status: 409, error: "not_owned" };
+    if (rec.kind === "last") return await bankujiUseLegend(deps, uid, me, raw, prizes, rec);
     if (rec.used > 0) return { status: 409, error: "used" };
     let key, label;
     if (rec.kind === "gear" && KESHI_SLOTS.includes(rec.code)) { key = `${rec.code}:ltd`; label = KESHI_PART_BY[rec.code].ltd.name; }
@@ -4538,6 +4539,24 @@ async function bankujiUse(deps, uid, body) {
     return { ok: true, n, kind: rec.kind, code: rec.code, label };
   }
   return { status: 409, error: "busy" };
+}
+
+/* ラストワン賞の「伝説セット」を受け取る：消しバトの持ちものに、限定パーツ一式（本体・ふち・そこ・おもり）・限定カラー「レジェンド」・称号「👑 伝説」を入れる。
+   ・確変台の予約3回は、これとは別（used は予約を使った回数なので、そのまま。セットを受け取ったかは setAt に記録する）。
+   ・全5社5株は、引いたときに受け取り済み。
+   ・すでに持っているものがあっても、足りないものだけ足す。全部すでに持っているときは受け取れない。一度受け取ったら、もう一度は受け取れない。 */
+const LEGEND_KEYS = ["body:ltd", "edge:ltd", "sole:ltd", "weight:ltd", "color:legend", "title:legend"];
+async function bankujiUseLegend(deps, uid, me, raw, prizes, rec) {
+  if (rec.setAt) return { status: 409, error: "used" };
+  const fs = deps.firestore, path = `bankujiEntries/${BANKUJI.round}_${uid}`;
+  const k = await keshiLoad(deps, uid);
+  const add = LEGEND_KEYS.filter((x) => !k.owned.includes(x));
+  const nextPrizes = prizes.map((x) => (x.n === rec.n ? { ...x, setAt: deps.now() } : x));
+  const writes = [{ update: { name: fs.docName(path), fields: encodeFields({ prizes: nextPrizes }) }, updateMask: { fieldPaths: ["prizes"] }, currentDocument: { updateTime: raw.updateTime } }];
+  if (add.length) writes.push(...keshiWrite(deps, uid, k, { owned: [...k.owned, ...add], eq: k.eq, color: k.color, n: me.name }));
+  try { await fs.commit(writes); }
+  catch (error) { if (isRetryableCommitError(error)) return { status: 409, error: "busy" }; throw error; }
+  return { ok: true, n: rec.n, kind: "last", label: "伝説セット（限定パーツ一式・限定カラー「レジェンド」・称号「👑 伝説」）", added: add.length };
 }
 
 let bankujiPauseCache = { value: null, at: 0 };
@@ -6525,7 +6544,7 @@ export const KESHI_PARTS = {
 };
 /* limited：ゆう番くじ E賞の限定品。ショップでは買えない・ゆうマートでも売れない。持っている人の一覧にだけ出る（price は、無料のパーツと区別するための目安） */
 /* カバーの限定カラー（ゆう番くじ F賞）：番号は 8〜11。持っている人だけ選べる */
-export const KESHI_LIMITED_COLORS = [{ code: "gold", name: "ゴールド" }, { code: "silver", name: "シルバー" }, { code: "rainbow", name: "レインボー" }, { code: "blackgold", name: "ブラックゴールド" }];
+export const KESHI_LIMITED_COLORS = [{ code: "gold", name: "ゴールド" }, { code: "silver", name: "シルバー" }, { code: "rainbow", name: "レインボー" }, { code: "blackgold", name: "ブラックゴールド" }, { code: "legend", name: "レジェンド" }];   // legend：ラストワン賞の伝説セットだけ（番号 12）
 const KESHI_COLOR_COUNT = KESHI_COLORS.length + KESHI_LIMITED_COLORS.length;
 const keshiColorOwned = (owned, idx) => idx < KESHI_COLORS.length || owned.includes(`color:${KESHI_LIMITED_COLORS[idx - KESHI_COLORS.length].code}`);
 const KESHI_PART_BY = Object.fromEntries(KESHI_SLOTS.map((k) => [k, Object.fromEntries(KESHI_PARTS[k].map((p) => [p.id, p]))]));
@@ -6591,7 +6610,7 @@ function keshiParse(d) {
   const eq = { ...KESHI_DEFAULT_EQ };
   KESHI_SLOTS.forEach((slot) => { const id = d.eq?.[slot]; if (typeof id === "string" && keshiPartOf(slot, id) && (keshiIsFree(slot, id) || owned.includes(`${slot}:${id}`))) eq[slot] = id; });
   const color = Number.isInteger(d.color) && d.color >= 0 && d.color < KESHI_COLOR_COUNT && keshiColorOwned(owned, d.color) ? d.color : 0;
-  return { owned, eq, color, league: d.league === true, name: keshiCleanName(d.name) };
+  return { owned, eq, color, league: d.league === true, name: keshiCleanName(d.name), title: owned.includes("title:legend") ? "legend" : "" };
 }
 async function keshiLoad(deps, uid) {
   const raw = await deps.firestore.getRaw(`yuslotKeshi/${uid}`);
@@ -6605,7 +6624,7 @@ function keshiView(cur, coins, now) {
     keshiOwnedMut(cur, slot).forEach((id) => have[slot].push(id));   // ミューテーションのパーツ
   });
   const colorsHave = Array.from({ length: KESHI_COLOR_COUNT }, (_, i) => i).filter((i) => keshiColorOwned(cur.owned, i));
-  return { ok: true, coins, have, eq: cur.eq, color: cur.color, name: cur.name || "", colorsHave, stats: keshiStats(cur.eq), serverNowMs: now };
+  return { ok: true, coins, have, eq: cur.eq, color: cur.color, name: cur.name || "", title: cur.title || "", colorsHave, stats: keshiStats(cur.eq), serverNowMs: now };
 }
 /* 持っている中古のパーツは、その人の一覧に（新品の後ろに）足す */
 const keshiOwnedMut = (cur, slot) => (cur ? cur.owned.filter((o) => o.startsWith(`${slot}:`) && keshiMutOf(o)).map((o) => o.slice(slot.length + 1)).filter((id) => keshiPartOf(slot, id)) : []);
@@ -7939,13 +7958,13 @@ async function keshiLeagueNext(deps, data, cur, uid, week) {
   if (!nx || !nx.s[uid]) return out;
   const opps = [...new Set(nx.s[uid].o.filter(Boolean))];
   const raws = opps.length ? await deps.firestore.batchGet(opps.map((u) => `yuslotKeshi/${u}`)) : [];
-  const gear = new Map(opps.map((u, i) => { const c = keshiParse(raws[i] || {}); return [u, { eq: c.eq, color: c.color, en: c.name || "", stats: keshiStats(c.eq), parts: KESHI_SLOTS.map((slot) => { const pt = keshiPartOf(slot, c.eq[slot]); return pt ? pt.name + (/~u$/.test(String(c.eq[slot])) ? "（中古）" : "") : "—"; }) }]; }));
+  const gear = new Map(opps.map((u, i) => { const c = keshiParse(raws[i] || {}); return [u, { eq: c.eq, color: c.color, en: c.name || "", tt: c.title || "", stats: keshiStats(c.eq), parts: KESHI_SLOTS.map((slot) => { const pt = keshiPartOf(slot, c.eq[slot]); return pt ? pt.name + (/~u$/.test(String(c.eq[slot])) ? "（中古）" : "") : "—"; }) }]; }));
   const rows = keshiLgRows(data.p || {}).filter((r) => r.w + r.l > 0), rankOf = new Map(rows.map((r, i) => [r.uid, i + 1]));
-  out.mine = { eq: cur.eq, color: cur.color, en: cur.name || "", stats: keshiStats(cur.eq) };
+  out.mine = { eq: cur.eq, color: cur.color, en: cur.name || "", tt: cur.title || "", stats: keshiStats(cur.eq) };
   out.rounds = nx.s[uid].o.map((o) => {
     if (!o) return { rest: true };
     const v = (data.p && data.p[o]) || null, g = gear.get(o);
-    return { name: nx.s[o] ? nx.s[o].n : (v ? v.n : "?"), rank: rankOf.get(o) || 0, w: v ? v.w : 0, l: v ? v.l : 0, eq: g.eq, color: g.color, en: g.en, stats: g.stats, parts: g.parts };
+    return { name: nx.s[o] ? nx.s[o].n : (v ? v.n : "?"), rank: rankOf.get(o) || 0, w: v ? v.w : 0, l: v ? v.l : 0, eq: g.eq, color: g.color, en: g.en, tt: g.tt, stats: g.stats, parts: g.parts };
   });
   return out;
 }
@@ -8431,7 +8450,7 @@ async function keshiRoomNew(deps, room, now) {
   const st = cur.map((c) => keshiStats(c.eq));
   const starter = Math.floor(deps.random() * 2) % 2;   // 先に弾く人は、ルームを作った人とは関係なく、ランダム（ゲームを始めるたびに決める）。そのあとは1本ごとに交互（keshiRoomBoutEnd）
   return {
-    gid: slotRandomHex(6), order, names: room.members.slice(0, 2), eq: cur.map((c) => c.eq), color: cur.map((c) => c.color), en: cur.map((c) => c.name || ""), rt: st.map((s) => s.rating), par: st.map(keshiPhys),
+    gid: slotRandomHex(6), order, names: room.members.slice(0, 2), eq: cur.map((c) => c.eq), color: cur.map((c) => c.color), en: cur.map((c) => c.name || ""), tt: cur.map((c) => c.title || ""), rt: st.map((s) => s.rating), par: st.map(keshiPhys),
     bout: 1, starter, cur: starter, flicks: 0, wins: [0, 0], hist: [], pos: keshiStartPos(), last: null, miss: [0, 0],
     deadline: now + KESHI_TURN_MS + 4000, at: now, done: false, winner: -1, reason: ""
   };

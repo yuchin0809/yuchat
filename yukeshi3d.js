@@ -4,9 +4,9 @@
 import { load3D, three } from "./yuyacht3d.js?v=20261023-3d1";
 
 /* 0〜7：ふつうの色／8〜11：ゆう番くじ F賞の限定カラー（ゴールド・シルバー・レインボー・ブラックゴールド。持っている人だけ選べる） */
-export const SLEEVE_COLORS = ["#2f6fe0", "#e0412f", "#2fa85a", "#f0b400", "#ee6fa8", "#8a52d6", "#2b2b30", "#f07a20", "#d4a62a", "#b8c0c8", "rainbow", "#1b1a14"];
+export const SLEEVE_COLORS = ["#2f6fe0", "#e0412f", "#2fa85a", "#f0b400", "#ee6fa8", "#8a52d6", "#2b2b30", "#f07a20", "#d4a62a", "#b8c0c8", "rainbow", "#1b1a14", "legend"];   // 12：レジェンド（ラストワン賞の伝説セットだけ）
 /* 色の見本（ボタンの背景）に使う CSS */
-export const sleeveCss = (c) => (c === "rainbow" ? "linear-gradient(90deg,#ff2d78,#ff8a00,#ffe14a,#17e36a,#17b6ff,#b14cff)" : c);
+export const sleeveCss = (c) => (c === "rainbow" ? "linear-gradient(90deg,#ff2d78,#ff8a00,#ffe14a,#17e36a,#17b6ff,#b14cff)" : c === "legend" ? "linear-gradient(90deg,#1b1030,#7a2aff,#ff4aa0,#ffd34a)" : c);
 
 /* 消しゴムの組み立て（1人用の画面と、2人対戦の画面で共通）。T：three.js、RBG：角丸の箱。
    ・build(eq, color)：本体・ふち・そこ・おもり・カバーの色から、消しゴムの3Dの形（Group）を作る。長い辺が x 方向、底が y=-0.4
@@ -22,7 +22,7 @@ export function eraserKit(T, RBG) {
   };
   const sleeveTex = (color) => {
     const c = document.createElement("canvas"); c.width = 256; c.height = 128; const g = c.getContext("2d");
-    if (color === "rainbow") { const gr = g.createLinearGradient(0, 0, 256, 0); ["#ff2d78", "#ff8a00", "#ffe14a", "#17e36a", "#17b6ff", "#b14cff"].forEach((c, i, a) => gr.addColorStop(i / (a.length - 1), c)); g.fillStyle = gr; } else g.fillStyle = color;
+    if (color === "rainbow" || color === "legend") { const gr = g.createLinearGradient(0, 0, 256, 0); (color === "legend" ? ["#1b1030", "#7a2aff", "#ff4aa0", "#ffd34a"] : ["#ff2d78", "#ff8a00", "#ffe14a", "#17e36a", "#17b6ff", "#b14cff"]).forEach((c, i, a) => gr.addColorStop(i / (a.length - 1), c)); g.fillStyle = gr; } else g.fillStyle = color;
     g.fillRect(0, 0, 256, 128); const ink = color === "#1b1a14" ? "#e8c25a" : "#fff"; g.fillStyle = ink; g.fillRect(0, 0, 256, 14); g.fillRect(0, 114, 256, 14);
     g.fillStyle = ink; g.font = "900 46px sans-serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText("消しゴム", 128, 66);
     const t = new T.CanvasTexture(c); t.colorSpace = T.SRGBColorSpace; return t;
