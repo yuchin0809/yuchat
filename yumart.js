@@ -7,7 +7,7 @@
    ・商品の画像：mart-img/{枠}-{パーツ}.png（例：mart-img/body-titan.png）。ファイルがなければ、パーツごとに描いた絵（yumart-art.js）を表示する。
 ========================================================= */
 
-import { partArt, kakuArt, prizeArt } from "./yumart-art.js?v=20261026-ltd10";
+import { partArt, kakuArt, prizeArt } from "./yumart-art.js?v=20261117-bt1";
 
 let deps = null, root = null, stylesDone = false, token = 0;
 let sellMode = "fixed", sellHours = 24, negoOpen = null, negoMsg = {};
@@ -61,7 +61,15 @@ async function refresh(my = token) {
 }
 
 /* ---------- 部品 ---------- */
-const partInfo = (slot, variant) => (S.table[slot] || []).find((p) => p.id === String(variant).replace(/~u$/, ""));
+/* ミューテーション付き（pro@g など）は、元のパーツから、サーバーと同じ計算で（強さ・値段が大きく）作る */
+const MUT_RE = /@([gdr])$/;
+const partInfo = (slot, variant) => {
+  const v = String(variant).replace(/~u$/, ""), mm = MUT_RE.exec(v), base = (S.table[slot] || []).find((p) => p.id === v.replace(MUT_RE, ""));
+  const D = mm && base && S.mutDefs ? S.mutDefs[mm[1]] : null;
+  if (!D) return mm ? undefined : base;
+  const up = (x) => (x > 0 ? Math.round(x * D.stat) : x);
+  return { ...base, id: v, name: `${D.name}${base.name}`, price: base.price * D.price, m: up(base.m), s: up(base.s), b: up(base.b), z: up(base.z) };
+};
 const usedStat = (v) => (v > 0 ? Math.round(v * S.usedRate) : v);
 function effectText(slot, variant) {
   const p = partInfo(slot, variant); if (!p) return "";
@@ -84,7 +92,7 @@ function itemOf(x) {
     return { name: `${PRIZE[x.pid] || x.pid}${extra}`, sub: `ゆう番くじの景品${z.until ? `　期限 ${md(z.until)}` : ""}`, art: prizeArt(x.pid, z.code) + img(`prize-${x.pid}`), used: false };
   }
   const p = partInfo(x.slot, x.part), id = String(x.part).replace(/~u$/, "");
-  return { name: p ? p.name : x.part, sub: `${SLOT[x.slot]}　${effectText(x.slot, x.part)}`, art: partArt(x.slot, id) + img(`${x.slot}-${id}`), used: String(x.part).endsWith("~u") };
+  return { name: p ? p.name : x.part, sub: `${SLOT[x.slot]}　${effectText(x.slot, x.part)}`, art: partArt(x.slot, id) + img(`${x.slot}-${id.replace(MUT_RE, "")}`), used: String(x.part).endsWith("~u") };
 }
 const thumb = (it) => `<span class="ym-img">${it.art}</span>`;
 const nameHtml = (it) => `${esc(it.name)}${it.used ? `<span class="ym-used">中古</span>` : ""}`;

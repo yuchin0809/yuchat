@@ -21,15 +21,31 @@ const ART = {
   "weight:lead": () => `<polygon points="12,28 22,16 54,16 44,28" fill="#6a6e76"/><rect x="12" y="28" width="32" height="20" fill="#4a4d54"/><polygon points="44,28 54,16 54,36 44,48" fill="#383b41"/><rect x="15" y="31" width="14" height="3" rx="1.5" fill="#fff" opacity=".25"/>`,
   "weight:gold": () => `<polygon points="10,30 21,16 55,16 44,30" fill="#ffe27a"/><rect x="10" y="30" width="34" height="20" fill="#ffc933"/><polygon points="44,30 55,16 55,36 44,50" fill="#d99a00"/><rect x="14" y="34" width="16" height="3" rx="1.5" fill="#fff" opacity=".6"/><path d="M50 8l1.5 3.5L55 13l-3.5 1.5L50 18l-1.5-3.5L45 13l3.5-1.5z" fill="#fff"/>`
 };
+/* ベルトコンベアのパーツ（レア）の絵：色だけ決めて、形は部位ごとに共通。消しバトの3Dの見た目（yukeshi3d.js）と同じ色づかい */
+const RARE_COLOR = {
+  body: { gel: "#9fe8ff", bamboo: "#2e3a33", ruby: "#c2203a", dragon: "#2a6b3a", carbon: "#2b2e34", diamond: "#cdf3ff", meteor: "#5a4640" },
+  edge: { neon: "#39ff88", carbonf: "#2b2e34", rubyf: "#c2203a", blackhole: "#2a1450", titanf: "#c9ced6", mithril: "#bcd8ff", aurora: "#b8ffe8" },
+  sole: { roller: "#555a63", gelsole: "#aef0ff", plasma: "#ff6aff", antigrav: "#e6ffff", hover: "#c8ffdc", linear: "#8ccaff", zero: "#f4fbff" },
+  weight: { mercury: "#c9d1d9", diamondw: "#cdf3ff", osmium: "#3a4a6a", blackholew: "#1a1030", tungsten: "#6b6f78", platinum: "#e6edf2", neutron: "#9ad0ff" }
+};
+function rareDraw(slot, id) {
+  const c = RARE_COLOR[slot] && RARE_COLOR[slot][id]; if (!c) return null;
+  if (slot === "body") return eraser(c) + sleeve;
+  if (slot === "edge") return eraser() + `<rect x="6" y="17" width="52" height="30" rx="6" fill="none" stroke="${c}" stroke-width="5"/><rect x="6" y="17" width="52" height="30" rx="6" fill="none" stroke="#fff" stroke-opacity=".35" stroke-width="1.4"/>` + sleeve;
+  if (slot === "sole") return eraser() + sleeve + `<rect x="9" y="44" width="46" height="8" rx="3" fill="${c}" stroke="rgba(0,0,0,.3)" stroke-width="1"/><rect x="13" y="45" width="24" height="1.8" rx=".9" fill="#fff" opacity=".6"/>`;
+  return id === "mercury" || id === "neutron" || id === "blackholew" ? `<circle cx="32" cy="32" r="18" fill="${c}" stroke="rgba(0,0,0,.35)" stroke-width="2"/><circle cx="26" cy="26" r="5" fill="#fff" opacity=".55"/>`
+    : `<polygon points="10,30 21,16 55,16 44,30" fill="${c}" opacity=".75"/><rect x="10" y="30" width="34" height="20" fill="${c}"/><polygon points="44,30 55,16 55,36 44,50" fill="${c}" opacity=".6"/><rect x="10" y="30" width="34" height="20" fill="#fff" opacity=".12"/>`;
+}
+const MUT_COLOR = { g: "#ffc933", d: "#4fc3ff", r: "#ff5ad0" };
 const BG = { body: ["#fff1d6", "#ffe0e8"], edge: ["#e3f3ff", "#eaf0ff"], sole: ["#f1ffe3", "#e3f7f3"], weight: ["#f1eee8", "#e6e2dc"] };
 /* 商品の絵（SVG の文字列）。id は中古の ~u が付いていてもよい（見た目は同じ） */
 export function partArt(slot, id) {
-  const base = String(id).replace(/~u$/, "");
-  const draw = ART[`${slot}:${base}`];
+  const raw = String(id).replace(/~u$/, ""), mm = /@([gdr])$/.exec(raw), base = raw.replace(/@[gdr]$/, "");   // ミューテーション付き（@g など）は、元のパーツの絵に、光る枠と ✨ をつける
+  const draw = ART[`${slot}:${base}`] || (rareDraw(slot, base) ? () => rareDraw(slot, base) : null);
   const [c1, c2] = BG[slot] || BG.body;
   if (!draw) return `<svg class="ym-art" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" fill="${c1}"/><text x="32" y="42" text-anchor="middle" font-size="28">📦</text></svg>`;
-  const gid = `bg-${slot}-${base}`;
-  return `<svg class="ym-art" viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="${gid}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${c1}"/><stop offset="1" stop-color="${c2}"/></linearGradient></defs><rect width="64" height="64" fill="url(#${gid})"/>${draw()}</svg>`;
+  const gid = `bg-${slot}-${raw.replace(/[^a-z0-9]/gi, "_")}`;
+  return `<svg class="ym-art" viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="${gid}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${c1}"/><stop offset="1" stop-color="${c2}"/></linearGradient></defs><rect width="64" height="64" fill="url(#${gid})"/>${draw()}${mm ? `<rect x="1.5" y="1.5" width="61" height="61" rx="4" fill="${MUT_COLOR[mm[1]]}" fill-opacity=".14" stroke="${MUT_COLOR[mm[1]]}" stroke-width="3"/><text x="52" y="14" text-anchor="middle" font-size="13">✨</text>` : ""}</svg>`;
 }
 export const MART_ART_KEYS = Object.keys(ART);
 
