@@ -7,7 +7,7 @@
    ・商品の画像：mart-img/{枠}-{パーツ}.png（例：mart-img/body-titan.png）。ファイルがなければ、パーツごとに描いた絵（yumart-art.js）を表示する。
 ========================================================= */
 
-import { partArt, kakuArt, prizeArt } from "./yumart-art.js?v=20261117-fix1";
+import { partArt, kakuArt, prizeArt } from "./yumart-art.js?v=20261117-cap1";
 
 let deps = null, root = null, stylesDone = false, token = 0;
 let sellMode = "fixed", sellHours = 24, negoOpen = null, negoMsg = {};
