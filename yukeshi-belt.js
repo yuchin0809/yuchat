@@ -7,8 +7,8 @@
      買えるかどうかは、Worker（keshiBeltBuy）が、種の署名と時刻とパーツを確かめて決める。
    ・ベータ版。
 ========================================================= */
-import { createPartsStage } from "./yukeshi3d.js?v=20261117-cap1";
-import { keshiStatsView, keshiPunchView, keshiBeltItemView } from "./yukeshi-core.js?v=20261117-cap1";
+import { createPartsStage } from "./yukeshi3d.js?v=20261118-ip1";
+import { keshiStatsView, keshiPunchView, keshiBeltItemView } from "./yukeshi-core.js?v=20261118-ip1";
 
 const SLOT_NAMES = { body: "本体", edge: "ふち", sole: "そこ", weight: "おもり" };
 const STAT_NAMES = [["m", "重さ"], ["s", "すべり"], ["b", "反発"], ["z", "大きさ"]];
@@ -37,9 +37,9 @@ function partSvg(slot, id) {
     : `<rect x="22" y="16" width="44" height="30" rx="5" fill="${c}" ${rim}/><rect x="22" y="16" width="44" height="30" rx="5" fill="url(#blShine)"/>`;
   return `<svg class="bl-art" viewBox="0 0 88 62" aria-hidden="true">${defs}${g}</svg>`;
 }
-/* iPad だけ、ベルトの速さを1.15倍にする（スマホはそのまま）。iPadOS は「Mac」を名乗ることがあるので、タッチ対応の Mac も iPad とみなす */
+/* iPad だけ、ベルトの速さを1.38倍（1.15 × 1.2）にする（スマホはそのまま）。iPadOS は「Mac」を名乗ることがあるので、タッチ対応の Mac も iPad とみなす */
 const IS_IPAD = (() => { try { return /iPad/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1); } catch (_) { return false; } })();
-const SPEED = IS_IPAD ? 1.15 : 1;
+const SPEED = IS_IPAD ? 1.38 : 1;
 let run = 0, stylesDone = false, cur3d = null;
 
 /* =========================================================
