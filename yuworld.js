@@ -15,11 +15,11 @@
 /* 🎟 ゆう宝くじ売り場の画面（別ファイル。Worker の lottery* アクションを呼んで表示するだけ） */
 import { renderLottery, stopLottery } from "./yulottery.js?v=20261027-draw1";
 /* 🎊 ゆう番くじ（発売前のお知らせの画面） */
-import { renderBankuji, stopBankuji, BANKUJI_SALE_MS } from "./yubankuji.js?v=20261118-ip1";
+import { renderBankuji, stopBankuji, BANKUJI_SALE_MS } from "./yubankuji.js?v=20261118-ms1";
 import { renderYacht, stopYacht } from "./yuyacht.js?v=20261026-yacht6";
 import { renderBilliards, stopBilliards } from "./yubilliards.js?v=20261112-all1";
-import { renderKeshi, stopKeshi } from "./yukeshi.js?v=20261118-ip1";
-import { eraserIcon, keshiLeagueTag } from "./yukeshi-core.js?v=20261118-ip1";
+import { renderKeshi, stopKeshi } from "./yukeshi.js?v=20261118-ms1";
+import { eraserIcon, keshiLeagueTag } from "./yukeshi-core.js?v=20261118-ms1";
 /* 🌈 確変台のパネル（台の一覧の上）。抽選・先着・通知設定。Worker の kaku* アクションを呼んで表示するだけ */
 import { kakuInit, kakuPanelHtml, kakuBind, kakuMachineInfo, startKaku, stopKaku, refreshKaku } from "./yukaku.js?v=20261027-move2";
 /* ⭐ サポーター：確変台の見た目と当たり演出（自分の画面だけ。当たりやすさ・結果には関わらない） */
@@ -211,6 +211,7 @@ function renderShop() {
       </button>`).join("");
   rootEl.innerHTML = `<div class="yw-head"><h2>🎡 ゆうワールド</h2><p>お店をえらんで遊べます。コインはゆうChat共通です。</p></div>
     ${leagueTop()}
+    <div class="yw-mission ev-mission" id="ywMission"></div>
     ${adminPanel}
     <div class="yw-shop-grid">
       <button type="button" class="yw-shop-card${blocked ? " is-soon" : ""}" id="ywOpenSlot">
@@ -240,6 +241,7 @@ function renderShop() {
           <div class="yw-shop-desc">15個の球を少ない打数で全部ポケットへ。コインは使わない、気軽な練習モード。</div></div>
       </button>
     </div>`;
+  drawMission();
   $("#ywOpenSlot")?.addEventListener("click", () => { if (blocked) { state.screen = "preparing"; render(); return; } unlockAudio(); openLobby(); });
   $("#ywOpenLottery")?.addEventListener("click", () => { if (blocked) { state.screen = "preparing"; render(); return; } unlockAudio(); state.screen = "kujihub"; render(); });
   rootEl.querySelectorAll("[data-game]").forEach((el) => el.addEventListener("click", () => { if (typeof deps.openGame === "function") deps.openGame(el.dataset.game); }));
@@ -251,6 +253,31 @@ function renderShop() {
   $("#ywToggleKeshi")?.addEventListener("click", onToggleKeshi);
   $("#ywOpenBilliards")?.addEventListener("click", () => { state.screen = "billiards"; render(); });
   $("#ywToggleBilliards")?.addEventListener("click", onToggleBilliards);
+}
+/* 📋 デイリーミッションと連続ログイン（サイトだけ。アプリでは、style.css の .ev-mission で隠す）。開くたびではなく、前から30秒たったときだけ読み直す */
+function missionHtml(m) {
+  const row = (x) => `<div class="yw-ms-row${x.claimed ? " is-done" : ""}"><span class="nm">${x.name}</span><em>+${x.reward}</em>${x.claimed ? `<b class="ok">✅</b>` : x.done ? `<button type="button" class="yw-ms-btn" data-ms="${x.id}">受け取る</button>` : `<b class="wait">まだ</b>`}</div>`;
+  const allBtn = m.all.claimed ? `<b class="ok">✅</b>` : m.all.ready ? `<button type="button" class="yw-ms-btn" data-ms="all">受け取る</button>` : `<b class="wait">まだ</b>`;
+  const streak = m.streak > 0 ? `🔥 連続ログイン <b>${m.streak}</b>日${m.streakNext ? `（あと${m.streakNext - m.streak}日で おまけコイン！）` : ""}` : "毎日ログインすると、連続ログインのおまけがもらえます";
+  return `<div class="yw-ms-head"><b>📋 デイリーミッション</b><small>毎日 0:00 にリセット・全部で 最大${m.total}コイン</small></div><div class="yw-ms-streak">${streak}</div>
+    ${m.list.map(row).join("")}<div class="yw-ms-row yw-ms-all${m.all.claimed ? " is-done" : ""}"><span class="nm">🎁 全部受け取ったボーナス</span><em>+${m.all.reward}</em>${allBtn}</div>`;
+}
+async function drawMission() {
+  const el = $("#ywMission"); if (!el) return;
+  if (state.mission) el.innerHTML = missionHtml(state.mission);
+  if (state.missionAt && Date.now() - state.missionAt < 30000) { bindMission(); return; }
+  state.missionAt = Date.now();
+  try { state.mission = await api("missionState"); } catch (_) { state.missionAt = 0; return; }
+  const el2 = $("#ywMission"); if (!el2) return;
+  el2.innerHTML = missionHtml(state.mission); bindMission();
+}
+function bindMission() {
+  rootEl.querySelectorAll("[data-ms]").forEach((b) => b.addEventListener("click", async () => {
+    if (state.missionBusy) return; state.missionBusy = true; b.disabled = true;
+    try { const r = await api("missionClaim", { mission: b.dataset.ms }); state.mission = { ...state.mission, ...r }; state.missionAt = Date.now(); const el = $("#ywMission"); if (el) { el.innerHTML = missionHtml(state.mission); el.classList.add("pop"); setTimeout(() => el.classList.remove("pop"), 500); bindMission(); } }
+    catch (e) { alert(e && e.code === "already_claimed" ? "もう受け取っています。" : "受け取れませんでした。もう一度お試しください。"); state.missionAt = 0; }
+    state.missionBusy = false;
+  }));
 }
 async function onToggleBilliards() {
   const next = !state.billiardsPublished;
@@ -1010,6 +1037,11 @@ function injectStyles() {
   .yw-shogi-svg { width: 58px; height: 66px; filter: drop-shadow(0 3px 3px rgba(0,0,0,.35)); }
   .yw-othello-banner { background: linear-gradient(135deg, #1b7a43, #0f5a30); }
   .yw-shogi-banner { background: linear-gradient(135deg, #c8964b, #8a5a1f); }
+  .yw-mission { background: #fff; border-radius: 14px; padding: 12px 14px; margin: 10px 0; box-shadow: 0 4px 16px rgba(0,0,0,.07); } .yw-mission:empty { display: none; } .yw-mission.pop { animation: yw-ms-pop .5s; } @keyframes yw-ms-pop { 50% { transform: scale(1.03); } }
+  .yw-ms-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; flex-wrap: wrap; } .yw-ms-head small { color: #888; font-size: 11px; } .yw-ms-streak { font-size: 12.5px; color: #8a4b00; background: #fff6d8; border-radius: 8px; padding: 6px 10px; margin: 8px 0; }
+  .yw-ms-row { display: grid; grid-template-columns: 1fr auto 78px; align-items: center; gap: 8px; padding: 7px 0; border-bottom: 1px solid #f0f0f0; font-size: 13.5px; } .yw-ms-row em { font-style: normal; font-weight: 800; color: #b45309; } .yw-ms-row.is-done .nm { color: #999; text-decoration: line-through; }
+  .yw-ms-row b.ok, .yw-ms-row b.wait { text-align: center; font-size: 12px; color: #999; } .yw-ms-row b.ok { color: #2c8a52; font-size: 15px; }
+  .yw-ms-btn { border: none; background: linear-gradient(#ffb347, #e0701f); color: #fff; font-weight: 800; font-size: 12.5px; border-radius: 999px; padding: 6px 10px; cursor: pointer; } .yw-ms-btn:disabled { opacity: .5; }
   .yw-daifugo-banner { background: linear-gradient(135deg, #2d6cdf, #1b2f7a); }
   .yw-keshi-svg { width: 96px; height: 68px; filter: drop-shadow(0 3px 3px rgba(0,0,0,.3)); }
   .yw-league-top { position: relative; overflow: hidden; display: flex; align-items: center; gap: 10px; width: 100%; margin: 0 0 12px; padding: 12px 14px; border: 2px solid #e8b84a; border-radius: 14px; cursor: pointer; text-align: left; color: #fff; background: radial-gradient(circle at 10% 0%, #5a45b0, #1b1840 75%); box-shadow: 0 4px 16px rgba(40,20,110,.4), 0 0 0 3px rgba(232,184,74,.25); font-family: inherit; animation: yw-lt-glow 2.4s ease-in-out infinite; }

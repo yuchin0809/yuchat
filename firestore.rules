@@ -104,6 +104,8 @@ service cloud.firestore {
         'yuslotKeshi',
         // 🏆 消しバトのリーグ戦：週の戦績（yuslotKeshiLeague）は通知 Worker（サービスアカウント）だけが書く
         'yuslotKeshiLeague',
+        // 📋 デイリーミッション：その日の達成と受け取り（yuslotMission）は通知 Worker（サービスアカウント）だけが書く
+        'yuslotMission',
         // 🆔 ゆうID（yuIds：IDから uid を引く表）は Worker だけが書く
         'yuIds',
         // ⭐ サポーター（supporters・supporterIndex・featureRequests）・🎟 招待コード（inviteCodes・inviteRedeems）・📸 YuSnap の写真（yurealPosts・yurealImages）・👥 友達申請（friendRequests）・ブロック（blocks）・通報（reports）は Worker だけが書く
@@ -196,7 +198,7 @@ service cloud.firestore {
 
       // 経済項目（お金に関わる項目）。ブラウザからは作成・変更できない
       function economyFields() {
-        return ['coins', 'bank', 'stocks', 'totalBetAmount', 'bonus500Granted', 'bonus500GrantedAt', 'lastLoginBonusDate',
+        return ['coins', 'bank', 'stocks', 'totalBetAmount', 'bonus500Granted', 'bonus500GrantedAt', 'lastLoginBonusDate', 'loginStreak',
           // 🎰 ゆうスロの記録（有料の回転数・使ったコイン。会員ランクに使う）。Worker だけが足す
           'slotSpins', 'slotWagered', 'slotKakuSpins', 'slotKakuWagered',
           // 🥷 スリ対策：防犯グッズ（guards）・スリの被害の記録（theft）・スリの通知の設定（theftPush）は Worker・毎日の処理だけが書く

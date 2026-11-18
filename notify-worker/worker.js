@@ -151,6 +151,7 @@ export async function handleRequest(request, env = {}, deps = createDefaultDeps(
     /* 💰 ゆう経済・🏇 ゆうダービー：本人の操作（残高・締切・結果・払い戻しはサーバーで確かめる） */
     if (new URL(request.url).pathname.replace(/\/+$/, "") === "/economy") {
       const result = await handleEconomyAction(deps, uid, body);
+      await missionHook(deps, uid, "economy", body, result);
       return jsonResponse(result, result.status || 200, cors);
     }
     /* 🎰 ゆうワールド「ゆうスロ」：着席・スピン・精算・公開設定（残高・抽選・精算はサーバーが確定） */
@@ -160,10 +161,12 @@ export async function handleRequest(request, env = {}, deps = createDefaultDeps(
     }
     if (new URL(request.url).pathname.replace(/\/+$/, "") === "/yureal") {
       const result = await handleYurealAction(deps, uid, body);
+      await missionHook(deps, uid, "yureal", body, result);
       return jsonResponse(result, result.status || 200, cors);
     }
     if (new URL(request.url).pathname.replace(/\/+$/, "") === "/yuslot") {
       const result = await handleYuslotAction(deps, uid, body);
+      await missionHook(deps, uid, "yuslot", body, result);
       return jsonResponse(result, result.status || 200, cors);
     }
 
@@ -1775,6 +1778,9 @@ async function adminAdjustAssets(deps, callerUid, uid, body) {
 const ECON_START_COINS = 1000;
 const ECON_BONUS_COINS = 500;
 const ECON_LOGIN_BONUS_COINS = 50;
+/* 連続ログインのおまけ（コイン）。3日目・7日目・14日目・30日目、そのあとは30日ごと */
+export const LOGIN_STREAK_EXTRA = { 3: 30, 7: 100, 14: 150, 30: 300 };
+export const loginStreakExtra = (n) => LOGIN_STREAK_EXTRA[n] || (n > 30 && n % 30 === 0 ? 300 : 0);
 const ECON_LOAN_AMOUNT = 500;
 const ECON_LOAN_MAX_COINS = 100;
 const ECON_LOAN_DAYS = 7;
@@ -2594,8 +2600,11 @@ async function econStockTrade(deps, uid, name, body) {
 async function econLoginBonus(deps, uid, name) {
   return runMyUserChange(deps, uid, name, ({ data, now }) => {
     const today = jstDateString(now);
-    if (data.lastLoginBonusDate === today) return { result: { granted: false, today } };
-    return { userFields: { coins: restInt(data.coins + ECON_LOGIN_BONUS_COINS), lastLoginBonusDate: { stringValue: today } }, result: { granted: true, amount: ECON_LOGIN_BONUS_COINS, today } };
+    if (data.lastLoginBonusDate === today) return { result: { granted: false, today, streak: Math.max(1, Math.floor(Number(data.loginStreak) || 1)) } };
+    /* 連続ログイン：きのうも受け取っていれば＋1日、とぎれたら1日目に戻る。3日・7日・14日・30日（以降は30日ごと）に、おまけが付く */
+    const streak = data.lastLoginBonusDate === jstDateString(now - 86400000) ? Math.max(0, Math.floor(Number(data.loginStreak) || 0)) + 1 : 1;
+    const extra = loginStreakExtra(streak), amount = ECON_LOGIN_BONUS_COINS + extra;
+    return { userFields: { coins: restInt(data.coins + amount), lastLoginBonusDate: { stringValue: today }, loginStreak: restInt(streak) }, result: { granted: true, amount, base: ECON_LOGIN_BONUS_COINS, extra, streak, today } };
   });
 }
 
@@ -3120,10 +3129,83 @@ async function slotGetConfig(deps, { maxAgeMs = 30000 } = {}) {
 async function slotGetPublished(deps, opts) { return (await slotGetConfig(deps, opts)).published; }
 function slotIsTopAdmin(deps, uid) { return uid && uid === deps.adminUid; }
 
+/* =========================================================
+   📋 デイリーミッション（毎日、日本時間 0:00 にリセット）
+   ・ミッションは、サーバーが見られる行動だけ：YuSnapを投稿する／ヨットを1回遊ぶ／ゆうマートで出品か購入をする／ゆう株を売り買いする
+     （チャットやオセロ・将棋・大富豪は、ブラウザが直接書くので、サーバーでは確かめられない）
+   ・達成の記録：yuslotMission/{uid}_{日付}（サーバー専用）。行動が成功したあと、1回の書き込み（読み取りなし）で done に足す。失敗しても、元の行動は止めない
+   ・報酬は「受け取る」を押したときに、サーバーが確かめて、コインを足す（受け取り済みは claimed。更新時刻の条件つきで、二重に受け取れない）
+   ・全部受け取ると、ボーナス。1日の上限は、合計 150 コイン（ミッション 30×4 ＋ ボーナス 30）
+   ・読み取りは、開いたときに2件（今日の記録・自分のユーザー）、受け取りのときに2件
+========================================================= */
+export const MISSIONS = {
+  snap: { name: "📸 YuSnapを投稿する", reward: 30 },
+  yacht: { name: "🎲 ヨットを1回遊ぶ", reward: 30 },
+  mart: { name: "🏪 ゆうマートで出品か購入をする", reward: 30 },
+  stock: { name: "📈 ゆう株を売り買いする", reward: 30 }
+};
+export const MISSION_ALL_BONUS = 30;
+const missionDocPath = (uid, now) => `yuslotMission/${uid}_${jstDateString(now)}`;
+/* 行動が成功したあとに呼ぶ。ミッションに関係する行動なら、done に足す（失敗は無視） */
+async function missionNote(deps, uid, id) {
+  if (!MISSIONS[id]) return;
+  try {
+    const fs = deps.firestore, now = deps.now();
+    await fs.commit([{ update: { name: fs.docName(missionDocPath(uid, now)), fields: encodeFields({ uid, date: jstDateString(now) }) }, updateMask: { fieldPaths: ["uid", "date"] },
+      updateTransforms: [{ fieldPath: "done", appendMissingElements: { values: [{ stringValue: id }] } }] }]);
+  } catch (error) { console.warn("mission note failed", String(error?.message || error).slice(0, 100)); }
+}
+/* 道ごとに、成功した行動を、ミッションに結びつける */
+export async function missionHook(deps, uid, kind, body, result) {
+  if (!result || result.error || result.status >= 400) return;
+  const a = body?.action;
+  if (kind === "yureal" && a === "post" && body?.test !== true) return missionNote(deps, uid, "snap");
+  if (kind === "yuslot" && a === "yachtScore") return missionNote(deps, uid, "yacht");
+  if (kind === "yuslot" && (a === "martList" || a === "martBuy")) return missionNote(deps, uid, "mart");
+  if (kind === "economy" && a === "stockTrade") return missionNote(deps, uid, "stock");
+}
+async function missionView(deps, uid, now) {
+  const d = await deps.firestore.get(missionDocPath(uid, now));
+  const done = Array.isArray(d?.done) ? d.done : [], claimed = Array.isArray(d?.claimed) ? d.claimed : [];
+  const list = Object.entries(MISSIONS).map(([id, m]) => ({ id, name: m.name, reward: m.reward, done: done.includes(id), claimed: claimed.includes(id) }));
+  const allDone = list.every((m) => m.claimed);
+  return { list, all: { reward: MISSION_ALL_BONUS, ready: allDone, claimed: claimed.includes("all") }, total: Object.values(MISSIONS).reduce((a, m) => a + m.reward, 0) + MISSION_ALL_BONUS };
+}
+async function missionState(deps, uid, body) {
+  const me = await loadMyUser(deps.firestore, uid, body?.username);
+  if (me.error) return me.error;
+  const now = deps.now(), data = decodeFields(me.raw.fields);
+  const today = jstDateString(now), yesterday = jstDateString(now - 86400000);
+  const live = data.lastLoginBonusDate === today || data.lastLoginBonusDate === yesterday;   // きのうか今日まで受け取っていれば、連続は続いている
+  return { ok: true, serverNowMs: now, date: today, ...(await missionView(deps, uid, now)), streak: live ? Math.max(0, Math.floor(Number(data.loginStreak) || 0)) : 0, streakNext: [3, 7, 14, 30].find((n) => n > (live ? Math.floor(Number(data.loginStreak) || 0) : 0)) || null, coins: Number(data.coins || 0) };
+}
+async function missionClaim(deps, uid, body) {
+  const id = String(body?.mission || "");
+  if (id !== "all" && !MISSIONS[id]) return { status: 400, error: "bad_request" };
+  const now = deps.now(), path = missionDocPath(uid, now);
+  const out = await runMyUserChange(deps, uid, body?.username, async ({ data }) => {
+    const raw = await deps.firestore.getRaw(path);
+    const f = raw ? decodeFields(raw.fields) : {}, done = Array.isArray(f.done) ? f.done : [], claimed = Array.isArray(f.claimed) ? f.claimed : [];
+    if (claimed.includes(id)) return { status: 409, error: "already_claimed" };
+    if (id === "all" ? !Object.keys(MISSIONS).every((k) => claimed.includes(k)) : !done.includes(id)) return { status: 409, error: id === "all" ? "not_all_claimed" : "not_done" };
+    const reward = id === "all" ? MISSION_ALL_BONUS : MISSIONS[id].reward;
+    return {
+      userFields: { coins: restInt(data.coins + reward) },
+      writes: [{ update: { name: deps.firestore.docName(path), fields: encodeFields({ uid, date: jstDateString(now) }) }, updateMask: { fieldPaths: ["uid", "date"] },
+        updateTransforms: [{ fieldPath: "claimed", appendMissingElements: { values: [{ stringValue: id }] } }], currentDocument: raw ? { updateTime: raw.updateTime } : { exists: false } }],
+      result: { mission: id, reward, coins: data.coins + reward }
+    };
+  });
+  if (out && out.ok) return { ...out, ...(await missionView(deps, uid, now)) };
+  return out;
+}
+
 export async function handleYuslotAction(deps, uid, body) {
   const action = typeof body?.action === "string" ? body.action : "";
   try {
     switch (action) {
+      case "missionState": return await missionState(deps, uid, body);
+      case "missionClaim": return await missionClaim(deps, uid, body);
       case "config": return await yuslotConfig(deps, uid);
       case "setConfig": return await yuslotSetConfig(deps, uid, body);
       case "lobby": return await yuslotLobby(deps, uid);

@@ -7250,7 +7250,7 @@ html.native-app #notificationStatus { display: block !important; }
 .room-code-join button { border: none; background: #111; color: #fff; padding: 10px 15px; border-radius: 10px; font-weight: 700; }
 
 /* iPhone アプリの中：コインを賭けるゲーム（ダービー・スロット・宝くじ／番くじ）は出さない。App Store の年齢制限（疑似ギャンブルの有無）に、実際の内容を合わせるため。Web版は、そのまま */
-.native-app [data-view="derby"], .native-app [data-goto="derby"], .native-app #derbyView, .native-app #ywOpenSlot, .native-app #ywOpenLottery, .native-app .ev-gamble { display: none !important; }
+.native-app [data-view="derby"], .native-app [data-goto="derby"], .native-app #derbyView, .native-app #ywOpenSlot, .native-app #ywOpenLottery, .native-app .ev-gamble, .native-app .ev-mission { display: none !important; }
 
 /* 大富豪：7渡し・10捨て・Qボンバーの選択パネル */
 .daifugo-pending {
