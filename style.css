@@ -7273,3 +7273,11 @@ html.native-app #notificationStatus { display: block !important; }
     grid-template-columns: repeat(7, 1fr);
     gap: 6px;
 }
+
+
+/* ボタンを押した瞬間の動き（script.js が btn-pop を付ける。scale だけを動かすので、ほかの transform と重ならない） */
+.btn-pop { animation: btn-pop .2s ease-out; }
+.btn-pop-big { animation: btn-pop-big .32s cubic-bezier(.3, 1.6, .5, 1); }
+@keyframes btn-pop { 0% { scale: 1; } 35% { scale: .94; } 100% { scale: 1; } }
+@keyframes btn-pop-big { 0% { scale: 1; } 28% { scale: .92; } 62% { scale: 1.06; } 100% { scale: 1; } }
+@media (prefers-reduced-motion: reduce) { .btn-pop, .btn-pop-big { animation: none; } }

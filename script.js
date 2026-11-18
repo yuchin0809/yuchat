@@ -44,6 +44,28 @@ import { inviteInit } from "./yuinvite.js?v=20261110-invite2";
 import { hasNgWord, NG_MESSAGE } from "./yungwords.js?v=20261111-ng2";
 /* iPhone アプリの中か（アプリでは、サポーター（有料）の案内を出さない。App Store の課金（IAP）がまだ無いため） */
 const IN_NATIVE_APP = document.documentElement.classList.contains("native-app");
+
+/* =========================================================
+   ボタンを押した瞬間の動き（サイトだけ。アプリでは出さない）
+   ・押した瞬間に、ボタンが少し小さくなって戻る（0.2秒）。大事なボタン（買う・始める・主なボタン）は、少し弾む
+   ・チャットの友達・グループの一覧、ゲームの盤のマス、大富豪のカード、動いている物は、動かさない
+   ・「動きを減らす」設定の端末では、動かさない。動きの途中でも、すぐ次の操作ができる（CSS の scale だけを動かし、クリックは止めない）
+========================================================= */
+(() => {
+  if (IN_NATIVE_APP) return;
+  let reduced = false;
+  try { reduced = matchMedia("(prefers-reduced-motion: reduce)").matches; } catch (_) {}
+  if (reduced) return;
+  const SKIP = ".friend-item, .othello-cell, .shogi-cell, .daifugo-card, .bl-card, [data-no-press]";
+  const BIG = ".primary-button, .yw-btn, .yk2-go, .bl-yes";
+  document.addEventListener("pointerdown", (e) => {
+    const b = e.target && e.target.closest ? e.target.closest("button") : null;
+    if (!b || b.disabled || b.closest(SKIP)) return;
+    b.classList.remove("btn-pop", "btn-pop-big"); void b.offsetWidth;
+    b.classList.add(b.matches(BIG) ? "btn-pop-big" : "btn-pop");
+  }, { passive: true });
+  document.addEventListener("animationend", (e) => { if (e.animationName === "btn-pop" || e.animationName === "btn-pop-big") e.target.classList.remove("btn-pop", "btn-pop-big"); });
+})();
 import { setSupporterIndex, setMySupporter, getSupporter, isMeSupporter, buildSupporterMark, applyNameStyle, applyBubbleStyle, applyChatBackground, applyLayoutClass } from "./yusupporter-core.js?v=20261110-sup3";
 
 import {
