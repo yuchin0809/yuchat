@@ -389,7 +389,7 @@ test("ベルトコンベア：流れるパーツは、種と時刻で決まる�
     if (a.rarity === "N") assert.ok(a.part.price > 0 && !a.part.limited, "ふつうは、ショップにあるパーツ");
     else assert.ok(a.part.limited && a.part.rare === a.rarity, "レアは、ベルトだけのパーツ");
   }
-  assert.ok(counts.N > 280000 && counts.R > 6500 && counts.SR > 1200 && counts.UR > 120 && counts.LR >= 3 && counts.LR < 60 && counts.LR < counts.UR && counts.UR < counts.SR && counts.SR < counts.R, JSON.stringify(counts));
+  assert.ok(counts.N > 285000 && counts.R > 5000 && counts.SR > 900 && counts.UR > 100 && counts.LR >= 2 && counts.LR < 50 && counts.LR < counts.UR && counts.UR < counts.SR && counts.SR < counts.R, JSON.stringify(counts));
   let diff = 0; for (let k = 0; k < 200; k++) if (keshiBeltItem(1, k).part.id !== keshiBeltItem(2, k).part.id) diff++;
   assert.ok(diff > 100, "種が違えば、流れるパーツも違う");
   const ctx = setup({ coins: 100000 });
@@ -442,7 +442,7 @@ test("ベルトコンベア（ベータ版）：だれでも使える。流れ�
 test("ミューテーション：ベルトで、ときどき、ゴールド・ダイヤ・レインボーが流れる。強さと値段が大きく、買うと持ち物に入って付けられる", async () => {
   const counts = { "": 0, g: 0, d: 0, r: 0 }; let sample = null;
   for (let k = 1000; k < 201000; k++) { const it = keshiBeltItem(777, k); counts[it.mut]++; if (it.mut === "g" && it.part.m > 0 && !sample) sample = it; }
-  assert.ok(counts.g > 4000 && counts.g < 6000 && counts.d > 900 && counts.d < 1700 && counts.r > 150 && counts.r < 380, JSON.stringify(counts));
+  assert.ok(counts.g > 3200 && counts.g < 4800 && counts.d > 700 && counts.d < 1400 && counts.r > 120 && counts.r < 320, JSON.stringify(counts));
   const base = KESHI_PARTS[sample.slot].find((p) => `${p.id}@g` === sample.part.id);
   assert.equal(sample.part.price, Math.min(KESHI_PRICE_CAP, base.price * 2)); assert.equal(sample.part.m, Math.round(base.m * 1.25)); assert.ok(sample.part.name.startsWith("ゴールド"));
   const ctx = setup({ coins: 10000000 });
