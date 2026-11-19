@@ -7,13 +7,33 @@
      買えるかどうかは、Worker（keshiBeltBuy）が、種の署名と時刻とパーツを確かめて決める。
    ・ベータ版。
 ========================================================= */
-import { createPartsStage } from "./yukeshi3d.js?v=20261118-ip1";
-import { keshiStatsView, keshiPunchView, keshiBeltItemView } from "./yukeshi-core.js?v=20261118-ip1";
+import { createPartsStage } from "./yukeshi3d.js?v=20261119-lane1";
+import { keshiStatsView, keshiPunchView, keshiBeltItemView } from "./yukeshi-core.js?v=20261119-lane1";
 
 const SLOT_NAMES = { body: "本体", edge: "ふち", sole: "そこ", weight: "おもり" };
 const STAT_NAMES = [["m", "重さ"], ["s", "すべり"], ["b", "反発"], ["z", "大きさ"]];
 const RARITY = { N: "ふつう", R: "レア", SR: "スーパーレア", UR: "ウルトラレア", LR: "トップレア" };
 const CARD_W = 104;
+/* レーンの形：画面の幅いっぱいに、右から左・左から右・右から左と、3段に折り返して流れる（折り返しは、なめらかな半円）。パーツの大きさは、そのまま
+   ・1個ぶんの間隔は、PX_PER_S（1秒に進むピクセル）× 流れる間隔（秒）。サーバーの間隔が1秒なら、116px */
+const CARD_H = 136, ROW_R = 70, PAD = 6, PX_PER_S = 116, TRACK_W = 118;
+function makePath(W) {
+  const r = ROW_R, half = CARD_W / 2, xL = half + r, xR = Math.max(xL, W - half - r);
+  const y0 = PAD + CARD_H / 2, y1 = y0 + 2 * r, y2 = y1 + 2 * r;
+  const segs = [
+    { len: W + half - xL, at: (u) => [W + half - u, y0] },
+    { len: Math.PI * r, at: (u) => { const th = u / r; return [xL - r * Math.sin(th), y0 + r - r * Math.cos(th)]; } },
+    { len: xR - xL, at: (u) => [xL + u, y1] },
+    { len: Math.PI * r, at: (u) => { const th = u / r; return [xR + r * Math.sin(th), y1 + r - r * Math.cos(th)]; } },
+    { len: xR + half, at: (u) => [xR - u, y2] }
+  ];
+  const L = segs.reduce((a, g) => a + g.len, 0);
+  return {
+    W, L, H: y2 + CARD_H / 2 + PAD,
+    at(s) { let u = Math.max(0, Math.min(L, s)); for (const g of segs) { if (u <= g.len) return g.at(u); u -= g.len; } return segs[segs.length - 1].at(segs[segs.length - 1].len); },
+    d: `M ${W + half + 12} ${y0} L ${xL} ${y0} A ${r} ${r} 0 0 0 ${xL} ${y1} L ${xR} ${y1} A ${r} ${r} 0 0 1 ${xR} ${y2} L ${-half - 12} ${y2}`
+  };
+}
 
 /* パーツの見た目（ベルトの上に置いてあるように、パーツだけを描く。ふちは、中が空洞の枠だけ） */
 const LOOK = {
@@ -161,27 +181,43 @@ export function renderBelt(c) {
 
   const t0Expired = () => !busy && !root.querySelector(".bl-sheet") && nowMs() > B.expiresMs - 300000;   // 種の期限が近づいたら、シートを開いていないときに、新しい種をもらう
 
+  let layout = null;
+  /* 画面の幅に合わせて、レーンの形・高さ・ベルトの線を作る（幅が変わったときだけ） */
+  function applyLayout(lane, W) {
+    layout = makePath(W);
+    $("#blBelt").style.height = `${Math.round(layout.H)}px`;
+    let svg = lane.querySelector(".bl-track"); if (svg) svg.remove();
+    svg = document.createElementNS("http://www.w3.org/2000/svg", "svg"); svg.setAttribute("class", "bl-track"); svg.setAttribute("viewBox", `0 0 ${W} ${Math.round(layout.H)}`);
+    const flow = (28 / (PX_PER_S * SPEED)).toFixed(3);
+    svg.innerHTML = `<path d="${layout.d}" fill="none" stroke="#5b4a3a" stroke-width="${TRACK_W}" stroke-linejoin="round"/><path d="${layout.d}" fill="none" stroke="#3b2e24" stroke-width="${TRACK_W - 10}" stroke-linejoin="round"/><path d="${layout.d}" fill="none" stroke="#7a644e" stroke-width="3" stroke-dasharray="14 14" class="bl-flow" style="animation-duration:${flow}s"/>`;
+    lane.prepend(svg);
+  }
+
   function frame() {
     if (my !== run || !root.isConnected) return;
     const lane = $("#blLane");
     if (lane && B) {
       const W = lane.clientWidth, t = nowMs();
-      for (let k = Math.floor((t - B.travelMs / SPEED) / B.tickMs); k <= Math.floor(t / B.tickMs); k++) if (!items.has(k)) items.set(k, keshiBeltItemView(B.pool, B.rates, B.tickMs, B.seed, k, B.mutRates, B.mutDefs, B.priceCap || Infinity));
-      items.forEach((it, tick) => {
-        const p = ((t - it.startMs) / B.travelMs) * SPEED;
-        if (p < 0 || p >= 1) {
-          const old = els.get(tick); if (old) { old.remove(); els.delete(tick); }
-          if (stage) stage.remove(tick);
-          if (p >= 1) items.delete(tick);
-          return;
-        }
-        let el = els.get(tick);
-        if (!el) { el = makeCard(it); els.set(tick, el); lane.appendChild(el); if (p < 0.2 && !fxDone.has(tick)) { fxDone.add(tick); fxSpawn(it, root, B.mutDefs); } }
-        const x = W - p * (W + CARD_W);
-        el.style.transform = `translateX(${x.toFixed(1)}px)`;
-        if (stage) { if (!stage.has(tick)) stage.add(tick, it.slot, it.id, it.rarity); stage.move(tick, x + CARD_W / 2, 73); }
-      });
-      if (stage) stage.render(performance.now());
+      if (W > 0 && (!layout || layout.W !== W)) applyLayout(lane, W);
+      if (layout) {
+        const durMs = (layout.L / (PX_PER_S * SPEED)) * 1000;   // 端から端まで流れる時間（レーンが長いほど、長い）
+        for (let k = Math.floor((t - durMs) / B.tickMs); k <= Math.floor(t / B.tickMs); k++) if (!items.has(k)) items.set(k, keshiBeltItemView(B.pool, B.rates, B.tickMs, B.seed, k, B.mutRates, B.mutDefs, B.priceCap || Infinity));
+        items.forEach((it, tick) => {
+          const p = (t - it.startMs) / durMs;
+          if (p < 0 || p >= 1) {
+            const old = els.get(tick); if (old) { old.remove(); els.delete(tick); }
+            if (stage) stage.remove(tick);
+            if (p >= 1) items.delete(tick);
+            return;
+          }
+          let el = els.get(tick);
+          if (!el) { el = makeCard(it); els.set(tick, el); lane.appendChild(el); if (p < 0.12 && !fxDone.has(tick)) { fxDone.add(tick); fxSpawn(it, root, B.mutDefs); } }
+          const [x, y] = layout.at(p * layout.L);
+          el.style.transform = `translate(${(x - CARD_W / 2).toFixed(1)}px, ${(y - CARD_H / 2).toFixed(1)}px)`;
+          if (stage) { if (!stage.has(tick)) stage.add(tick, it.slot, it.id, it.rarity); stage.move(tick, x, y - CARD_H / 2 + 59); }
+        });
+        if (stage) stage.render(performance.now());
+      }
     }
     if (B && t0Expired()) { B = null; open(); }
     requestAnimationFrame(frame);
@@ -268,11 +304,12 @@ function injectStyles() {
   .bl-shake { animation: bl-shake .6s; } @keyframes bl-shake { 0%, 100% { transform: translate(0, 0); } 15% { transform: translate(-7px, 3px); } 30% { transform: translate(6px, -4px); } 45% { transform: translate(-5px, -3px); } 60% { transform: translate(5px, 4px); } 80% { transform: translate(-2px, 1px); } }
   @media (prefers-reduced-motion: reduce) { .bl-flash, .bl-conf, .bl-shake { animation: none; display: none; } }
   .bl-note { color: #666; font-size: 12.5px; line-height: 1.7; margin: 4px 0 10px; }
-  .bl-belt { position: relative; height: 176px; border-radius: 16px; overflow: hidden; background: repeating-linear-gradient(90deg, #5b4a3a 0 22px, #4c3d30 22px 44px); box-shadow: inset 0 6px 14px rgba(0,0,0,.45), 0 4px 14px rgba(0,0,0,.2); border: 4px solid #2f2620; }
-  .bl-belt::before, .bl-belt::after { content: ""; position: absolute; left: 0; right: 0; height: 10px; background: linear-gradient(#cfd3d8, #8d939b); z-index: 2; } .bl-belt::before { top: 0; } .bl-belt::after { bottom: 0; }
+  .bl-belt { position: relative; height: 176px; border-radius: 16px; overflow: hidden; background: #2a211b; box-shadow: inset 0 6px 14px rgba(0,0,0,.45), 0 4px 14px rgba(0,0,0,.2); border: 4px solid #2f2620; }
+  .bl-track { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; } .bl-flow { animation: bl-flow 0.25s linear infinite; } @keyframes bl-flow { from { stroke-dashoffset: 0; } to { stroke-dashoffset: -28; } }
+  @media (prefers-reduced-motion: reduce) { .bl-flow { animation: none; } }
   .bl-lane { position: absolute; inset: 0; }
   .bl-load { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; }
-  .bl-card { position: absolute; left: 0; top: 14px; width: ${CARD_W}px; padding: 0; border: none; background: none; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 2px; will-change: transform; -webkit-tap-highlight-color: transparent; }
+  .bl-card { position: absolute; left: 0; top: 0; height: ${CARD_H}px; width: ${CARD_W}px; padding: 0; border: none; background: none; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 2px; will-change: transform; -webkit-tap-highlight-color: transparent; }
   .bl-card .pr { background: #fff; color: #b45309; font-weight: 900; font-size: 13px; border-radius: 999px; padding: 2px 9px; box-shadow: 0 2px 0 rgba(0,0,0,.25); }
   .bl-card .plate { width: 92px; height: 70px; display: flex; align-items: center; justify-content: center; }
   .bl-art { width: 92px; height: 65px; filter: drop-shadow(0 4px 3px rgba(0,0,0,.55)); }
