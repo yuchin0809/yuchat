@@ -389,7 +389,7 @@ test("ベルトコンベア：流れるパーツは、種と時刻で決まる�
     if (a.rarity === "N") assert.ok(a.part.price > 0 && !a.part.limited, "ふつうは、ショップにあるパーツ");
     else assert.ok(a.part.limited && a.part.rare === a.rarity, "レアは、ベルトだけのパーツ");
   }
-  assert.ok(counts.N > 270000 && counts.R > 14000 && counts.SR > 2500 && counts.UR > 300 && counts.LR >= 8 && counts.LR < 120 && counts.LR < counts.UR && counts.UR < counts.SR && counts.SR < counts.R, JSON.stringify(counts));
+  assert.ok(counts.N > 280000 && counts.R > 6500 && counts.SR > 1200 && counts.UR > 120 && counts.LR >= 3 && counts.LR < 60 && counts.LR < counts.UR && counts.UR < counts.SR && counts.SR < counts.R, JSON.stringify(counts));
   let diff = 0; for (let k = 0; k < 200; k++) if (keshiBeltItem(1, k).part.id !== keshiBeltItem(2, k).part.id) diff++;
   assert.ok(diff > 100, "種が違えば、流れるパーツも違う");
   const ctx = setup({ coins: 100000 });
@@ -415,7 +415,7 @@ test("ベルトコンベア（ベータ版）：だれでも使える。流れ�
   const belt = await as({ action: "keshiBelt" });
   assert.equal(belt.ok, true); assert.ok(belt.token && Number.isInteger(belt.seed) && belt.pool.N.length > 10 && belt.pool.UR.length === 4 && belt.pool.LR.length === 4);
   const now = ctx.state.now, B = KESHI_BELT;
-  const k0 = Math.floor((now - 6000) / B.tickMs);
+  const k0 = Math.floor((now - 2500) / B.tickMs);
   let it = keshiBeltItem(belt.seed, k0);
   assert.ok(it.startMs <= now && now < it.startMs + B.travelMs, "いま流れている");
   assert.equal((await as({ action: "keshiBeltBuy", token: belt.token, tick: it.tick, slot: it.slot, part: "x" })).error, "bad_request", "違うパーツは買えない");
@@ -442,7 +442,7 @@ test("ベルトコンベア（ベータ版）：だれでも使える。流れ�
 test("ミューテーション：ベルトで、ときどき、ゴールド・ダイヤ・レインボーが流れる。強さと値段が大きく、買うと持ち物に入って付けられる", async () => {
   const counts = { "": 0, g: 0, d: 0, r: 0 }; let sample = null;
   for (let k = 1000; k < 201000; k++) { const it = keshiBeltItem(777, k); counts[it.mut]++; if (it.mut === "g" && it.part.m > 0 && !sample) sample = it; }
-  assert.ok(counts.g > 8000 && counts.g < 12000 && counts.d > 1800 && counts.d < 3200 && counts.r > 350 && counts.r < 700, JSON.stringify(counts));
+  assert.ok(counts.g > 4000 && counts.g < 6000 && counts.d > 900 && counts.d < 1700 && counts.r > 150 && counts.r < 380, JSON.stringify(counts));
   const base = KESHI_PARTS[sample.slot].find((p) => `${p.id}@g` === sample.part.id);
   assert.equal(sample.part.price, Math.min(KESHI_PRICE_CAP, base.price * 2)); assert.equal(sample.part.m, Math.round(base.m * 1.25)); assert.ok(sample.part.name.startsWith("ゴールド"));
   const ctx = setup({ coins: 10000000 });
