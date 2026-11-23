@@ -28,12 +28,12 @@
    設定（Cloudflare の Worker → Settings → Variables and Secrets）：
      FIREBASE_SERVICE_ACCOUNT  （Secret）Firebase のサービスアカウントの鍵 JSON
      FIREBASE_PROJECT_ID       （Text）  yuuchat-be666
-     ALLOWED_ORIGINS           （Text）  https://yuchin0809.github.io,capacitor://localhost
+     ALLOWED_ORIGINS           （Text）  https://yuchin0809.github.io
      ADMIN_UID                 （Text）  g51wzTvJFsZiYEfre5aDuDckJXY2（省略時もこの値）
 ========================================================= */
 
 const DEFAULT_PROJECT_ID = "yuuchat-be666";
-const DEFAULT_ALLOWED_ORIGINS = "https://yuchin0809.github.io,capacitor://localhost";   // capacitor://localhost＝iPhone アプリ（画面をアプリの中に入れている）
+const DEFAULT_ALLOWED_ORIGINS = "https://yuchin0809.github.io";
 const GOOGLE_JWKS_URL = "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
 /* identitytoolkit：👤 ユーザー管理（パスワード設定・停止・削除）で Firebase Authentication を操作するため */
 const OAUTH_SCOPES = "https://www.googleapis.com/auth/datastore https://www.googleapis.com/auth/firebase.messaging https://www.googleapis.com/auth/identitytoolkit";
@@ -410,7 +410,7 @@ export async function sendBroadcastNotification(deps, logId, data, filterUid = n
   if (!claimed) return { skipped: "duplicate" };
 
   // filterUid＝通知の好みで、送らない人を外す／dataForUid＝人ごとに中身を変える（null を返した人には送らない。本人の結果だけを届けるため）
-  const targets = (await fs.query("fcmTokens", [], { select: ["uid", "platform"] })).filter((d) => !filterUid || filterUid(d.data?.uid)).map((d) => ({ token: d.id, platform: d.data?.platform, data: dataForUid ? dataForUid(d.data?.uid) : data })).filter((t) => t.data && !(t.platform === "ios-app" && (IOS_APP_HIDDEN_KINDS.has(t.data.kind) || t.data.scope === "web")));
+  const targets = (await fs.query("fcmTokens", [], { select: ["uid", "platform"] })).filter((d) => !filterUid || filterUid(d.data?.uid)).map((d) => ({ token: d.id, platform: d.data?.platform, data: dataForUid ? dataForUid(d.data?.uid) : data })).filter((t) => t.data && !(t.platform === "ios-app" && IOS_APP_HIDDEN_KINDS.has(t.data.kind)));
   const tokens = targets.map((t) => t.token);
   let sent = 0, failed = 0, removed = 0;
   await Promise.all(targets.map(async ({ token, data }) => {
@@ -491,16 +491,9 @@ export async function notifyDerbyStartingSoon(deps, now = deps.now()) {
 
 /* ----- 📢 新しいお知らせ ----- */
 
-/* 賭けに関係するお知らせは「サイトだけ」。アプリ版（賭けの機能が無い）には、通知もお知らせの表示も出さない */
-const WEB_ONLY_WORDS = /ダービー|競馬|馬券|オッズ|スロット|ゆうスロ|宝くじ|番くじ|くじ|確変|ジャックポット|ゆうcoin.{0,6}賭|賭け/i;
-export function isWebOnlyAnnouncement(a) {
-  return a?.scope === "web" || WEB_ONLY_WORDS.test(`${a?.title || ""}\n${a?.body || ""}`);
-}
-
 export function announcementNotificationData(id, announcement) {
   return {
     kind: "announcement",
-    ...(isWebOnlyAnnouncement(announcement) ? { scope: "web" } : {}),
     announcementId: id,
     title: "📢 ゆうChatアップデート",
     body: truncate(announcement?.title || "新しいお知らせがあります", 60),
@@ -577,7 +570,7 @@ export async function handleAdminAction(deps, callerUid, body) {
 
   const action = typeof body?.action === "string" ? body.action : "";
   const uid = typeof body?.uid === "string" ? body.uid : "";
-  const noUidActions = ["listUsers", "notifyAnnouncement", "tagAnnouncements", "renameUserRefs", "transferList", "transferApprove", "transferReject", "kakuWinners", "keshiLeagueEnroll", "economyReport", "grantKakuTicket", "bankujiPrize", "bankujiResetLimit", "fundDistribute", "fundBackfill", "derbySettle", "lotteryRepay", "supporterList", "supporterSet", "supporterRequests", "supporterRequestDone", "reportList", "reportDone"];
+  const noUidActions = ["listUsers", "notifyAnnouncement", "renameUserRefs", "transferList", "transferApprove", "transferReject", "kakuWinners", "keshiLeagueEnroll", "economyReport", "grantKakuTicket", "bankujiPrize", "bankujiResetLimit", "fundDistribute", "fundBackfill", "derbySettle", "lotteryRepay", "supporterList", "supporterSet", "supporterRequests", "supporterRequestDone", "reportList", "reportDone"];
   if (!noUidActions.includes(action) && !UID_PATTERN.test(uid)) return { status: 400, error: "invalid_uid" };
 
   try {
@@ -593,7 +586,6 @@ export async function handleAdminAction(deps, callerUid, body) {
       case "previewAssets": return await adminPreviewAssets(deps, uid, body);
       case "adjustAssets": return await adminAdjustAssets(deps, callerUid, uid, body);
       case "notifyAnnouncement": return await adminNotifyAnnouncement(deps, body);
-      case "tagAnnouncements": return await adminTagAnnouncements(deps);
       case "renameUserRefs": return await adminRenameUserRefs(deps, body);
       case "lotteryRefund": return await adminLotteryRefund(deps, callerUid, uid, body);
       case "kakuWinners": return await adminKakuWinners(deps, body);
@@ -1316,18 +1308,6 @@ async function adminNotifyAnnouncement(deps, body) {
   if (!/^[A-Za-z0-9_-]{1,128}$/.test(id)) return { status: 400, error: "invalid_announcement_id" };
   const result = await notifyNewAnnouncement(deps, id);
   return result.status ? result : { ok: true, ...result };
-}
-
-/* すでにあるお知らせのうち、賭けに関係するものに scope:"web"（サイトだけ）を付ける（1回押せばよい。付いているものは触らない） */
-async function adminTagAnnouncements(deps) {
-  const list = await deps.firestore.query("announcements");
-  let tagged = 0;
-  for (const d of list) {
-    if (d.data?.scope === "web" || !isWebOnlyAnnouncement(d.data)) continue;
-    await deps.firestore.update(`announcements/${d.id}`, { scope: "web" });
-    tagged++;
-  }
-  return { ok: true, tagged, total: list.length };
 }
 
 /* 管理者による名前の強制変更のあと、名前が入っているチャット・グループ・友達関係を新しい名前に書き換える。
@@ -4196,7 +4176,7 @@ async function lotteryAnnounce(deps, id, round) {
   const now = new Date(deps.now());
   await fs.createIfAbsent(`announcements/lottery-${id}`, {
     title: truncate(`🎟 ${round.name} 結果発表！`, 50), body: truncate(lines.join("\n"), 480),
-    scope: "web", createdAt: now, updatedAt: now, createdByUid: "yuuchat-lottery", createdByName: "ゆうくじ売り場"
+    createdAt: now, updatedAt: now, createdByUid: "yuuchat-lottery", createdByName: "ゆうくじ売り場"
   });
   try { await notifyNewAnnouncement(deps, `lottery-${id}`); }
   catch (error) { console.warn("lottery notify failed", String(error?.message || error).slice(0, 120)); }
@@ -6006,7 +5986,7 @@ export async function kakuAnnounceResult(deps, day) {
   else lines.push("前日の抽選に申し込んだ方には、それぞれの結果をプッシュ通知でお知らせしました。ゆうスロの台の一覧の上の「確変台チケット売り場」でも、自分の予定を確認できます。");
   lines.push("【当日分（10分枠）】7:00〜10:45に抽選の申込、先着は11:45から。まだ間に合います！");
   const now = new Date(deps.now());
-  await deps.firestore.createIfAbsent(`announcements/kaku-${day}`, { title: truncate(`🌈 今日の確変台は「${machine}」！`, 50), body: truncate(lines.join("\n"), 480), scope: "web", createdAt: now, updatedAt: now, createdByUid: "yuuchat-kaku", createdByName: "ゆうスロ確変台" });
+  await deps.firestore.createIfAbsent(`announcements/kaku-${day}`, { title: truncate(`🌈 今日の確変台は「${machine}」！`, 50), body: truncate(lines.join("\n"), 480), createdAt: now, updatedAt: now, createdByUid: "yuuchat-kaku", createdByName: "ゆうスロ確変台" });
   if (d.mode === "sameDay") return { announced: true };
   return kakuPush(deps, "result1", day, "🌈 確変台の抽選結果", "", (uid) => kakuResultDataFor(d, uid, 1, machine, day));
 }

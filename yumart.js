@@ -7,11 +7,7 @@
    ・商品の画像：mart-img/{枠}-{パーツ}.png（例：mart-img/body-titan.png）。ファイルがなければ、パーツごとに描いた絵（yumart-art.js）を表示する。
 ========================================================= */
 
-//#if WEB
 import { partArt, kakuArt, prizeArt } from "./yumart-art.js?v=20261119-lane1";
-//#else
-import { partArt } from "./yumart-art.js?v=20261119-lane1";
-//#endif
 
 let deps = null, root = null, stylesDone = false, token = 0;
 let sellMode = "fixed", sellHours = 24, negoOpen = null, negoMsg = {};
@@ -24,19 +20,15 @@ const SLOT = { body: "本体", edge: "ふち", sole: "そこ", weight: "おも�
 const STAT = [["m", "重さ"], ["s", "すべり"], ["b", "反発"], ["z", "大きさ"]];
 const ERR = {
   gone: "この商品はもうありません（売れた・取り下げられた・期限切れ）", own_listing: "自分の出品は買えません", insufficient_coins: "コインが足りません", already_owned: "同じ中古パーツをすでに持っています",
-  busy: "混み合っています。もう一度お試しください", paused: "ゆうマートは一時お休み中です",
+  seated: "ゆうスロの席に着いているあいだは買えません。席を立ってからもう一度どうぞ", busy: "混み合っています。もう一度お試しください", paused: "ゆうマートは一時お休み中です",
   too_many: "出品は1人10件までです", mart_full: "出品がいっぱいで、いまは追加できません", bad_price: "その値段は出せません", bad_request: "出品できないパーツです", not_owned: "そのパーツを持っていません",
   already_offered: "この商品には、すでに値下げ依頼を出しています", offers_full: "この商品への値下げ依頼がいっぱいです", buyer_no_coins: "相手のコインが足りないため、売れませんでした（依頼は消えました）",
-  buyer_has_it: "相手はすでに同じ中古パーツを持っているため、売れませんでした（依頼は消えました）", already_sold: "すでに売れています。画面を開きなおしてください",
-  not_published: "ゆうマートはまだ公開されていません", no_more: "この商品では、もう交渉できません（1つの商品につき3回まで）", reserved: "別のお客さんが交渉中です。しばらくしてからどうぞ",
+  buyer_busy: "相手がいまゆうスロの席に着いているため、売れませんでした", buyer_has_it: "相手はすでに同じ中古パーツを持っているため、売れませんでした（依頼は消えました）", already_sold: "すでに売れています。画面を開きなおしてください",
+  not_published: "ゆうマートはまだ公開されていません", too_late: "枠の始まりの10分前をすぎたので、出品できません", already_listed: "この枠はすでに出品しています", no_resale: "確変台の予約権は、買ったものをまた売ることはできません",
+  right_expired: "この予約権は、期限が近いか、すぎているので出品できません", company_exists: "すでに会社を作っているので、A賞は出品できません", slot_limit: "1日にもてる確変の枠は3つまでです", no_more: "この商品では、もう交渉できません（1つの商品につき3回まで）", reserved: "別のお客さんが交渉中です。しばらくしてからどうぞ",
   too_fast: "少し待ってから書いてください（10秒に1回までです）", too_long: "80文字までです", empty: "コメントを書いてください", not_allowed: "URL・メールアドレス・電話番号は送れません", ng_word: "使えない言葉が入っています", too_many: "この商品へのコメントは、1人10件までです",
-  auction_only: "これはオークションです。「入札」から参加してください", bid_too_low: "入札額が低すぎます", already_top: "あなたがいま最高額で入札中です", has_bids: "入札があるので、取り下げられません", bids_full: "このオークションは、これ以上入札できません"
+  auction_only: "これはオークションです。「入札」から参加してください", bid_too_low: "入札額が低すぎます", already_top: "あなたがいま最高額で入札中です", has_bids: "入札があるので、取り下げられません", bids_full: "このオークションは、これ以上入札できません", no_auction: "確変台の枠はオークションにできません"
 };
-//#if WEB
-Object.assign(ERR, { too_late: "枠の始まりの10分前をすぎたので、出品できません", already_listed: "この枠はすでに出品しています", no_resale: "確変台の予約権は、買ったものをまた売ることはできません", right_expired: "この予約権は、期限が近いか、すぎているので出品できません", company_exists: "すでに会社を作っているので、A賞は出品できません", slot_limit: "1日にもてる確変の枠は3つまでです", no_auction: "確変台の枠はオークションにできません", seated: "ゆうスロの席に着いているあいだは買えません。席を立ってからもう一度どうぞ", buyer_busy: "相手がいまゆうスロの席に着いているため、売れませんでした" });
-//#else
-Object.assign(ERR, { seated: "いまは買えません。しばらくしてから、もう一度どうぞ", buyer_busy: "相手がいまは買えない状態のため、売れませんでした" });
-//#endif
 
 async function api(action, payload = {}) {
   const t = await deps.getToken();
@@ -85,10 +77,8 @@ function effectText(slot, variant) {
   const t = STAT.map(([k, label]) => { const v = used ? usedStat(p[k]) : p[k]; return v ? `${label}${v > 0 ? "+" : ""}${v}` : ""; }).filter(Boolean);
   return t.join(" ") || "変化なし";
 }
-//#if WEB
 const MACHINE = { yubasic: "ゆうベーシック", yurush: "ゆうラッシュ", yuchance: "ゆうチャンス", yutreasure: "ゆうトレジャー", yurainbow: "ゆうレインボー", yujackpot: "ゆうジャックポット" };
 const PRIZE = { A: "A賞　自分の会社を運営できる権利", C: "C賞　確変台の予約を3回とれる権利", D: "D賞　確変台の予約を優先で1回確定でとれる権利", E: "E賞　消しバトの限定改造品", F: "F賞　消しバトの限定カラー" };
-//#endif
 const GEAR = { body: "本体", edge: "ふち", sole: "そこ", weight: "おもり" }, COLOR = { gold: "金", silver: "銀", rainbow: "虹", blackgold: "黒金" };
 const jst = (ms) => new Date(ms + 9 * 3600000);
 const hm = (ms) => { const d = jst(ms); return `${d.getUTCHours()}:${String(d.getUTCMinutes()).padStart(2, "0")}`; };
@@ -96,13 +86,11 @@ const md = (ms) => { const d = jst(ms); return `${d.getUTCMonth() + 1}/${d.getUT
 function img(file) { return `<img src="mart-img/${esc(file)}.png" alt="" loading="lazy" onerror="this.remove()">`; }
 /* 出品・持ち物の見せ方：{ name, sub, art, used } */
 function itemOf(x) {
-//#if WEB
   if (x.k === "kaku") return { name: `🌈 確変台の枠（${MACHINE[x.machine] || "確変台"}）`, sub: `${md(x.ss)} ${hm(x.ss)}〜${hm(x.se)}（${Math.round((x.se - x.ss) / 60000)}分）`, art: kakuArt() + img("kaku"), used: false };
   if (x.k === "prize") {
     const z = x.prize || {}, extra = z.id === "E" ? `（${GEAR[z.code] || ""}）` : z.id === "F" ? `「${COLOR[z.code] || ""}」` : "";
     return { name: `${PRIZE[x.pid] || x.pid}${extra}`, sub: `ゆう番くじの景品${z.until ? `　期限 ${md(z.until)}` : ""}`, art: prizeArt(x.pid, z.code) + img(`prize-${x.pid}`), used: false };
   }
-//#endif
   const p = partInfo(x.slot, x.part), id = String(x.part).replace(/~u$/, "");
   return { name: p ? p.name : x.part, sub: `${SLOT[x.slot]}　${effectText(x.slot, x.part)}`, art: partArt(x.slot, id) + img(`${x.slot}-${id.replace(MUT_RE, "")}`), used: String(x.part).endsWith("~u") };
 }
@@ -122,7 +110,7 @@ function draw() {
   const tabs = [["buy", "🛒 買う"], ["sell", "📦 出品する"], ["mine", `👤 自分の出品${M.listings.length ? `（${M.listings.length}）` : ""}`]];
   const alerts = M.listings.reduce((a, l) => a + l.offers.length + (l.npcOffer ? 1 : 0), 0);
   root.innerHTML = `<div class="ym-head"><h2>🏪 ゆうマート</h2><div class="ym-coins">🪙 ${fmt(M.coins)}</div></div>
-    <p class="ym-lead">${LEAD}売れたパーツは中古になります。手数料は ${S.feePct}%。</p>
+    <p class="ym-lead">${IN_APP ? "いらなくなった消しバトのパーツを、売ったり買ったり。" : "いらなくなった消しバトのパーツ・確変台の枠・ゆう番くじの景品を、売ったり買ったり。"}売れたパーツは中古になります。手数料は ${S.feePct}%。</p>
     ${S.paused ? `<div class="ym-card ym-warn">⏸ いまゆうマートは一時お休み中です（買う・出品はできません）</div>` : ""}
     ${note ? `<div class="ym-note ${note.bad ? "bad" : "ok"}">${esc(note.text)}</div>` : ""}
     <div class="ym-tabs">${tabs.map(([k, label]) => `<button type="button" class="ym-tab${tab === k ? " on" : ""}" data-tab="${k}">${label}${k === "mine" && alerts ? ` <b class="ym-dot">${alerts}</b>` : ""}</button>`).join("")}</div>
@@ -131,33 +119,12 @@ function draw() {
   if (tab === "buy") drawBuy(); else if (tab === "sell") drawSell(); else drawMine();
   if (S.isTopAdmin) drawAdmin();
 }
-/* アプリの中（古いアプリを含む）：売り買いの一覧に出すのは、パーツだけ */
+/* iPhone アプリの中：確変台の枠・番くじの景品（賭けゲームに関わるもの）は、売り買いの一覧にも出品にも出さない */
 const IN_APP = document.documentElement.classList.contains("native-app");
-//#if WEB
 const hiddenInApp = (x) => IN_APP && (x.k === "kaku" || x.k === "prize");
 const KINDS = [["all", "すべて"], ["kaku", "🌈 確変台の枠"], ["prize", "🎁 番くじの景品"], ["body", "🧽 本体"], ["edge", "🔲 ふち"], ["sole", "👟 そこ"], ["weight", "⚖️ おもり"]].filter(([k]) => !(IN_APP && (k === "kaku" || k === "prize")));
-const slotMatch = (x) => slotFilter === "all" || (slotFilter === "kaku" || slotFilter === "prize" ? x.k === slotFilter : x.k === "part" && x.slot === slotFilter);
-const LEAD = IN_APP ? "いらなくなった消しバトのパーツを、売ったり買ったり。" : "いらなくなった消しバトのパーツ・確変台の枠・ゆう番くじの景品を、売ったり買ったり。";
-const BUY_NOTE = "買ったあとのキャンセルはできません。買った確変台の枠は、また売ることはできません。";
-const AUC_TAIL = "確変台の枠はオークションにできません。";
-const noAuction = (r) => r.item.k === "kaku";
-const EMPTY_SELL = "消しバトのパーツを買う・確変台の枠に当たる・ゆう番くじで景品が当たると、ここから売れます。";
-const SELL_FAIL = "<br>（確変台の枠・番くじの景品は読み込めませんでした。開きなおしてください）";
-const SELL_NOTE = "パーツと番くじの景品は、出品すると「預かり」になります（売れ残ったら、そのまま戻ります）。確変台の枠は、自分が当てた枠だけ、始まる10分前まで出品できます（買った枠は売れません）。";
-//#else
-const hiddenInApp = (x) => x.k !== "part";
-const KINDS = [["all", "すべて"], ["body", "🧽 本体"], ["edge", "🔲 ふち"], ["sole", "👟 そこ"], ["weight", "⚖️ おもり"]];
-const slotMatch = (x) => slotFilter === "all" || (x.k === "part" && x.slot === slotFilter);
-const LEAD = "いらなくなった消しバトのパーツを、売ったり買ったり。";
-const BUY_NOTE = "買ったあとのキャンセルはできません。";
-const AUC_TAIL = "";
-const noAuction = () => false;
-const EMPTY_SELL = "消しバトのパーツを買うと、ここから売れます。";
-const SELL_FAIL = "";
-const SELL_NOTE = "パーツは、出品すると「預かり」になります（売れ残ったら、そのまま戻ります）。";
-//#endif
 function drawBuy() {
-  let list = S.listings.filter((x) => !hiddenInApp(x)).filter(slotMatch);
+  let list = S.listings.filter((x) => !hiddenInApp(x)).filter((x) => slotFilter === "all" || (slotFilter === "kaku" || slotFilter === "prize" ? x.k === slotFilter : x.k === "part" && x.slot === slotFilter));
   list = [...list].sort(sort === "cheap" ? (a, b) => a.price - b.price : sort === "dear" ? (a, b) => b.price - a.price : (a, b) => b.t - a.t);
   const my = M.myOffers.reduce((o, x) => { o[x.id] = x.q; return o; }, {});
   const bidInfo = (M.myBids || []).reduce((o, x) => { o[x.id] = x; return o; }, {});
@@ -177,7 +144,7 @@ function drawBuy() {
         <div class="ym-act">${x.mine ? `<span class="ym-small">自分の出品</span>` : actionsOf(x, my, bidInfo)}</div>
         ${negoOpen === x.id ? negoPanel(x) : ""}${cmOpen === x.id ? commentPanel(x.id) : ""}</div>`;
     }).join("") || `<div class="ym-card ym-msg">いま出品はありません</div>`}</div>
-    <p class="ym-small">${BUY_NOTE}</p>`;
+    <p class="ym-small">買ったあとのキャンセルはできません。買った確変台の枠は、また売ることはできません。</p>`;
   $("#ymSlot").addEventListener("change", (e) => { slotFilter = e.target.value; drawBuy(); });
   $("#ymSort").addEventListener("change", (e) => { sort = e.target.value; drawBuy(); });
   $("#ymReload").addEventListener("click", () => { note = null; refresh(); });
@@ -186,7 +153,7 @@ function drawBuy() {
   root.querySelectorAll("[data-nsend]").forEach((b) => b.addEventListener("click", () => nego(b.dataset.nsend)));
   root.querySelectorAll("[data-bid]").forEach((b) => b.addEventListener("click", () => bid(b.dataset.bid)));
 }
-/* 出品できるもの：パーツ（martMine）＋サイトでは、枠や景品（martSellable。この画面を開いたときだけ読む） */
+/* 出品できるもの：パーツ（martMine）＋確変枠・番くじ景品（martSellable。この画面を開いたときだけ読む） */
 async function loadSell() {
   if (sellBusy) return; sellBusy = true; const my = token;
   try { const r = await api("martSellable"); if (my === token) { SELL = r; if (tab === "sell") drawSell(); } }
@@ -196,23 +163,21 @@ async function loadSell() {
 function drawSell() {
   if (!SELL) { $("#ymBody").innerHTML = `<div class="ym-card ym-msg">読み込み中…</div>`; loadSell(); return; }
   const rows = [
-//#if WEB
     ...(IN_APP ? [] : SELL.slots).map((x) => ({ item: { k: "kaku", ...x }, ref: x.ref, send: { kind: "kaku", day: x.day, si: x.si }, extra: "（始まる10分前まで）" })),
     ...(IN_APP ? [] : SELL.prizes).map((x) => ({ item: { k: "prize", ...x }, ref: x.ref, send: { kind: "prize", n: x.n }, extra: "" })),
-//#endif
     ...M.sellable.map((x) => ({ item: { k: "part", ...x }, ref: x.ref, send: { kind: "part", slot: x.slot, part: x.part }, extra: x.equipped ? "（いま付けている）" : "" }))
   ];
   $("#ymBody").innerHTML = `<div class="ym-card"><h3>出品するものを選ぶ</h3>
     <div class="ym-mode"><button type="button" class="ym-tab${sellMode === "fixed" ? " on" : ""}" data-mode="fixed">💰 値段を決めて売る</button><button type="button" class="ym-tab${sellMode === "auction" ? " on" : ""}" data-mode="auction">🔨 オークション</button>
       ${sellMode === "auction" ? `<select id="ymHours">${S.auctionHours.map((h) => `<option value="${h}"${sellHours === h ? " selected" : ""}>${h >= 24 ? `${h / 24}日` : `${h}時間`}</option>`).join("")}</select>` : ""}</div>
-    ${sellMode === "auction" ? `<p class="ym-small">入力する金額は<b>開始価格</b>です。入札は5%以上ずつ上がり、終わりの5分前以降の入札で、終了が5分のびます。入札があると、取り下げられません。${AUC_TAIL}</p>` : ""}
+    ${sellMode === "auction" ? `<p class="ym-small">入力する金額は<b>開始価格</b>です。入札は5%以上ずつ上がり、終わりの5分前以降の入札で、終了が5分のびます。入札があると、取り下げられません。確変台の枠はオークションにできません。</p>` : ""}
     ${rows.length ? rows.map((r, i) => {
       const it = itemOf(r.item);
       return `<div class="ym-item ym-sellrow">${thumb(it)}<div class="ym-info"><b>${nameHtml(it)}</b>
         <small>${esc(it.sub)}${esc(r.extra)}</small><small>相場の目安 🪙 ${fmt(r.ref)}</small></div>
-        <div class="ym-act"><input type="number" inputmode="numeric" min="1" step="1" class="ym-input" id="ymP${i}" placeholder="${fmt(r.ref)}" value="${sellMode === "auction" ? Math.max(1, Math.round(r.ref * 0.5)) : r.ref}"><button type="button" class="ym-btn" data-list="${i}" ${busy || S.paused || (sellMode === "auction" && noAuction(r)) ? "disabled" : ""}>${sellMode === "auction" ? "オークションに出す" : "出品"}</button></div></div>`;
-    }).join("") : `<div class="ym-msg">いま出品できるものがありません。${EMPTY_SELL}</div>`}
-    <p class="ym-small">${SELL_NOTE}出品は ${S.maxOpen} 件・3日間まで。値段の上限はありません。売れたら ${S.feePct}% の手数料が引かれます。${SELL.failed ? SELL_FAIL : ""}</p></div>`;
+        <div class="ym-act"><input type="number" inputmode="numeric" min="1" step="1" class="ym-input" id="ymP${i}" placeholder="${fmt(r.ref)}" value="${sellMode === "auction" ? Math.max(1, Math.round(r.ref * 0.5)) : r.ref}"><button type="button" class="ym-btn" data-list="${i}" ${busy || S.paused || (sellMode === "auction" && r.item.k === "kaku") ? "disabled" : ""}>${sellMode === "auction" ? "オークションに出す" : "出品"}</button></div></div>`;
+    }).join("") : `<div class="ym-msg">いま出品できるものがありません。消しバトのパーツを買う・確変台の枠に当たる・ゆう番くじで景品が当たると、ここから売れます。</div>`}
+    <p class="ym-small">パーツと番くじの景品は、出品すると「預かり」になります（売れ残ったら、そのまま戻ります）。確変台の枠は、自分が当てた枠だけ、始まる10分前まで出品できます（買った枠は売れません）。出品は ${S.maxOpen} 件・3日間まで。値段の上限はありません。売れたら ${S.feePct}% の手数料が引かれます。${SELL.failed ? "<br>（確変台の枠・番くじの景品は読み込めませんでした。開きなおしてください）" : ""}</p></div>`;
   root.querySelectorAll("[data-mode]").forEach((b) => b.addEventListener("click", () => { sellMode = b.dataset.mode; drawSell(); }));
   $("#ymHours")?.addEventListener("change", (e) => { sellHours = Number(e.target.value); });
   root.querySelectorAll("[data-list]").forEach((b) => b.addEventListener("click", () => {
@@ -248,28 +213,19 @@ function drawMine() {
     run(async () => { const r = await api("martAnswer", { id: b.dataset.ans, who: b.dataset.who, accept: acc }); return acc ? `🪙 ${fmt(r.price)} で売れました！（手数料 ${fmt(r.fee)}）` : "断りました"; });
   }));
 }
-/* 取引の記録の「もの」の名前 */
+/* 取引の記録の「もの」の名前（part：枠:パーツ／kaku:日付:番号／prize:賞） */
 function keyName(key) {
   const [a, b, c] = String(key).split(":");
-//#if WEB
   if (a === "kaku") return `🌈 確変台の枠 ${b} #${c}`;
   if (a === "prize") return PRIZE[b] || `${b}賞`;
-//#endif
   const p = partInfo(a, b); return p ? p.name : key;
 }
-//#if WEB
-const buyExtra = (x) => (x.k === "kaku" ? "\n（買った枠は、また売ることはできません）" : "");
-const boughtMsg = (x, it) => (x.k === "kaku" ? "買いました！ゆうスロの確変台で、その時間に遊べます" : x.k === "prize" ? (x.pid === "E" || x.pid === "F" ? "買いました！消しバトで使うには、ゆうワールド →「ゆう番くじ」の「もちもの」で「消しバトで使う」を押してください" : "買いました！ゆう番くじの「もちもの」に入ります") : `買いました！「${it.name}（中古）」は、消しバトのパーツから付けられます`);
-//#else
-const buyExtra = () => "";
-const boughtMsg = (x, it) => `買いました！「${it.name}」は、消しバトのパーツから付けられます`;
-//#endif
 function buy(id) {
   const x = S.listings.find((l) => l.id === id); if (!x) return;
   const it = itemOf(x);
   const pay = x.au && x.deal ? x.deal.q : x.price;
-  if (!confirm(`「${it.name}」${it.used ? "（中古）" : ""}を 🪙${fmt(pay)} で買いますか？\n買ったあとのキャンセルはできません。${buyExtra(x)}`)) return;
-  run(async () => { await api("martBuy", { id }); return boughtMsg(x, it); });
+  if (!confirm(`「${it.name}」${it.used ? "（中古）" : ""}を 🪙${fmt(pay)} で買いますか？\n買ったあとのキャンセルはできません。${x.k === "kaku" ? "\n（買った枠は、また売ることはできません）" : ""}`)) return;
+  run(async () => { await api("martBuy", { id }); return x.k === "kaku" ? "買いました！ゆうスロの確変台で、その時間に遊べます" : x.k === "prize" ? (x.pid === "E" || x.pid === "F" ? "買いました！消しバトで使うには、ゆうワールド →「ゆう番くじ」の「もちもの」で「消しバトで使う」を押してください" : "買いました！ゆう番くじの「もちもの」に入ります") : `買いました！「${it.name}（中古）」は、消しバトのパーツから付けられます`; });
 }
 /* 商品カードのボタン：どの商品にも、値下げ交渉（NPC）・値下げ依頼（人）が出る。オークションは、入札がないあいだだけ（即決の値段の交渉） */
 function actionsOf(x, my, bidInfo) {

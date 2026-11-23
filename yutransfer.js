@@ -16,7 +16,7 @@ const MESSAGES = {
   invalid_receiver: "送る相手の名前が正しくありません。",
   invalid_amount: "金額は1以上の整数で入力してください。",
   insufficient_coins: "手持ちのコインが足りません。",
-  seated: "席に座っている間は申請できません。席から立ってからもう一度お試しください。",
+  seated: "ゆうスロに座っている間は申請できません。台から立ってからもう一度お試しください。",
   busy: "ほかの操作と重なりました。もう一度お試しください。",
   not_pending: "この申請はすでに処理されています。",
   not_found: "申請が見つかりません。",
@@ -99,7 +99,7 @@ function renderUser() {
   el.innerHTML = `
     <section class="econ-card yt-panel" aria-label="コインを送る">
       <h3>💸 コインを送る</h3>
-      <p class="yt-note">送るコインは、申請した時点で手持ちから先に引かれます。管理者が確認して「OK」を押すと相手に届きます（却下されたとき・3日たっても承認されないときは、全額もどります）。席に座っている間は申請できません。</p>
+      <p class="yt-note">送るコインは、申請した時点で手持ちから先に引かれます。管理者が確認して「OK」を押すと相手に届きます（却下されたとき・3日たっても承認されないときは、全額もどります）。ゆうスロに座っている間は申請できません。</p>
       <div class="yt-form">
         <label>送る相手の名前
           <input id="ytTo" type="text" list="ytFriends" autocomplete="off" placeholder="例：ゆうき" value="${esc(draft.to)}">
