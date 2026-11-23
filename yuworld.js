@@ -1,3 +1,4 @@
+//#if WEB
 /* =========================================================
    🎡 ゆうワールド（ゆうスロなどのお店）クライアント
 
@@ -11,15 +12,23 @@
    ・画面倍率・音ON/OFF・演出の強弱は端末内（localStorage）だけに保存する。Firebase には保存しない。
      演出・音・倍率・演出強弱は抽選結果を一切変えない（結果は常に Worker が決める）。
 ========================================================= */
+//#else
+/* 🎡 ゆうワールド（お店の一覧）クライアント
+   ・お店の一覧から、ゲーム・ヨット・消しバト・ビリヤードの画面を開く。
+   ・サーバーに聞くのは、公開の状態と、各ゲームの画面が呼ぶ処理だけ。 */
+//#endif
 
+//#if WEB
 /* 🎟 ゆう宝くじ売り場の画面（別ファイル。Worker の lottery* アクションを呼んで表示するだけ） */
 import { renderLottery, stopLottery } from "./yulottery.js?v=20261027-draw1";
 /* 🎊 ゆう番くじ（発売前のお知らせの画面） */
 import { renderBankuji, stopBankuji, BANKUJI_SALE_MS } from "./yubankuji.js?v=20261123-fix1";
+//#endif
 import { renderYacht, stopYacht } from "./yuyacht.js?v=20261026-yacht6";
 import { renderBilliards, stopBilliards } from "./yubilliards.js?v=20261112-all1";
 import { renderKeshi, stopKeshi } from "./yukeshi.js?v=20261123-fix1";
 import { eraserIcon, keshiLeagueTag } from "./yukeshi-core.js?v=20261123-fix1";
+//#if WEB
 /* 🌈 確変台のパネル（台の一覧の上）。抽選・先着・通知設定。Worker の kaku* アクションを呼んで表示するだけ */
 import { kakuInit, kakuPanelHtml, kakuBind, kakuMachineInfo, startKaku, stopKaku, refreshKaku } from "./yukaku.js?v=20261027-move2";
 /* ⭐ サポーター：確変台の見た目と当たり演出（自分の画面だけ。当たりやすさ・結果には関わらない） */
@@ -28,7 +37,9 @@ import { applyKakuTheme, playKakuEffect } from "./yusupporter-core.js?v=20261110
 import { rankInit, rankPanelHtml, rankRefresh } from "./yurank.js?v=20261023-rank2";
 /* 🎰 演出の判断（前兆・ステップアップ・連チャン）。画面には触れない */
 import { OMEN_STEP_MS, isWinLike, planOmen, omenWaitMs, nextChain, chainTier, chainLabel, chainBadge } from "./yuworld-fx.js?v=20261025-fx1";
+//#endif
 
+//#if WEB
 /* 6台（料金・特別役は worker.js の SLOT_MACHINES と同じ。表示用の名前・説明・絵文字・豪華さ(tier)を足す）。assetMin＝遊ぶのに必要な総資産（worker.js の SLOT_ASSET_MIN と同じ。確かめるのはサーバー） */
 const MACHINES = [
   { id: "yubasic",    name: "ゆうベーシック",     price: 1, special: "orig",    emoji: "🔰", tag: "入門",   tier: 1, desc: "いちばん遊びやすい入門台。オリジナル絵柄が揃うと大当たり＆FEVER！" },
@@ -48,6 +59,7 @@ const SPIN_POOL = ["cherry", "bell", "watermelon", "replay", "star", "treasure"]
 const AUTO_TIME = 1 / 0.75;          // 自動スピンの時間倍率（速度0.75倍＝時間は約1.333倍ゆっくり）
 const BASE_W = 460;
 const LS_SCALE = "yuworld_scale", LS_SOUND = "yuworld_sound", LS_FX = "yuworld_fx";
+//#endif
 
 let deps = null;
 let rootEl = null;
@@ -57,9 +69,12 @@ let audioCtx = null, masterGain = null;
 function reduced() { try { return window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch (_) { return false; } }
 function lsGet(k) { try { return localStorage.getItem(k); } catch (_) { return null; } }
 function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (_) {} }
+//#if WEB
 /* 演出を派手に出すか（演出強め かつ 動きを減らす設定でない） */
 function fxHigh() { return state.fxLevel === "high" && !reduced(); }
+//#endif
 
+//#if WEB
 const state = {
   kaku: false, kakuEnd: 0,
   screen: "loading",
@@ -79,20 +94,35 @@ const state = {
   effScale: 1, zoomRO: null,
   flushTimer: null, feverTimer: null, lobbyTimer: null, reelAnim: null
 };
+//#else
+const state = {
+  screen: "loading",
+  published: false, yachtPublished: false, keshiPublished: false, billiardsPublished: false, billiardsAllowed: false, isTopAdmin: false, open: true,
+  clockOffset: 0
+};
+//#endif
 const $ = (sel) => rootEl && rootEl.querySelector(sel);
 
 /* ---------- 起動・画面切り替え（script.js から呼ぶ） ---------- */
 export function initYuWorld(options) {
   deps = options; rootEl = document.getElementById("yuworldRoot"); injectStyles();
   if (rootEl) { rootEl.addEventListener("gesturestart", (e) => e.preventDefault()); rootEl.addEventListener("dblclick", (e) => e.preventDefault()); }   // iOS Safari：2本指の拡大・ダブルクリックの拡大も止める
+//#if WEB
   kakuInit({ api, esc, machines: MACHINE_BY_ID, onChange: () => { if (state.screen === "lobby") renderLobby(); } });
   rankInit({ api, esc, onChange: () => { if (state.screen === "lobby") renderLobby(); } });
+//#endif
 }
 export async function openYuWorldView() { if (!rootEl) return; if (state.screen !== "game") await loadConfigAndRender(); }
+//#if WEB
 export async function stopYuWorldView() {
   stopFlushTimer(); stopFeverTimer(); stopLobbyTimer(); stopLottery(); stopBankuji(); stopYacht(); stopKeshi(); stopBilliards();
   if (state.session) { try { await settle(); } catch (_) {} }
 }
+//#else
+export async function stopYuWorldView() {
+  stopYacht(); stopKeshi(); stopBilliards();
+}
+//#endif
 
 /* ---------- Worker 呼び出し ---------- */
 async function api(action, payload = {}) {
@@ -106,6 +136,7 @@ async function api(action, payload = {}) {
   if (!res.ok || json.ok === false) { const e = new Error(json.error || `http_${res.status}`); e.code = json.error || `http_${res.status}`; e.detail = json; throw e; }
   return json;
 }
+//#if WEB
 function settleBeacon() {
   if (!state.session) return;
   try {
@@ -113,6 +144,7 @@ function settleBeacon() {
     fetch(deps.endpoint, { method: "POST", keepalive: true, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ action: "settle", username: deps.getUsername(), session: state.session }) }).catch(() => {});
   } catch (_) {}
 }
+//#endif
 function serverNow() { return Date.now() + state.clockOffset; }
 
 /* ---------- 設定取得 → 画面を決める ---------- */
@@ -128,7 +160,7 @@ async function loadConfigAndRender() {
   state.isTopAdmin = cfg.isTopAdmin === true;
   state.open = cfg.open !== false;
   if (typeof cfg.serverNowMs === "number") state.clockOffset = cfg.serverNowMs - Date.now();
-  state.screen = "shop"; render();   // お店の一覧は誰でも見られる（ゆうスロが準備中でも、オセロなどのゲームは遊べる）。準備中のお店は、開くときに断る
+  state.screen = "shop"; render();   // お店の一覧は誰でも見られる（準備中のお店があっても、オセロなどのゲームは遊べる）。準備中のお店は、開くときに断る
 }
 
 /* ---------- 描画 ---------- */
@@ -145,12 +177,15 @@ function render() {
   if (state.screen === "billiards" && !state.billiardsAllowed) { renderMessage("🚧 現在準備中です", "このお店はまだ公開されていません。公開までもうしばらくお待ちください。"); rootEl.insertAdjacentHTML("beforeend", `<button type="button" class="yw-back" id="ywBackShop">← お店の一覧へ</button>`); $("#ywBackShop")?.addEventListener("click", () => { state.screen = "shop"; render(); }); return; }
   if (state.screen === "billiards") return renderBilliards({ root: rootEl, esc, openRooms: () => { if (typeof deps.openGame === "function") deps.openGame("billiards"); }, adminNote: state.billiardsPublished ? "" : "管理者だけに見えています（一般ユーザーには「準備中」）。コインは使いません。", onBack: () => { state.screen = "shop"; render(); } });
   if (state.screen === "yacht") return renderYacht({ root: rootEl, api, esc, openRooms: () => { if (typeof deps.openGame === "function") deps.openGame("yacht"); }, onBack: () => { state.screen = "shop"; render(); } });
+//#if WEB
   if (state.screen === "lobby") return renderLobby();
   if (state.screen === "game") return renderGame();
   if (state.screen === "lottery") return openLotteryScreen();
   if (state.screen === "kujihub") return renderKujiHub();
   if (state.screen === "bankuji") return renderBankuji({ root: rootEl, api, esc, now: serverNow, sfx: { tone: (note, vol, type, when) => playTone(note, vol, type, when) }, onBack: () => { state.screen = "kujihub"; render(); } });
+//#endif
 }
+//#if WEB
 /* 🎟 ゆうくじ売り場：「宝くじ売り場」と「ゆう番くじ売り場」の2つの大きなボタン（横並び） */
 function renderKujiHub() {
   stopLottery(); stopBankuji();
@@ -164,10 +199,12 @@ function renderKujiHub() {
   $("#ywKujiTaka")?.addEventListener("click", () => { unlockAudio(); state.screen = "lottery"; render(); });
   $("#ywKujiBan")?.addEventListener("click", () => { state.screen = "bankuji"; render(); });
 }
+//#endif
 function renderMessage(title, body) {
   rootEl.innerHTML = `<div class="yw-head"><h2>🎡 ゆうワールド</h2></div>
     <div class="yw-notice"><div class="yw-notice-title">${esc(title)}</div>${body ? `<p>${esc(body)}</p>` : ""}</div>`;
 }
+//#if WEB
 /* 🎟 宝くじ売り場の画面。音は yuworld の音（ON/OFF設定）を使う */
 function openLotteryScreen() {
   renderLottery({
@@ -181,6 +218,7 @@ function openLotteryScreen() {
     onBack: () => { state.screen = "kujihub"; render(); }
   });
 }
+//#endif
 
 /* ゲーム（オセロ・将棋・大富豪）のお店。soon＝少し暗くして「準備中」と出す。開くと script.js のゲーム画面（今までの「ゲーム」タブと同じ）に移る */
 const GAME_SHOPS = [
@@ -193,10 +231,26 @@ function leagueTop() {
   if (!state.keshiPublished) return "";
   return `<button type="button" class="yw-league-top" id="ywLeagueTop"><span class="yw-lt-shine" aria-hidden="true"></span><span class="yw-lt-ico">🏆</span><span class="yw-lt-body"><b>最強決定戦（消しバト）</b><small>${keshiLeagueTag(Date.now())}　上位5名にコイン！</small></span><span class="yw-lt-go">見る ▶</span></button>`;
 }
+//#if WEB
+const slotAdminBlock = () => `<div class="yw-admin"><span>管理者メニュー：ゆうスロの公開状態 <b>${state.published ? "公開中" : "非公開（準備中）"}</b></span>
+      <button type="button" id="ywToggle" class="yw-btn yw-btn-sub">${state.published ? "非公開にする" : "公開する"}</button></div>`;
+const slotShopCards = (blocked) => `<button type="button" class="yw-shop-card${blocked ? " is-soon" : ""}" id="ywOpenSlot">
+        <div class="yw-shop-banner yw-slot-banner"><span>🎰</span></div>
+        <div class="yw-shop-body"><div class="yw-shop-name">ゆうスロ${state.published ? "" : " <span class=\"yw-badge\">準備中</span>"}</div>
+          <div class="yw-shop-desc">6台のスロット。777やオリジナル絵柄で大当たり＆FEVER！営業時間 7:00〜23:00。</div></div>
+      </button>
+      <button type="button" class="yw-shop-card${blocked ? " is-soon" : ""}" id="ywOpenLottery">
+        <div class="yw-shop-banner yw-lottery-banner"><span>🎟</span></div>
+        <div class="yw-shop-body"><div class="yw-shop-name">ゆうくじ売り場${blocked ? " <span class=\"yw-badge\">準備中</span>" : ""}</div>
+          <div class="yw-shop-desc">毎週金曜14:30に抽選の「宝くじ」と、10/26（月）に初登場する「ゆう番くじ」の売り場。1等は1万コイン！</div></div>
+      </button>`;
+//#else
+const slotAdminBlock = () => "";
+const slotShopCards = () => "";
+//#endif
 function renderShop() {
   const blocked = !state.published && !state.isTopAdmin;
-  const adminPanel = state.isTopAdmin ? `<div class="yw-admin"><span>管理者メニュー：ゆうスロの公開状態 <b>${state.published ? "公開中" : "非公開（準備中）"}</b></span>
-      <button type="button" id="ywToggle" class="yw-btn yw-btn-sub">${state.published ? "非公開にする" : "公開する"}</button></div>
+  const adminPanel = state.isTopAdmin ? `${slotAdminBlock()}
     <div class="yw-admin"><span>管理者メニュー：ヨットの公開状態 <b>${state.yachtPublished ? "公開中" : "非公開（準備中）"}</b></span>
       <button type="button" id="ywToggleYacht" class="yw-btn yw-btn-sub">${state.yachtPublished ? "非公開にする" : "公開する"}</button></div>
     <div class="yw-admin"><span>管理者メニュー：消しバトの公開状態 <b>${state.keshiPublished ? "公開中" : "非公開（準備中）"}</b></span>
@@ -213,16 +267,7 @@ function renderShop() {
     ${leagueTop()}
     ${adminPanel}
     <div class="yw-shop-grid">
-      <button type="button" class="yw-shop-card${blocked ? " is-soon" : ""}" id="ywOpenSlot">
-        <div class="yw-shop-banner yw-slot-banner"><span>🎰</span></div>
-        <div class="yw-shop-body"><div class="yw-shop-name">ゆうスロ${state.published ? "" : " <span class=\"yw-badge\">準備中</span>"}</div>
-          <div class="yw-shop-desc">6台のスロット。777やオリジナル絵柄で大当たり＆FEVER！営業時間 7:00〜23:00。</div></div>
-      </button>
-      <button type="button" class="yw-shop-card${blocked ? " is-soon" : ""}" id="ywOpenLottery">
-        <div class="yw-shop-banner yw-lottery-banner"><span>🎟</span></div>
-        <div class="yw-shop-body"><div class="yw-shop-name">ゆうくじ売り場${blocked ? " <span class=\"yw-badge\">準備中</span>" : ""}</div>
-          <div class="yw-shop-desc">毎週金曜14:30に抽選の「宝くじ」と、10/26（月）に初登場する「ゆう番くじ」の売り場。1等は1万コイン！</div></div>
-      </button>
+      ${slotShopCards(blocked)}
       ${gameCards}
       <button type="button" class="yw-shop-card${state.yachtPublished ? "" : " is-soon"}" id="ywOpenYacht" ${state.yachtPublished || state.isTopAdmin ? "" : "disabled"}>
         <div class="yw-shop-banner yw-yacht-banner"><span>🎲</span></div>
@@ -240,13 +285,17 @@ function renderShop() {
           <div class="yw-shop-desc">15個の球を少ない打数で全部ポケットへ。コインは使わない、気軽な練習モード。</div></div>
       </button>
     </div>`;
+//#if WEB
   $("#ywOpenSlot")?.addEventListener("click", () => { if (blocked) { state.screen = "preparing"; render(); return; } unlockAudio(); openLobby(); });
   $("#ywOpenLottery")?.addEventListener("click", () => { if (blocked) { state.screen = "preparing"; render(); return; } unlockAudio(); state.screen = "kujihub"; render(); });
+//#endif
   rootEl.querySelectorAll("[data-game]").forEach((el) => el.addEventListener("click", () => { if (typeof deps.openGame === "function") deps.openGame(el.dataset.game); }));
   $("#ywOpenYacht")?.addEventListener("click", () => { state.screen = "yacht"; render(); });
   $("#ywOpenKeshi")?.addEventListener("click", () => { state.screen = "keshi"; render(); });
   $("#ywLeagueTop")?.addEventListener("click", () => { state.screen = "keshi"; state.keshiLeagueFirst = true; render(); });
+//#if WEB
   $("#ywToggle")?.addEventListener("click", onTogglePublish);
+//#endif
   $("#ywToggleYacht")?.addEventListener("click", onToggleYacht);
   $("#ywToggleKeshi")?.addEventListener("click", onToggleKeshi);
   $("#ywOpenBilliards")?.addEventListener("click", () => { state.screen = "billiards"; render(); });
@@ -270,13 +319,16 @@ async function onToggleYacht() {
   try { const r = await api("setConfig", { yachtPublished: next }); state.yachtPublished = r.yachtPublished === true; render(); }
   catch (e) { alert("変更できませんでした（" + (e.code || "エラー") + "）"); }
 }
+//#if WEB
 async function onTogglePublish() {
   const next = !state.published;
   if (!confirm(next ? "ゆうスロを公開しますか？（一般ユーザーも遊べるようになります）" : "ゆうスロを非公開にしますか？（一般ユーザーは遊べなくなります）")) return;
   try { const r = await api("setConfig", { published: next }); state.published = r.published === true; render(); }
   catch (e) { alert("変更できませんでした（" + (e.code || "エラー") + "）"); }
 }
+//#endif
 
+//#if WEB
 /* ---------- ロビー ---------- */
 async function openLobby() { state.screen = "lobby"; render(); rankRefresh({ force: true }); await refreshLobby(); startLobbyTimer(); startKaku(); }
 async function refreshLobby() {
@@ -732,9 +784,11 @@ function animateBalance(from, to) {
   requestAnimationFrame(step);
   setTimeout(() => { el.textContent = to.toLocaleString(); }, dur + 80);
 }
+//#endif
 function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 
 
+//#if WEB
 /* ---------- 前兆・ステップアップ・連チャン（見た目だけ。結果は変えない。何を出すかの判断は yuworld-fx.js） ---------- */
 let omenTimers = [];
 function omenAt(ms, fn) { omenTimers.push(setTimeout(fn, ms)); }
@@ -972,17 +1026,24 @@ function toggleSound() {
   const b = $("#ywSound");
   if (b) { b.textContent = state.soundOn ? "🔊 音 ON" : "🔇 音 OFF"; b.classList.toggle("on", state.soundOn); b.classList.toggle("off", !state.soundOn); }
 }
+//#endif
 
 /* ---------- スタイル ---------- */
 function injectStyles() {
   if (stylesInjected) return; stylesInjected = true;
-  const css = `
+  let css = `
   /* ボタンを連打（ダブルタップ）しても、画面が拡大されない。連打で文字や絵が選択されてしまうのも防ぐ */
   #yuworldRoot, #yuworldRoot * { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
   #yuworldRoot .yw-game { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
   .yuworld-root { padding: 12px 14px 28px; max-width: 760px; margin: 0 auto; }
   .yw-head h2 { margin: 6px 0 4px; font-size: 20px; }
+`;
+//#if WEB
+css += `
   .yw-machine-need { margin: 4px 0; font-size: 12px; font-weight: 800; color: #b45309; }
+`;
+//#endif
+css += `
   .yw-head p { margin: 0 0 10px; color: #666; font-size: 13px; }
   .yw-back { background: none; border: none; color: #4a7; font-size: 14px; cursor: pointer; padding: 4px 0; }
   .yw-notice { background: #fff; border-radius: 14px; padding: 28px 18px; text-align: center; box-shadow: 0 6px 24px rgba(0,0,0,.06); }
@@ -993,6 +1054,9 @@ function injectStyles() {
   .yw-shop-grid, .yw-lobby-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
   .yw-shop-card { text-align: left; border: none; background: #fff; border-radius: 16px; overflow: hidden; box-shadow: 0 6px 24px rgba(0,0,0,.08); cursor: pointer; padding: 0; }
   .yw-shop-banner { height: 110px; display: flex; align-items: center; justify-content: center; font-size: 54px; }
+`;
+//#if WEB
+css += `
   .yw-slot-banner { background: linear-gradient(135deg, #7b2ff7, #f107a3); }
   .yw-kuji-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 8px; }
   .yw-kuji-btn { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-height: 210px; padding: 18px 8px; border: none; border-radius: 18px; color: #fff; cursor: pointer; text-align: center; box-shadow: 0 8px 26px rgba(0,0,0,.18); }
@@ -1004,6 +1068,9 @@ function injectStyles() {
   .yw-kuji-btn small { font-size: 12px; line-height: 1.7; opacity: .95; }
   .yw-kuji-new { position: absolute; top: 8px; right: 8px; font-style: normal; font-weight: 900; font-size: 11px; letter-spacing: .08em; background: #ffe14a; color: #7a3a00; padding: 2px 9px; border-radius: 999px; }
   .yw-lottery-banner { background: linear-gradient(135deg, #ff8a00, #ff2d78 55%, #7b2ff7); }
+`;
+//#endif
+css += `
   .yw-shop-body { padding: 12px 14px 16px; }
   .yw-shop-name { font-weight: 800; font-size: 16px; margin-bottom: 4px; }
   .yw-shop-desc { color: #666; font-size: 12.5px; line-height: 1.6; }
@@ -1029,6 +1096,9 @@ function injectStyles() {
   .yw-shop-card:disabled { cursor: default; color: inherit; }
   .yw-badge-invite { background: #34c759; }
   .yw-badge { background: #ff3b30; color: #fff; font-size: 11px; border-radius: 6px; padding: 1px 6px; vertical-align: middle; }
+`;
+//#if WEB
+css += `
   .yw-machine { background: #fff; border-radius: 14px; padding: 14px; box-shadow: 0 4px 16px rgba(0,0,0,.06); display: flex; flex-direction: column; border-top: 4px solid #cfd6e4; }
   .yw-machine.is-busy { opacity: .7; }
   .yw-machine.yw-tier2 { border-top-color: #e3b341; }
@@ -1049,9 +1119,15 @@ function injectStyles() {
   .yw-machine-seat.npc { background: #efeafd; color: #5a3fc0; animation: yw-npc-pulse 2.4s ease-in-out infinite; }
   @keyframes yw-npc-pulse { 0%,100% { opacity: 1; } 50% { opacity: .65; } }
   @media (prefers-reduced-motion: reduce) { .yw-machine-seat.npc { animation: none; } }
+`;
+//#endif
+css += `
   .yw-btn { border: none; border-radius: 10px; background: #4a7; color: #fff; font-weight: 700; padding: 10px; cursor: pointer; font-size: 14px; }
   .yw-btn-sub { background: #667; }
   .yw-btn-disabled, .yw-btn:disabled { background: #bbb; cursor: not-allowed; }
+`;
+//#if WEB
+css += `
 
   .yw-topbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
   .yw-zoombar, .yw-optbar { display: flex; gap: 6px; }
@@ -1184,11 +1260,14 @@ function injectStyles() {
     .yw-bounce, .yw-reels.yw-win, .yw-reel.yw-reach, .yw-reel.yw-reach-strong, .yw-game.yw-celebrate, .yw-game.yw-shake, .yw-spark, .yw-coin, .yw-reels.yw-zoomfx, .yw-reels.yw-omen-1, .yw-reels.yw-omen-2, .yw-reels.yw-omen-3, .yw-chain { animation: none; transform: none; }
     #yw-screen-fx { display: none; }
   }
-  `;
+`;
+//#endif
+
   const style = document.createElement("style");
   style.id = "yuworld-styles";
   style.textContent = css;
   document.head.appendChild(style);
+//#if WEB
   window.addEventListener("pagehide", settleBeacon);
   document.addEventListener("visibilitychange", () => { if (!document.hidden && state.screen === "lobby") refreshLobby(); });
   document.addEventListener("visibilitychange", () => { if (!document.hidden && state.screen === "game" && state.kaku && state.kakuEnd && serverNow() >= state.kakuEnd) kakuTimeUp(); });   // 眠っていたスマホが戻ったとき、枠が終わっていたらすぐ退出
@@ -1197,4 +1276,5 @@ function injectStyles() {
   window.addEventListener("pointerdown", unlock, { passive: true });
   window.addEventListener("keydown", unlock);
   window.addEventListener("resize", () => { if (state.screen === "game") applyScale(); });
+//#endif
 }

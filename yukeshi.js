@@ -192,7 +192,7 @@ async function apply() {
   if (r && r.bought) { ctx.root.querySelector("#ykCoins")?.classList.add("pop"); setTimeout(() => ctx.root.querySelector("#ykCoins")?.classList.remove("pop"), 600); }
 }
 function errorMsg(code) {
-  const m = { ng_word: "使えない言葉が入っています。", bad_request: "名前は、10文字までです。", insufficient_coins: "コインが足りません。", seated: "ゆうスロの席に着いているあいだは買えません。席を立ってから、もう一度お試しください。", busy: "通信が重なりました。もう一度お試しください。", already_owned: "そのパーツはすでに持っています。", not_published: "消しバトは、ただいま非公開になりました。" };
+  const m = { ng_word: "使えない言葉が入っています。", bad_request: "名前は、10文字までです。", insufficient_coins: "コインが足りません。", seated: "席に着いているあいだは買えません。席を立ってから、もう一度お試しください。", busy: "通信が重なりました。もう一度お試しください。", already_owned: "そのパーツはすでに持っています。", not_published: "消しバトは、ただいま非公開になりました。" };
   alert(m[code] || "うまくいきませんでした（" + (code || "エラー") + "）。もう一度お試しください。");
   if (code === "busy" || code === "already_owned") load(token);
 }

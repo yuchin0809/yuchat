@@ -614,6 +614,7 @@
             </span>
         </button>
 
+<!--#if WEB-->
         <button
             data-view="derby"
             type="button"
@@ -623,6 +624,7 @@
                 ダービー
             </span>
         </button>
+<!--#endif-->
 
 
         <button
@@ -949,15 +951,19 @@
 
 
             <!-- ==================================================
-                 あそぶ（アプリ版のスマホだけ。ダービー・ゆうワールド・ゆう経済の入口）
+                 あそぶ（アプリ版のスマホだけ。ゆうワールド・ゆう経済の入口）
             ================================================== -->
             <section
                 id="playView"
                 class="view hidden"
             >
                 <div class="play-grid">
+<!--#if WEB-->
                     <button type="button" class="play-tile" data-goto="derby"><i>🏇</i><b>ゆうダービー</b><span>毎日 11:30・15:02</span></button>
                     <button type="button" class="play-tile" data-goto="yuworld"><i>🎡</i><b>ゆうワールド</b><span>スロ・宝くじ・ゲーム</span></button>
+<!--#else-->
+                    <button type="button" class="play-tile" data-goto="yuworld"><i>🎡</i><b>ゆうワールド</b><span>ゲーム・消しバト</span></button>
+<!--#endif-->
                     <button type="button" class="play-tile" data-goto="yuworld" data-game-open="keshi"><i>🥊</i><b>消しバト</b><span>最強決定戦</span></button>
                     <button type="button" class="play-tile" data-goto="economy"><i>💰</i><b>ゆう経済</b><span>預金・株・送金</span></button>
                 </div>
@@ -965,14 +971,19 @@
                 <aside class="play-side" aria-label="今日の予定">
                     <h4>今日の予定</h4>
                     <div class="play-ev"><b>9:15</b><span>ゆう基金を配る<small>総資産の少ない人から順に</small></span></div>
+<!--#if WEB-->
                     <div class="play-ev ev-gamble"><b>11:30</b><span>ゆうダービー<small>精算は、その数分後</small></span></div>
+<!--#endif-->
                     <div class="play-ev"><b>13:00</b><span>株価・利息の更新</span></div>
                     <div class="play-ev"><b>15:00</b><span>消しバト リーグ戦<small>平日 10:30・12:40・15:00</small></span></div>
+<!--#if WEB-->
                     <div class="play-ev ev-gamble"><b>15:02</b><span>ゆうダービー</span></div>
                     <div class="play-ev ev-gamble"><b>金 14:30</b><span>宝くじの抽選<small>毎週金曜</small></span></div>
+<!--#endif-->
                 </aside>
             </section>
 
+<!--#if WEB-->
             <!-- ==================================================
                  ゆうダービー
             ================================================== -->
@@ -1255,10 +1266,9 @@
                 </div>
 
             </section>
+<!--#endif-->
 
-
-
-            <!-- 🎡 ゆうワールド（ゆうスロなどのお店）。中身は yuworld.js が描く -->
+            <!-- 🎡 ゆうワールド（お店の一覧）。中身は yuworld.js が描く -->
 
             <section
                 id="yuworldView"
@@ -1505,6 +1515,9 @@
                             <div class="admin-form-buttons">
                                 <button id="announcementSubmitButton" type="submit">お知らせを公開する</button>
                                 <button id="announcementEditCancelButton" class="hidden secondary" type="button">編集をやめる</button>
+<!--#if WEB-->
+                                <button id="announcementTagButton" class="secondary" type="button">賭けのお知らせを「サイトだけ」にする</button>
+<!--#endif-->
                             </div>
                         </form>
 
@@ -1560,8 +1573,10 @@
                         </select>
                     </div>
 
+<!--#if WEB-->
                     <!-- 🌈 確変台の当選者（管理者だけ）。yukakuwinners.js が描く -->
                     <div id="userManageKaku" class="um-section"></div>
+<!--#endif-->
 
                     <!-- 📊 経済の状態（インフレの目安）。yueconomy-admin.js が描く（管理者だけ） -->
                     <div id="userManageEconomy" class="um-section"></div>
