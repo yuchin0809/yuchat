@@ -49,6 +49,7 @@ export function partArt(slot, id) {
 }
 export const MART_ART_KEYS = Object.keys(ART);
 
+//#if WEB
 /* 確変枠・番くじ景品の絵 */
 const wrap = (c1, c2, body, id) => `<svg class="ym-art" viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${c1}"/><stop offset="1" stop-color="${c2}"/></linearGradient></defs><rect width="64" height="64" fill="url(#${id})"/>${body}</svg>`;
 /* 確変台の枠：虹のスロット台 */
@@ -66,3 +67,4 @@ export function prizeArt(pid, code) {
   if (pid === "F") { const [a, b] = COLORS[code] || COLORS.gold; return wrap("#fff", "#f0ecf5", `<path d="M32 10c-14 0-24 9-24 20 0 7 5 9 10 9 4 0 5 3 5 6 0 4 3 9 9 9 12 0 19-10 19-22 0-12-8-22-19-22z" fill="url(#pal-${code})" stroke="#999" stroke-width="1.5"/><defs><linearGradient id="pal-${code}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${a}"/><stop offset="1" stop-color="${b}"/></linearGradient></defs><circle cx="22" cy="26" r="3" fill="#fff" opacity=".7"/><circle cx="34" cy="20" r="3" fill="#fff" opacity=".7"/><circle cx="46" cy="28" r="3" fill="#fff" opacity=".7"/>`, id); }
   return wrap("#f4f1ea", "#e6e2dc", `<text x="32" y="42" text-anchor="middle" font-size="28">🎁</text>`, id);
 }
+//#endif

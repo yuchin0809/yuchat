@@ -3,7 +3,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import worker, { dailyDerbyRaces, notifyDerbyStartingSoon, runScheduled, sendBroadcastNotification, handleAdminAction, handleRequest } from "../worker.js";
+import worker, { isWebOnlyAnnouncement, announcementNotificationData, dailyDerbyRaces, notifyDerbyStartingSoon, runScheduled, sendBroadcastNotification, handleAdminAction, handleRequest } from "../worker.js";
 
 const ADMIN = "adminUid";
 const jst = (text) => Date.parse(`${text}+09:00`);
@@ -259,4 +259,27 @@ test("印の無い記録を2つの実行が同時に引き継ごうとしても�
   ]);
   assert.equal(results.filter((r) => r.skipped === "duplicate").length, 1);
   assert.equal(sent.length, 3);
+});
+
+test("賭けに関係するお知らせは「サイトだけ」：判定・アプリへの通知なし・既存分への印付け", async () => {
+  assert.equal(isWebOnlyAnnouncement({ title: "🌈 今日の確変台は「X」！", body: "" }), true);
+  assert.equal(isWebOnlyAnnouncement({ title: "x", body: "ゆうダービーが始まります" }), true);
+  assert.equal(isWebOnlyAnnouncement({ title: "x", body: "y", scope: "web" }), true);
+  assert.equal(isWebOnlyAnnouncement({ title: "📸 YuSnap を始めました", body: "写真" }), false);
+  assert.equal(announcementNotificationData("a1", { title: "番くじ開始", body: "" }).scope, "web");
+  assert.equal(announcementNotificationData("a2", { title: "新機能", body: "" }).scope, undefined);
+  const { deps, sent } = makeDeps({ ...TOKENS, "fcmTokens/appT": { uid: "uA", platform: "ios-app" }, "announcements/w1": { title: "確変台のお知らせ", body: "b" }, "announcements/n1": { title: "新機能", body: "b" } });
+  await sendBroadcastNotification(deps, "announcement-w1", announcementNotificationData("w1", { title: "確変台のお知らせ", body: "b" }));
+  assert.equal(sent.some((x) => x.token === "appT"), false, "サイトだけのお知らせは、アプリに送らない");
+  assert.ok(sent.length >= 1, "サイトの端末には送る");
+  const r = await handleAdminAction(deps, ADMIN, { action: "tagAnnouncements" });
+  assert.equal(r.tagged, 1);
+  assert.equal(deps.firestore.store.get("announcements/w1").scope, "web");
+  assert.equal(deps.firestore.store.get("announcements/n1").scope, undefined);
+});
+
+test("CORS：iPhone アプリ（capacitor://localhost）からの呼び出しも通す", async () => {
+  const { deps } = makeDeps({});
+  const res = await handleRequest(new Request("https://w/admin", { method: "OPTIONS", headers: { Origin: "capacitor://localhost" } }), {}, deps);
+  assert.equal(res.headers.get("Access-Control-Allow-Origin"), "capacitor://localhost");
 });
