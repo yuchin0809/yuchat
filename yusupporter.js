@@ -1,9 +1,13 @@
 /* ⭐ ゆうChat サポーターの画面（開くときに読み込む）
    ・サポーターでない人：プランの案内（月額250円・年間2,400円・特典の一覧）。購入は、アプリ（App Store）の公開後に使えるようになる。いまは「準備中」
-   ・サポーターの人：見た目の設定（名前の色・吹き出しの色・チャットの背景・確変台の見た目と演出）・マイ記録・要望・特典の説明
+   ・サポーターの人：見た目の設定（名前の色・吹き出しの色・チャットの背景など）・マイ記録・要望・特典の説明
    ・保存は Worker（/supporter）。ここは画面だけ */
 import {
-  NAME_COLORS, BUBBLE_COLORS, CHAT_BACKGROUNDS, KAKU_THEMES, KAKU_EFFECTS, supporterState, setMySupporter, ensureMarkDefs, getLayoutChoice, setLayoutChoice
+  NAME_COLORS, BUBBLE_COLORS, CHAT_BACKGROUNDS,
+//#if WEB
+  KAKU_THEMES, KAKU_EFFECTS,
+//#endif
+  supporterState, setMySupporter, ensureMarkDefs, getLayoutChoice, setLayoutChoice
 } from "./yusupporter-core.js?v=20261110-sup3";
 
 let cfg = null;          // { api(action, payload), esc, onChange(), canAskNotify(), askNotify() }
@@ -20,8 +24,12 @@ const markSvg = (size) => `<svg width="${size}" height="${size}" viewBox="0 0 10
 const PERKS = [
   ["名前の横に金色の「Y」マーク", ""],
   ["名前・吹き出しの色と、チャットの背景を変えられる", ""],
+//#if WEB
   ["確変台の演出と見た目を自由に設定", "当たりやすさは変わりません"],
   ["マイ記録ページ", "スロの回数・ダービーの的中率など"],
+//#else
+  ["マイ記録ページ", "コインの残高など"],
+//#endif
   ["新しい機能を、約1週間早く遊べる", ""],
   ["「こんな機能がほしい」を優先して聞きます", ""],
   ["初期サポーター称号", "最初の1か月に加入した人だけにつきます"]
@@ -69,11 +77,26 @@ function planHtml() {
     <p class="sup-fine">${year ? "年間プランは、1年ごとに自動で更新されます。" : "月額プランは、1か月ごとに自動で更新されます。"}解約は、iPhone・iPadの「設定」のサブスクリプションから、いつでもできます。</p>`;
 }
 
+/* サイトだけの設定・記録（アプリには入れない） */
+//#if WEB
+const extraPickers = () => `${pickerHtml("kakuTheme", KAKU_THEMES, "確変台の見た目（自分の画面だけ）", "grad")}
+      ${pickerHtml("kakuFx", KAKU_EFFECTS, "確変台の当たり演出（自分の画面だけ）", "fx")}`;
+const extraCards = (r) => `
+        <div class="sup-card"><span>ゆうスロの回転数</span><b>${fmt(r.slot.spins)} 回</b><small>確変台 ${fmt(r.slot.kakuSpins)} 回</small></div>
+        <div class="sup-card"><span>ゆうスロで使ったコイン</span><b>${fmt(r.slot.wagered)}</b><small>確変台 ${fmt(r.slot.kakuWagered)}</small></div>
+        <div class="sup-card"><span>ゆうダービー（精算ずみ）</span><b>${fmt(r.derby.bets)} 枚</b><small>的中 ${fmt(r.derby.wins)} 枚${r.derby.bets ? `（${Math.round(r.derby.wins / r.derby.bets * 100)}%）` : ""}</small></div>
+        <div class="sup-card"><span>ダービーで使った → もらった</span><b>${fmt(r.derby.wagered)} → ${fmt(r.derby.paid)}</b><small>${r.derby.paid - r.derby.wagered >= 0 ? "＋" : "−"}${fmt(Math.abs(r.derby.paid - r.derby.wagered))}</small></div>
+`;
+//#else
+const extraPickers = () => "";
+const extraCards = () => "";
+//#endif
+
 /* ---------- 設定（サポーターの人） ---------- */
 function pickerHtml(key, table, title, kind) {
   const cur = view.draft?.[key] || "default";
   return `<div class="sup-group"><div class="sup-group-title">${esc(title)}</div><div class="sup-chips" role="radiogroup" aria-label="${esc(title)}">${Object.entries(table).map(([id, v]) => {
-    const swatch = kind === "name" ? `<span class="sup-sw-text" style="${v.css || ""}">あ</span>` : kind === "bubble" ? `<span class="sup-sw" style="${v.css || "background:#eef0f3;"}"></span>` : kind === "bg" ? `<span class="sup-sw sup-sw-bg" style="${v.css || "background:#f5f7fa;"}"></span>` : kind === "kaku" ? `<span class="sup-sw" style="background:${v.swatch}"></span>` : `<span class="sup-sw-text">${esc((v.emoji && v.emoji[0]) || "－")}</span>`;
+    const swatch = kind === "name" ? `<span class="sup-sw-text" style="${v.css || ""}">あ</span>` : kind === "bubble" ? `<span class="sup-sw" style="${v.css || "background:#eef0f3;"}"></span>` : kind === "bg" ? `<span class="sup-sw sup-sw-bg" style="${v.css || "background:#f5f7fa;"}"></span>` : kind === "grad" ? `<span class="sup-sw" style="background:${v.swatch}"></span>` : `<span class="sup-sw-text">${esc((v.emoji && v.emoji[0]) || "－")}</span>`;
     return `<button type="button" class="sup-chip ${cur === id ? "on" : ""}" role="radio" aria-checked="${cur === id}" data-pick="${key}" data-id="${id}">${swatch}<small>${esc(v.label)}</small></button>`;
   }).join("")}</div></div>`;
 }
@@ -105,8 +128,7 @@ function settingsHtml() {
       ${pickerHtml("nameColor", NAME_COLORS, "名前の色", "name")}
       ${pickerHtml("bubbleColor", BUBBLE_COLORS, "吹き出しの色", "bubble")}
       ${pickerHtml("chatBg", CHAT_BACKGROUNDS, "チャットの背景（自分の画面だけ）", "bg")}
-      ${pickerHtml("kakuTheme", KAKU_THEMES, "確変台の見た目（自分の画面だけ）", "kaku")}
-      ${pickerHtml("kakuFx", KAKU_EFFECTS, "確変台の当たり演出（自分の画面だけ）", "fx")}
+      ${extraPickers()}
       <p class="sup-note">見た目だけで、ゲームの当たりやすさや結果は変わりません。名前の色と吹き出しの色は、ほかの人にも見えます。</p>
       <button type="button" class="sup-cta" data-sup="save" ${view.saving ? "disabled" : ""}>${view.saving ? "保存しています…" : "この見た目で保存する"}</button>`;
   } else if (view.tab === "records") {
@@ -114,10 +136,7 @@ function settingsHtml() {
     body = !r ? `<p class="sup-note">読み込んでいます…</p>` : r.error ? `<p class="sup-err">読み込めませんでした。しばらくしてから、もう一度お試しください。</p>` : `
       <div class="sup-cards">
         <div class="sup-card"><span>いまのコイン</span><b>🪙 ${fmt(r.coins)}</b></div>
-        <div class="sup-card"><span>ゆうスロの回転数</span><b>${fmt(r.slot.spins)} 回</b><small>確変台 ${fmt(r.slot.kakuSpins)} 回</small></div>
-        <div class="sup-card"><span>ゆうスロで使ったコイン</span><b>${fmt(r.slot.wagered)}</b><small>確変台 ${fmt(r.slot.kakuWagered)}</small></div>
-        <div class="sup-card"><span>ゆうダービー（精算ずみ）</span><b>${fmt(r.derby.bets)} 枚</b><small>的中 ${fmt(r.derby.wins)} 枚${r.derby.bets ? `（${Math.round(r.derby.wins / r.derby.bets * 100)}%）` : ""}</small></div>
-        <div class="sup-card"><span>ダービーで使った → もらった</span><b>${fmt(r.derby.wagered)} → ${fmt(r.derby.paid)}</b><small>${r.derby.paid - r.derby.wagered >= 0 ? "＋" : "−"}${fmt(Math.abs(r.derby.paid - r.derby.wagered))}</small></div>
+        ${extraCards(r)}
       </div>`;
   } else if (view.tab === "request") {
     body = `<p class="sup-note">「こんな機能がほしい」「ここを直してほしい」を送ってください。サポーターのものを、優先して読みます。</p>
