@@ -256,7 +256,7 @@ export function renderBelt(c) {
         const m = $("#blMsg"); if (m) m.innerHTML = `✅ <b>${esc(it.name)}</b> を買いました！（付けるときは「消しゴムの改造」の画面から）`;
       } catch (err) {
         const code = err && err.code;
-        const msg = { gone: "このパーツは、流れていってしまいました。", expired: "ベルトを入れ替えます。もう一度お試しください。", insufficient_coins: "コインが足りません。", already_owned: "もう持っています。", seated: "席に着いているあいだは買えません。", busy: "混み合っています。もう一度お試しください。", not_published: "このページは、まだ公開されていません。" }[code] || "買えませんでした。";
+        const msg = { gone: "このパーツは、流れていってしまいました。", expired: "ベルトを入れ替えます。もう一度お試しください。", insufficient_coins: "コインが足りません。", already_owned: "もう持っています。", seated: "ゆうスロの席に着いているあいだは買えません。", busy: "混み合っています。もう一度お試しください。", not_published: "このページは、まだ公開されていません。" }[code] || "買えませんでした。";
         alert(msg); el.remove();
       } finally { busy = false; }
     });
