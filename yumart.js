@@ -8,9 +8,9 @@
 ========================================================= */
 
 //#if WEB
-import { partArt, kakuArt, prizeArt } from "./yumart-art.js?v=20261123-fix1";
+import { partArt, kakuArt, prizeArt } from "./yumart-art.js?v=20261123-app1";
 //#else
-import { partArt } from "./yumart-art.js?v=20261123-fix1";
+//@ import { partArt } from "./yumart-art.js?v=20261123-app1";
 //#endif
 
 let deps = null, root = null, stylesDone = false, token = 0;
@@ -35,7 +35,7 @@ const ERR = {
 //#if WEB
 Object.assign(ERR, { too_late: "枠の始まりの10分前をすぎたので、出品できません", already_listed: "この枠はすでに出品しています", no_resale: "確変台の予約権は、買ったものをまた売ることはできません", right_expired: "この予約権は、期限が近いか、すぎているので出品できません", company_exists: "すでに会社を作っているので、A賞は出品できません", slot_limit: "1日にもてる確変の枠は3つまでです", no_auction: "確変台の枠はオークションにできません", seated: "ゆうスロの席に着いているあいだは買えません。席を立ってからもう一度どうぞ", buyer_busy: "相手がいまゆうスロの席に着いているため、売れませんでした" });
 //#else
-Object.assign(ERR, { seated: "いまは買えません。しばらくしてから、もう一度どうぞ", buyer_busy: "相手がいまは買えない状態のため、売れませんでした" });
+//@ Object.assign(ERR, { seated: "いまは買えません。しばらくしてから、もう一度どうぞ", buyer_busy: "相手がいまは買えない状態のため、売れませんでした" });
 //#endif
 
 async function api(action, payload = {}) {
@@ -145,16 +145,16 @@ const EMPTY_SELL = "消しバトのパーツを買う・確変台の枠に当た
 const SELL_FAIL = "<br>（確変台の枠・番くじの景品は読み込めませんでした。開きなおしてください）";
 const SELL_NOTE = "パーツと番くじの景品は、出品すると「預かり」になります（売れ残ったら、そのまま戻ります）。確変台の枠は、自分が当てた枠だけ、始まる10分前まで出品できます（買った枠は売れません）。";
 //#else
-const hiddenInApp = (x) => x.k !== "part";
-const KINDS = [["all", "すべて"], ["body", "🧽 本体"], ["edge", "🔲 ふち"], ["sole", "👟 そこ"], ["weight", "⚖️ おもり"]];
-const slotMatch = (x) => slotFilter === "all" || (x.k === "part" && x.slot === slotFilter);
-const LEAD = "いらなくなった消しバトのパーツを、売ったり買ったり。";
-const BUY_NOTE = "買ったあとのキャンセルはできません。";
-const AUC_TAIL = "";
-const noAuction = () => false;
-const EMPTY_SELL = "消しバトのパーツを買うと、ここから売れます。";
-const SELL_FAIL = "";
-const SELL_NOTE = "パーツは、出品すると「預かり」になります（売れ残ったら、そのまま戻ります）。";
+//@ const hiddenInApp = (x) => x.k !== "part";
+//@ const KINDS = [["all", "すべて"], ["body", "🧽 本体"], ["edge", "🔲 ふち"], ["sole", "👟 そこ"], ["weight", "⚖️ おもり"]];
+//@ const slotMatch = (x) => slotFilter === "all" || (x.k === "part" && x.slot === slotFilter);
+//@ const LEAD = "いらなくなった消しバトのパーツを、売ったり買ったり。";
+//@ const BUY_NOTE = "買ったあとのキャンセルはできません。";
+//@ const AUC_TAIL = "";
+//@ const noAuction = () => false;
+//@ const EMPTY_SELL = "消しバトのパーツを買うと、ここから売れます。";
+//@ const SELL_FAIL = "";
+//@ const SELL_NOTE = "パーツは、出品すると「預かり」になります（売れ残ったら、そのまま戻ります）。";
 //#endif
 function drawBuy() {
   let list = S.listings.filter((x) => !hiddenInApp(x)).filter(slotMatch);
@@ -261,8 +261,8 @@ function keyName(key) {
 const buyExtra = (x) => (x.k === "kaku" ? "\n（買った枠は、また売ることはできません）" : "");
 const boughtMsg = (x, it) => (x.k === "kaku" ? "買いました！ゆうスロの確変台で、その時間に遊べます" : x.k === "prize" ? (x.pid === "E" || x.pid === "F" ? "買いました！消しバトで使うには、ゆうワールド →「ゆう番くじ」の「もちもの」で「消しバトで使う」を押してください" : "買いました！ゆう番くじの「もちもの」に入ります") : `買いました！「${it.name}（中古）」は、消しバトのパーツから付けられます`);
 //#else
-const buyExtra = () => "";
-const boughtMsg = (x, it) => `買いました！「${it.name}」は、消しバトのパーツから付けられます`;
+//@ const buyExtra = () => "";
+//@ const boughtMsg = (x, it) => `買いました！「${it.name}」は、消しバトのパーツから付けられます`;
 //#endif
 function buy(id) {
   const x = S.listings.find((l) => l.id === id); if (!x) return;

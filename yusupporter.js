@@ -28,7 +28,7 @@ const PERKS = [
   ["確変台の演出と見た目を自由に設定", "当たりやすさは変わりません"],
   ["マイ記録ページ", "スロの回数・ダービーの的中率など"],
 //#else
-  ["マイ記録ページ", "コインの残高など"],
+//@   ["マイ記録ページ", "コインの残高など"],
 //#endif
   ["新しい機能を、約1週間早く遊べる", ""],
   ["「こんな機能がほしい」を優先して聞きます", ""],
@@ -88,8 +88,8 @@ const extraCards = (r) => `
         <div class="sup-card"><span>ダービーで使った → もらった</span><b>${fmt(r.derby.wagered)} → ${fmt(r.derby.paid)}</b><small>${r.derby.paid - r.derby.wagered >= 0 ? "＋" : "−"}${fmt(Math.abs(r.derby.paid - r.derby.wagered))}</small></div>
 `;
 //#else
-const extraPickers = () => "";
-const extraCards = () => "";
+//@ const extraPickers = () => "";
+//@ const extraCards = () => "";
 //#endif
 
 /* ---------- 設定（サポーターの人） ---------- */

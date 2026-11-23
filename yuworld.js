@@ -13,21 +13,21 @@
      演出・音・倍率・演出強弱は抽選結果を一切変えない（結果は常に Worker が決める）。
 ========================================================= */
 //#else
-/* 🎡 ゆうワールド（お店の一覧）クライアント
-   ・お店の一覧から、ゲーム・ヨット・消しバト・ビリヤードの画面を開く。
-   ・サーバーに聞くのは、公開の状態と、各ゲームの画面が呼ぶ処理だけ。 */
+//@ /* 🎡 ゆうワールド（お店の一覧）クライアント
+//@    ・お店の一覧から、ゲーム・ヨット・消しバト・ビリヤードの画面を開く。
+//@    ・サーバーに聞くのは、公開の状態と、各ゲームの画面が呼ぶ処理だけ。 */
 //#endif
 
 //#if WEB
 /* 🎟 ゆう宝くじ売り場の画面（別ファイル。Worker の lottery* アクションを呼んで表示するだけ） */
 import { renderLottery, stopLottery } from "./yulottery.js?v=20261027-draw1";
 /* 🎊 ゆう番くじ（発売前のお知らせの画面） */
-import { renderBankuji, stopBankuji, BANKUJI_SALE_MS } from "./yubankuji.js?v=20261123-fix1";
+import { renderBankuji, stopBankuji, BANKUJI_SALE_MS } from "./yubankuji.js?v=20261123-app1";
 //#endif
 import { renderYacht, stopYacht } from "./yuyacht.js?v=20261026-yacht6";
 import { renderBilliards, stopBilliards } from "./yubilliards.js?v=20261112-all1";
-import { renderKeshi, stopKeshi } from "./yukeshi.js?v=20261123-fix1";
-import { eraserIcon, keshiLeagueTag } from "./yukeshi-core.js?v=20261123-fix1";
+import { renderKeshi, stopKeshi } from "./yukeshi.js?v=20261123-app1";
+import { eraserIcon, keshiLeagueTag } from "./yukeshi-core.js?v=20261123-app1";
 //#if WEB
 /* 🌈 確変台のパネル（台の一覧の上）。抽選・先着・通知設定。Worker の kaku* アクションを呼んで表示するだけ */
 import { kakuInit, kakuPanelHtml, kakuBind, kakuMachineInfo, startKaku, stopKaku, refreshKaku } from "./yukaku.js?v=20261027-move2";
@@ -95,11 +95,11 @@ const state = {
   flushTimer: null, feverTimer: null, lobbyTimer: null, reelAnim: null
 };
 //#else
-const state = {
-  screen: "loading",
-  published: false, yachtPublished: false, keshiPublished: false, billiardsPublished: false, billiardsAllowed: false, isTopAdmin: false, open: true,
-  clockOffset: 0
-};
+//@ const state = {
+//@   screen: "loading",
+//@   published: false, yachtPublished: false, keshiPublished: false, billiardsPublished: false, billiardsAllowed: false, isTopAdmin: false, open: true,
+//@   clockOffset: 0
+//@ };
 //#endif
 const $ = (sel) => rootEl && rootEl.querySelector(sel);
 
@@ -119,9 +119,9 @@ export async function stopYuWorldView() {
   if (state.session) { try { await settle(); } catch (_) {} }
 }
 //#else
-export async function stopYuWorldView() {
-  stopYacht(); stopKeshi(); stopBilliards();
-}
+//@ export async function stopYuWorldView() {
+//@   stopYacht(); stopKeshi(); stopBilliards();
+//@ }
 //#endif
 
 /* ---------- Worker 呼び出し ---------- */
@@ -245,8 +245,8 @@ const slotShopCards = (blocked) => `<button type="button" class="yw-shop-card${b
           <div class="yw-shop-desc">毎週金曜14:30に抽選の「宝くじ」と、10/26（月）に初登場する「ゆう番くじ」の売り場。1等は1万コイン！</div></div>
       </button>`;
 //#else
-const slotAdminBlock = () => "";
-const slotShopCards = () => "";
+//@ const slotAdminBlock = () => "";
+//@ const slotShopCards = () => "";
 //#endif
 function renderShop() {
   const blocked = !state.published && !state.isTopAdmin;

@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { preprocess, stripCss, build, FORBIDDEN, EXCLUDE_FILES } from "../build-www.mjs";
 
 test("preprocess：WEB 側を取り除き、#else 側を残す（JS・HTML・入れ子）", () => {
@@ -34,6 +35,29 @@ test("build：賭けの言葉がどのファイルにも残らず、賭け系の
   for (const f of files.filter((x) => x.endsWith(".js") && !x.startsWith("vendor"))) {
     const r = spawnSync(process.execPath, ["--check", "--input-type=module"], { input: fs.readFileSync(path.join(out, f), "utf8") });
     assert.equal(r.status, 0, `${f}: ${r.stderr}`);
+  }
+  fs.rmSync(out, { recursive: true, force: true });
+});
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+test("サイト（元のファイルのまま配る）：JS が文法エラーにならない（#else 側のコードが二重に読み込まれない）", () => {
+  const jsFiles = fs.readdirSync(ROOT).filter((f) => f.endsWith(".js") && f !== "firebase-messaging-sw.js");
+  assert.ok(jsFiles.length > 20);
+  for (const f of jsFiles) {
+    const r = spawnSync(process.execPath, ["--check", "--input-type=module"], { input: fs.readFileSync(path.join(ROOT, f), "utf8") });
+    assert.equal(r.status, 0, `${f}: ${r.stderr}`);
+  }
+});
+
+test("#else 側の行は、元のファイルではコメントになっていて、アプリ用に書き出すとコメントが外れる", () => {
+  assert.equal(preprocess(["//#if WEB", "a", "//#else", "//@   b();", "//#endif"].join("\n")), "  b();");
+  assert.equal(preprocess(["<!--#if WEB-->", "<p>w</p>", "<!--#else-->", "<!--@ <p>a</p> @-->", "<!--#endif-->"].join("\n")), "<p>a</p>");
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), "www-"));
+  const { files } = build(out);
+  for (const f of files.filter((x) => /\.(js|html)$/.test(x) && !x.startsWith("vendor"))) {
+    const t = fs.readFileSync(path.join(out, f), "utf8");
+    assert.ok(!/^\s*\/\/@ /m.test(t) && !/<!--@ /.test(t), `${f}: コメントが残っている`);
   }
   fs.rmSync(out, { recursive: true, force: true });
 });

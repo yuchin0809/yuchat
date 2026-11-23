@@ -31,6 +31,14 @@ export const FORBIDDEN = { test: (line) => FORBIDDEN_CI.test(line) || FORBIDDEN_
 
 const DIRECTIVE = /^\s*(?:\/\/|\/\*|<!--)\s*#(if WEB|else|endif)\s*(?:\*\/|-->)?\s*$/;
 
+// 「#else」側の行は、サイトでそのまま動くように、元のファイルではコメントにしてある（JS は「//@ 」、HTML は「<!--@ … @-->」、CSS はスラッシュとアスタリスクに @ を付けた形）。アプリ用に書き出すときに、そのコメントを外す
+function unwrapApp(line) {
+  let m = /^(\s*)\/\/@ (.*)$/.exec(line); if (m) return m[1] + m[2];
+  m = /^(\s*)<!--@ (.*) @-->(\s*)$/.exec(line); if (m) return m[1] + m[2];
+  m = /^(\s*)\/\*@ (.*) @\*\/(\s*)$/.exec(line); if (m) return m[1] + m[2];
+  return line;
+}
+
 /* 1つのファイルの中身から、WEB のほうを取り除く（入れ子にも対応） */
 export function preprocess(text, name = "", keepLines = false) {
   const out = [], stack = [];   // keepLines：取り除いた行を、空行にして残す（エラーの行番号を、元のファイルと合わせたいとき）   // stack：{ web: その if が WEB 側か, inElse: else に入ったか }
@@ -44,7 +52,7 @@ export function preprocess(text, name = "", keepLines = false) {
       if (keepLines) out.push("");
       return;
     }
-    if (keep()) out.push(line); else if (keepLines) out.push("");
+    if (keep()) out.push(unwrapApp(line)); else if (keepLines) out.push("");
   });
   if (stack.length) throw new Error(`${name}:${stack[stack.length - 1].at} #if WEB が閉じていません`);
   return out.join("\n");

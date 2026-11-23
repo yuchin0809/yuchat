@@ -1176,7 +1176,7 @@ async function startApp() {
     catchUpMissedRaces();
     try { initializeSafeRace(); } catch (e) { console.error("レース初期化エラー:", e); }
 //#else
-    startServerClockSync();
+//@     startServerClockSync();
 //#endif
   } catch (error) {
     console.error("アプリ起動エラー:", error);
@@ -3862,7 +3862,7 @@ function parseNotificationTarget(search) {
 //#if WEB
     if (open === "derby" || open === "announcements" || open === "games" || open === "economy" || open === "yureal") return { open };   // games：ゲームの招待の通知（招待のバナーが出る画面）
 //#else
-    if (open === "announcements" || open === "games" || open === "economy" || open === "yureal") return { open };   // games：ゲームの招待の通知（招待のバナーが出る画面）
+//@     if (open === "announcements" || open === "games" || open === "economy" || open === "yureal") return { open };   // games：ゲームの招待の通知（招待のバナーが出る画面）
 //#endif
     if (open !== "chat") return null;
     return { open: "chat", friendship: params.get("friendship") || null, group: params.get("group") || null };
@@ -4057,12 +4057,12 @@ tabButtons.forEach((button) => {
 //#if WEB
 const APP_PLAY_VIEWS = ["derby", "yuworld", "economy", "games"];
 //#else
-const APP_PLAY_VIEWS = ["yuworld", "economy", "games"];
+//@ const APP_PLAY_VIEWS = ["yuworld", "economy", "games"];
 //#endif
 //#if WEB
 const APP_VIEW_TITLES = { chat: "チャット", play: "あそぶ", derby: "ゆうダービー", yuworld: "ゆうワールド", games: "ゆうワールド", economy: "ゆう経済", mart: "ゆうマート", yureal: "YuSnap β", announcements: "お知らせ", mypage: "マイページ", usermanage: "ユーザー管理" };
 //#else
-const APP_VIEW_TITLES = { chat: "チャット", play: "あそぶ", yuworld: "ゆうワールド", games: "ゆうワールド", economy: "ゆう経済", mart: "ゆうマート", yureal: "YuSnap β", announcements: "お知らせ", mypage: "マイページ", usermanage: "ユーザー管理" };
+//@ const APP_VIEW_TITLES = { chat: "チャット", play: "あそぶ", yuworld: "ゆうワールド", games: "ゆうワールド", economy: "ゆう経済", mart: "ゆうマート", yureal: "YuSnap β", announcements: "お知らせ", mypage: "マイページ", usermanage: "ユーザー管理" };
 //#endif
 const appHeaderTitle = document.getElementById("appHeaderTitle");
 const appPlusMenu = document.getElementById("appPlusMenu");
@@ -4099,7 +4099,7 @@ function switchView(view) {
 //#if WEB
   const views = { chat: chatView, play: playView, derby: derbyView, economy: economyView, games: gamesView, yuworld: yuworldView, mart: martView, yureal: yurealView, announcements: announcementsView, mypage: mypageView, usermanage: userManageView };
 //#else
-  const views = { chat: chatView, play: playView, economy: economyView, games: gamesView, yuworld: yuworldView, mart: martView, yureal: yurealView, announcements: announcementsView, mypage: mypageView, usermanage: userManageView };
+//@   const views = { chat: chatView, play: playView, economy: economyView, games: gamesView, yuworld: yuworldView, mart: martView, yureal: yurealView, announcements: announcementsView, mypage: mypageView, usermanage: userManageView };
 //#endif
 
   Object.entries(views).forEach(([name, element]) => {
@@ -4177,7 +4177,7 @@ function lazyCaller(mod, name) {
 const adminCfg = () => ({ callAdmin: (action, payload) => callAdminApi(action, payload), isAdmin: () => isAdminUser(), esc: (v) => escapeHTML(v) });
 
 /* 🎡 ゆうワールド（お店の一覧）。トークン・ユーザー名・最上位管理者かどうかは呼ばれた時点の状態を使う */
-const lazyYuWorld = lazyModule("./yuworld.js?v=20261123-fix1", (m) => m.initYuWorld({
+const lazyYuWorld = lazyModule("./yuworld.js?v=20261123-app1", (m) => m.initYuWorld({
   openGame: (type) => openGameFromWorld(type),
   pendingInviteTypes: () => pendingGameInvites.map((invite) => invite.gameType),
   endpoint: NOTIFY_ENDPOINT.replace(/\/notify$/, "/yuslot"),
@@ -4216,7 +4216,7 @@ async function loadYurealConfig() {
 }
 
 /* 🏪 ゆうマート */
-const lazyYuMart = lazyModule("./yumart.js?v=20261123-fix1", (m) => m.initYuMart({
+const lazyYuMart = lazyModule("./yumart.js?v=20261123-app1", (m) => m.initYuMart({
   endpoint: NOTIFY_ENDPOINT.replace(/\/notify$/, "/yuslot"),
   getToken: () => currentUser.getIdToken(),
   getUsername: () => username
@@ -4245,8 +4245,8 @@ const lazyAdminWinners = lazyModule("./yukakuwinners.js?v=20261026-grant1", (m) 
 const adminWinnersOpen = lazyOpener(lazyAdminWinners, "kakuWinnersOpen", () => currentViewName === "usermanage");
 const adminWinnersReset = lazyCaller(lazyAdminWinners, "kakuWinnersReset");
 //#else
-const adminWinnersOpen = () => {};
-const adminWinnersReset = () => {};
+//@ const adminWinnersOpen = () => {};
+//@ const adminWinnersReset = () => {};
 //#endif
 const lazyKeshiEnroll = lazyModule("./yukeshi-admin.js?v=20261026-ltd10", (m) => m.keshiEnrollInit(adminCfg()));
 const keshiEnrollOpen = lazyOpener(lazyKeshiEnroll, "keshiEnrollOpen", () => currentViewName === "usermanage");
@@ -4257,7 +4257,7 @@ const economyAdminReset = lazyCaller(lazyEconomyAdmin, "economyAdminReset");
 
 /* 🎲 ヨット / 🥊 消しバトの部屋の描画：読み込み前は準備中の表示を出し、読み込めたらもう一度描く */
 const lazyYachtRoom = lazyModule("./yuyacht.js?v=20261026-yacht6");
-const lazyKeshiRoom = lazyModule("./yukeshi-room.js?v=20261123-fix1");
+const lazyKeshiRoom = lazyModule("./yukeshi-room.js?v=20261123-app1");
 const lazyBilliardsRoom = lazyModule("./yubilliards.js?v=20261112-all1");
 function lazyRoomRenderer(mod, name) {
   return (boardEl, room, c) => {
@@ -6969,8 +6969,8 @@ async function runUserManageKakuTicket(info) {
       <p id="umKakuTicketError" class="admin-form-error"></p>
     </section>` : "";
 //#else
-  const extraHtmlA = "";
-  const extraHtmlB = "";
+//@   const extraHtmlA = "";
+//@   const extraHtmlB = "";
 //#endif
 
   /* ⭐ サポーター：お金なしで、サポーターにする／やめさせる（管理者だけ） */
@@ -7380,7 +7380,7 @@ function describeDeletionPlan(plan) {
 //#if WEB
   const betLines = `${line("ゆうダービーの精算済みの馬券（削除）", c.raceBetsSettled)}${c.raceBetsUnsettled ? line("ゆうダービーの未精算の馬券（あるため削除できません）", c.raceBetsUnsettled, "block") : ""}`;
 //#else
-  const betLines = "";
+//@   const betLines = "";
 //#endif
   return `
     <ul class="um-plan">
@@ -7768,7 +7768,7 @@ function isShownAnnouncement(a) { return a.scope !== "web"; }
 const WEB_ONLY_ANNOUNCE_WORDS = /ダービー|競馬|馬券|オッズ|スロット|ゆうスロ|宝くじ|番くじ|くじ|確変|ジャックポット|賭け/i;
 function announcementScopeFields(title, body) { return WEB_ONLY_ANNOUNCE_WORDS.test(`${title}\n${body}`) ? { scope: "web" } : {}; }
 //#else
-function announcementScopeFields() { return {}; }
+//@ function announcementScopeFields() { return {}; }
 //#endif
 
 function getAnnouncementReadAt() {

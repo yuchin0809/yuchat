@@ -9,7 +9,7 @@ export const INVITE_PAGE_URL = "https://yuchin0809.github.io/yuchat/invite.html"
 //#if WEB
 export const INVITE_TEXT = "ゆうChatで一緒に遊ぼう！（チャット・ゲーム・ゆうスロもあるよ）";
 //#else
-export const INVITE_TEXT = "ゆうChatで一緒に遊ぼう！（チャット・ゲームもあるよ）";
+//@ export const INVITE_TEXT = "ゆうChatで一緒に遊ぼう！（チャット・ゲームもあるよ）";
 //#endif
 
 async function copyText(text) {
