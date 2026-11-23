@@ -41,6 +41,9 @@ jobs:
           [ -n "$X" ] && sudo xcode-select -s "$X/Contents/Developer"
           xcodebuild -version
 
+      - name: アプリに入れる画面を作る（賭けの機能を、最初から入れない版。残っていたらここで失敗する）
+        run: node ios-app/build-www.mjs
+
       - name: Capacitor を入れて、iOS のプロジェクトを作る
         working-directory: ios-app
         run: |

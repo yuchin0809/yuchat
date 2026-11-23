@@ -6,7 +6,11 @@
 export const INVITE_URL = "https://yuchin0809.github.io/yuchat/";
 /* 友達に送るリンク：ダウンロードのページ（invite.html）。招待コードが取れたときは、コードつき */
 export const INVITE_PAGE_URL = "https://yuchin0809.github.io/yuchat/invite.html";
+//#if WEB
 export const INVITE_TEXT = "ゆうChatで一緒に遊ぼう！（チャット・ゲーム・ゆうスロもあるよ）";
+//#else
+//@ export const INVITE_TEXT = "ゆうChatで一緒に遊ぼう！（チャット・ゲームもあるよ）";
+//#endif
 
 async function copyText(text) {
   try { if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); return true; } } catch (_) { /* 次の方法へ */ }

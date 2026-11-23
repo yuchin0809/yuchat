@@ -19,7 +19,7 @@ keep_vars = true
 
 [vars]
 FIREBASE_PROJECT_ID = "yuuchat-be666"
-ALLOWED_ORIGINS = "https://yuchin0809.github.io"
+ALLOWED_ORIGINS = "https://yuchin0809.github.io,capacitor://localhost"
 
 # 毎分：ゆうダービー開始1分前の通知を確かめる（worker.js の scheduled → notifyDerbyStartingSoon）
 # 自動開催の回（11:30・15:02）は計算だけで決まり、手動レースだけ1回問い合わせる

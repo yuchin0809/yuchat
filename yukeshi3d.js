@@ -3,7 +3,7 @@
    ・three.js が読めない端末では、何も描かない（呼び出し側が絵文字を出す）。 */
 import { load3D, three } from "./yuyacht3d.js?v=20261023-3d1";
 
-/* 0〜7：ふつうの色／8〜11：ゆう番くじ F賞の限定カラー（ゴールド・シルバー・レインボー・ブラックゴールド。持っている人だけ選べる） */
+/* 0〜7：ふつうの色／8〜12：景品の限定カラー（持っている人だけ選べる） */
 export const SLEEVE_COLORS = ["#2f6fe0", "#e0412f", "#2fa85a", "#f0b400", "#ee6fa8", "#8a52d6", "#2b2b30", "#f07a20", "#d4a62a", "#b8c0c8", "rainbow", "#1b1a14", "legend"];   // 12：レジェンド（ラストワン賞の伝説セットだけ）
 /* 色の見本（ボタンの背景）に使う CSS */
 export const sleeveCss = (c) => (c === "rainbow" ? "linear-gradient(90deg,#ff2d78,#ff8a00,#ffe14a,#17e36a,#17b6ff,#b14cff)" : c === "legend" ? "linear-gradient(90deg,#1b1030,#7a2aff,#ff4aa0,#ffd34a)" : c);

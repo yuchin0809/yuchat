@@ -10,6 +10,7 @@ import {
   initializeApp
 } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js";
 
+//#if WEB
 /* ゆうダービーのレース演出（決まった結果を見せるだけ。Firebase には触らない） */
 import {
   buildRaceShow,
@@ -20,10 +21,11 @@ import {
 
 /* ゆうダービーの自分の馬券に合わせた演出（見せるだけ。結果・払い戻しは決めない） */
 import { betTrack, describeMiss, myMoves, totalPayout } from "./derby-extra.js?v=20261026-yacht9";
-
+//#endif
 /* 🥷 スリと防犯グッズ（Worker と同じ表。見せるだけ・買うのは Worker） */
 import { THEFT_MIN_TOTAL, THEFT_GUARDS, THEFT_GUARD_SALE_START_MS, guardPriceOf, weekStartOf, nextWeekStartOf } from "./yuu-theft.js?v=20261026-yacht9";
 
+//#if WEB
 /* ゆうダービーの固定オッズ（derby-runner と同じ計算） */
 import {
   isFixedOddsRace,
@@ -36,6 +38,7 @@ import {
   generateFixedOddsRaceOrder,
   FIXED_PAYOUT_RULE
 } from "./derby-odds.js?v=20261013-fixed-odds";
+//#endif
 
 /* 📨 友達に紹介（ヘッダーの赤いボタン。端末の共有画面でリンクを送る） */
 import { inviteInit } from "./yuinvite.js?v=20261110-invite2";
@@ -151,9 +154,11 @@ let unsubscribeGameInvites = null;
 let pendingGameInvites = [];
 let gameInvitesInitialized = false;
 
-/* ゆうダービー関連の状態 */
+/* 自分のコイン（残高の購読） */
 let myCoins = 0;
 let unsubscribeMyCoins = null;
+//#if WEB
+/* ゆうダービー関連の状態 */
 let unsubscribeLiveRace = null;
 let unsubscribeWinBets = null;
 let unsubscribeMyBetHistory = null;
@@ -163,6 +168,7 @@ let liveRaceResult = null;
 /* 手動レース（derbyManualRaces）：raceId → 予定。管理者が作ったものを全員が読む */
 let manualRaces = new Map();
 let unsubscribeManualRaces = null;
+//#endif
 /* 📢 お知らせ（announcements）：一覧は「お知らせ」タブを開いている間だけ購読する。
    未読は users/{名前}.lastAnnouncementReadAt（購読中の自分のユーザーデータ）と、お知らせの createdAt を比べて判定する */
 let announcements = [];
@@ -247,7 +253,9 @@ const imagePreviewStatus = document.getElementById("imagePreviewStatus");
 const imagePreviewClear = document.getElementById("imagePreviewClear");
 
 const chatView = document.getElementById("chatView");
+//#if WEB
 const derbyView = document.getElementById("derbyView");
+//#endif
 const gamesView = document.getElementById("gamesView");
 const mypageView = document.getElementById("mypageView");
 const playView = document.getElementById("playView");
@@ -261,6 +269,7 @@ const yurealView = document.getElementById("yurealView");
 const yurealTabButton = document.getElementById("yurealTabButton");
 let yurealAllowed = false, yurealLoadedFor = null;   // 📸 YuReal を見せてよいか（Worker が決める）
 
+//#if WEB
 const derbyCountdown = document.getElementById("derbyCountdown");
 const raceTrack = document.getElementById("raceTrack");
 const raceInfo = document.getElementById("raceInfo");
@@ -272,6 +281,7 @@ const betHorsesSelection = document.getElementById("betHorsesSelection");
 const betAmount = document.getElementById("betAmount");
 const betButton = document.getElementById("betButton");
 const horseList = document.getElementById("horseList");
+//#endif
 
 const gameRoomsEl = document.getElementById("gameRooms");
 const gameAreaEl = document.getElementById("gameArea");
@@ -1153,13 +1163,21 @@ async function startApp() {
     setTimeout(restoreNotificationsIfGranted, 3000);   /* 通知の再設定は急がない（起動の通信と取り合わないよう、少し待つ） */
     updateNotifyAnnouncement();
     listenMyCoins();
+//#if WEB
     listenMyBetHistory();
+//#endif
     listenGameInvites();
+//#if WEB
     listenManualRaces();
+//#endif
     checkLatestAnnouncement();
     updateAdminVisibility();
+//#if WEB
     catchUpMissedRaces();
     try { initializeSafeRace(); } catch (e) { console.error("レース初期化エラー:", e); }
+//#else
+//@     startServerClockSync();
+//#endif
   } catch (error) {
     console.error("アプリ起動エラー:", error);
   }
@@ -1592,7 +1610,7 @@ document.getElementById("copyYuId")?.addEventListener("click", async () => {
 
 /* 🗑 アカウントの削除（本人）。名前を入力して確かめ、Worker（/account）が、データ・ログイン情報をまとめて消す。App Store の審査で必要 */
 const ACCOUNT_DELETE_ERRORS = {
-  confirm_mismatch: "入力した名前が、あなたの名前と一致しません。", blocked: "いま、削除できない状態です（未精算の馬券など）。しばらくして、精算のあとにもう一度お試しください。",
+  confirm_mismatch: "入力した名前が、あなたの名前と一致しません。", blocked: "いま、削除できない状態です。しばらくして、もう一度お試しください。",
   cannot_target_admin: "管理者のアカウントは、ここからは削除できません。", user_not_found: "アカウントのデータが見つかりません。"
 };
 document.getElementById("deleteAccountButton")?.addEventListener("click", async () => {
@@ -3840,8 +3858,12 @@ function parseNotificationTarget(search) {
   try {
     const params = new URLSearchParams(search || "");
     const open = params.get("open");
-    /* 🏇 ゆうダービー開始前・📢 新しいお知らせの通知は、その画面を開く */
+    /* 📢 新しいお知らせなどの通知は、その画面を開く */
+//#if WEB
     if (open === "derby" || open === "announcements" || open === "games" || open === "economy" || open === "yureal") return { open };   // games：ゲームの招待の通知（招待のバナーが出る画面）
+//#else
+//@     if (open === "announcements" || open === "games" || open === "economy" || open === "yureal") return { open };   // games：ゲームの招待の通知（招待のバナーが出る画面）
+//#endif
     if (open !== "chat") return null;
     return { open: "chat", friendship: params.get("friendship") || null, group: params.get("group") || null };
   } catch (error) {
@@ -3910,7 +3932,7 @@ if ("serviceWorker" in navigator) {
 
 /* =========================================================
    アプリ内トースト通知／ブラウザ通知
-   （メッセージ受信・ゆうダービー開始などに使用。
+   （メッセージ受信などに使用。
     FCM/サービスワーカーの設定に依存せず、常に動く軽量版）
 ========================================================= */
 
@@ -4032,8 +4054,16 @@ tabButtons.forEach((button) => {
 });
 
 /* アプリ版（スマホ）：「あそぶ」の中の画面と、ヘッダーに出す画面の名前 */
+//#if WEB
 const APP_PLAY_VIEWS = ["derby", "yuworld", "economy", "games"];
+//#else
+//@ const APP_PLAY_VIEWS = ["yuworld", "economy", "games"];
+//#endif
+//#if WEB
 const APP_VIEW_TITLES = { chat: "チャット", play: "あそぶ", derby: "ゆうダービー", yuworld: "ゆうワールド", games: "ゆうワールド", economy: "ゆう経済", mart: "ゆうマート", yureal: "YuSnap β", announcements: "お知らせ", mypage: "マイページ", usermanage: "ユーザー管理" };
+//#else
+//@ const APP_VIEW_TITLES = { chat: "チャット", play: "あそぶ", yuworld: "ゆうワールド", games: "ゆうワールド", economy: "ゆう経済", mart: "ゆうマート", yureal: "YuSnap β", announcements: "お知らせ", mypage: "マイページ", usermanage: "ユーザー管理" };
+//#endif
 const appHeaderTitle = document.getElementById("appHeaderTitle");
 const appPlusMenu = document.getElementById("appPlusMenu");
 document.body.dataset.view = "chat";
@@ -4066,7 +4096,11 @@ function switchView(view) {
   if (view === "usermanage" && !isAdminUser()) view = "chat";
   if (view === "yureal" && !yurealAllowed) view = "chat";   /* 📸 YuReal は、公開されるまで管理者だけ */
   currentViewName = view;
+//#if WEB
   const views = { chat: chatView, play: playView, derby: derbyView, economy: economyView, games: gamesView, yuworld: yuworldView, mart: martView, yureal: yurealView, announcements: announcementsView, mypage: mypageView, usermanage: userManageView };
+//#else
+//@   const views = { chat: chatView, play: playView, economy: economyView, games: gamesView, yuworld: yuworldView, mart: martView, yureal: yurealView, announcements: announcementsView, mypage: mypageView, usermanage: userManageView };
+//#endif
 
   Object.entries(views).forEach(([name, element]) => {
     if (!element) return;
@@ -4075,7 +4109,7 @@ function switchView(view) {
   });
 
   tabButtons.forEach((button) => {
-    button.classList.toggle("active", button.dataset.view === (view === "games" ? "yuworld" : view) || (button.dataset.view === "play" && APP_PLAY_VIEWS.includes(view)));   /* ゲームの画面は、ゆうワールドの中。アプリ版では、ダービー・ゆうワールド・ゆう経済は「あそぶ」の中 */
+    button.classList.toggle("active", button.dataset.view === (view === "games" ? "yuworld" : view) || (button.dataset.view === "play" && APP_PLAY_VIEWS.includes(view)));   /* ゲームの画面は、ゆうワールドの中。アプリ版では、ゆうワールド・ゆう経済は「あそぶ」の中 */
   });
 
   /* アプリ版（スマホ）の見た目用：いまの画面と、会話を開いているか */
@@ -4086,8 +4120,10 @@ function switchView(view) {
 
   if (view === "chat") { markSelectedChatAsRead(); renderFriends(); renderGroups(); loadSupporterData(); }
   if (view === "mypage") { loadMyPage(); syncAppProfile(); renderSupporterCard(); }
+//#if WEB
   if (view === "derby") { refreshDerbySubscriptionsIfNeeded(); renderRaceInfo(); }
   else stopDerbySubscriptions();
+//#endif
   /* ルーム一覧の監視はゲーム画面を開いている間だけ（戻ったときに最新の一覧を読み直す）。開いているルームの監視は続ける */
   if (view === "games") loadGameRooms();
   else stopGameRoomsSubscription();
@@ -4140,8 +4176,8 @@ function lazyCaller(mod, name) {
 
 const adminCfg = () => ({ callAdmin: (action, payload) => callAdminApi(action, payload), isAdmin: () => isAdminUser(), esc: (v) => escapeHTML(v) });
 
-/* 🎡 ゆうワールド（ゆうスロ）。トークン・ユーザー名・最上位管理者かどうかは呼ばれた時点の状態を使う */
-const lazyYuWorld = lazyModule("./yuworld.js?v=20261123-fix1", (m) => m.initYuWorld({
+/* 🎡 ゆうワールド（お店の一覧）。トークン・ユーザー名・最上位管理者かどうかは呼ばれた時点の状態を使う */
+const lazyYuWorld = lazyModule("./yuworld.js?v=20261123-app1", (m) => m.initYuWorld({
   openGame: (type) => openGameFromWorld(type),
   pendingInviteTypes: () => pendingGameInvites.map((invite) => invite.gameType),
   endpoint: NOTIFY_ENDPOINT.replace(/\/notify$/, "/yuslot"),
@@ -4180,7 +4216,7 @@ async function loadYurealConfig() {
 }
 
 /* 🏪 ゆうマート */
-const lazyYuMart = lazyModule("./yumart.js?v=20261123-fix1", (m) => m.initYuMart({
+const lazyYuMart = lazyModule("./yumart.js?v=20261123-app1", (m) => m.initYuMart({
   endpoint: NOTIFY_ENDPOINT.replace(/\/notify$/, "/yuslot"),
   getToken: () => currentUser.getIdToken(),
   getUsername: () => username
@@ -4203,10 +4239,15 @@ const transferOpenUser = lazyOpener(lazyTransfer, "transferOpenUser", () => curr
 const transferOpenAdmin = lazyOpener(lazyTransfer, "transferOpenAdmin", () => currentViewName === "usermanage");
 const transferReset = lazyCaller(lazyTransfer, "transferReset");
 
-/* 🌈 管理者の画面（確変台の当選者・最強決定戦のエントリー・経済の状態） */
-const lazyKakuWinners = lazyModule("./yukakuwinners.js?v=20261026-grant1", (m) => m.kakuWinnersInit(adminCfg()));
-const kakuWinnersOpen = lazyOpener(lazyKakuWinners, "kakuWinnersOpen", () => currentViewName === "usermanage");
-const kakuWinnersReset = lazyCaller(lazyKakuWinners, "kakuWinnersReset");
+/* 管理者の画面（最強決定戦のエントリー・経済の状態） */
+//#if WEB
+const lazyAdminWinners = lazyModule("./yukakuwinners.js?v=20261026-grant1", (m) => m.kakuWinnersInit(adminCfg()));
+const adminWinnersOpen = lazyOpener(lazyAdminWinners, "kakuWinnersOpen", () => currentViewName === "usermanage");
+const adminWinnersReset = lazyCaller(lazyAdminWinners, "kakuWinnersReset");
+//#else
+//@ const adminWinnersOpen = () => {};
+//@ const adminWinnersReset = () => {};
+//#endif
 const lazyKeshiEnroll = lazyModule("./yukeshi-admin.js?v=20261026-ltd10", (m) => m.keshiEnrollInit(adminCfg()));
 const keshiEnrollOpen = lazyOpener(lazyKeshiEnroll, "keshiEnrollOpen", () => currentViewName === "usermanage");
 const keshiEnrollReset = lazyCaller(lazyKeshiEnroll, "keshiEnrollReset");
@@ -4216,7 +4257,7 @@ const economyAdminReset = lazyCaller(lazyEconomyAdmin, "economyAdminReset");
 
 /* 🎲 ヨット / 🥊 消しバトの部屋の描画：読み込み前は準備中の表示を出し、読み込めたらもう一度描く */
 const lazyYachtRoom = lazyModule("./yuyacht.js?v=20261026-yacht6");
-const lazyKeshiRoom = lazyModule("./yukeshi-room.js?v=20261123-fix1");
+const lazyKeshiRoom = lazyModule("./yukeshi-room.js?v=20261123-app1");
 const lazyBilliardsRoom = lazyModule("./yubilliards.js?v=20261112-all1");
 function lazyRoomRenderer(mod, name) {
   return (boardEl, room, c) => {
@@ -4254,22 +4295,29 @@ logoutButton?.addEventListener("click", async () => {
     if (unsubscribeGameRooms) { unsubscribeGameRooms(); unsubscribeGameRooms = null; }
     if (unsubscribeCurrentGame) { unsubscribeCurrentGame(); unsubscribeCurrentGame = null; }
     if (unsubscribeGameInvites) { unsubscribeGameInvites(); unsubscribeGameInvites = null; }
+//#if WEB
     if (unsubscribeManualRaces) { unsubscribeManualRaces(); unsubscribeManualRaces = null; }
     manualRaces = new Map();
     selectedBetRaceId = null;
     document.getElementById("derbyAdminPanel")?.classList.add("hidden");
+//#endif
     resetAnnouncementsState();
     resetUserManageState();
     transferReset();
-    kakuWinnersReset();
+//#if WEB
+    adminWinnersReset();
+//#endif
     keshiEnrollReset();
     economyAdminReset();
     pendingGameInvites = [];
     gameInvitesInitialized = false;
     if (unsubscribeMyCoins) { unsubscribeMyCoins(); unsubscribeMyCoins = null; }
+//#if WEB
     stopDerbySubscriptions();
     if (unsubscribeMyBetHistory) { unsubscribeMyBetHistory(); unsubscribeMyBetHistory = null; }
+//#endif
     resetNewMessageWatch();
+//#if WEB
     if (raceCountdownTimer) { clearInterval(raceCountdownTimer); raceCountdownTimer = null; }
     derbyReplay = null;
     lastActiveBettingRaceId = null;
@@ -4277,16 +4325,21 @@ logoutButton?.addEventListener("click", async () => {
     liveRaceResult = null;
     lastGenerationAttemptAt = -999;
     currentWinPool = {};
+//#endif
     myCoins = 0;
+//#if WEB
     myAllBets = [];
     betHistoryErrorCode = "";
     myPageStatsShownForUid = "";
+//#endif
     myLatestUserData = null;
     resetLoginBonusState();
     economyBankAmount = "";
+//#if WEB
     cachedPopularityForRaceId = null;
     cachedPopularity = null;
     lastRaceInfoRenderAt = -999;
+//#endif
 
     resetNotifyAnnouncement();
     await unregisterFcmTokenForThisDevice();
@@ -4311,12 +4364,15 @@ async function loadMyPage() {
   if (!currentUser) return;
   if (myName) myName.textContent = username || "ゲスト";
 
+//#if WEB
   /* 馬券の購読がエラーで止まっていたら、マイページを開いたこのときに1回だけ作り直す（自動では繰り返さない） */
   refreshMyBetHistoryWindow({ retryAfterError: true });
   await loadMyPageStats();
+//#endif
   await loadCoinRanking();
 }
 
+//#if WEB
 async function loadMyPageStats() {
   const session = appSessionSeq;
   if (!currentUser || !username) return;
@@ -4382,9 +4438,10 @@ async function loadMyPageStats() {
     renderUnavailable();
   }
 }
+//#endif
 
-/* 「🏆 総資産ランキング」（マイページ／ゆうダービー画面の両方から呼べる共通版）
-   ・自動処理（derby-runner）が作るまとめ rankings/assets を1件読むだけ（users は読まない）。13:00 に作り、9:00〜16:59 は1時間おきに更新する
+/* 「🏆 総資産ランキング」（マイページなどから呼べる共通版）
+   ・自動処理が作るまとめ rankings/assets を1件読むだけ（users は読まない）。13:00 に作り、9:00〜16:59 は1時間おきに更新する
    ・総資産 = 手持ちコイン + 銀行預金 + 保有株の評価額 − 借入残高。全ユーザーが対象・同額は同じ順位
    ・読み込んだものは、9:00〜16:59 は20分、それ以外は次の13:00 の更新まで使い回す（画面を開くたびに読み直さない） */
 async function renderAssetRankingInto(targetEl) {
@@ -4436,6 +4493,7 @@ async function loadCoinRanking() {
   await renderAssetRankingInto(rankingEl);
 }
 
+//#if WEB
 async function loadDerbyCoinRanking() {
   await renderAssetRankingInto(document.getElementById("raceRankingPanel"));
 }
@@ -4493,22 +4551,22 @@ const BET_TYPE_COUNT = { win: 1, place: 1, quinella: 2, trio: 3, trifecta: 3 };
 function getBetTypeName(type) { return BET_TYPE_NAMES[type] || type; }
 function getHorseName(number) { return SAFE_RACE_HORSES.find((h) => h.number === number)?.name || `${number}番`; }
 
-/* ----- 時刻の基準（日本時間 15:02:00）-----
-   ・開催時刻・レースID（YYYY-MM-DD）は、端末のタイムゾーンに関係なく日本時間で計算する
-     （自動開催 derby-runner/run.mjs と同じ基準。日本の端末では以前と同じ結果になる）
+//#endif
+/* ----- 時刻の基準（日本時間）-----
+   ・日付（YYYY-MM-DD）は、端末のタイムゾーンに関係なく日本時間で計算する（サーバーの自動処理と同じ基準）
    ・端末の時計がずれていてもカウントダウンや演出がずれないよう、サーバー（GitHub Pages）の時刻との差を補正する */
 
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
-let derbyClockOffsetMs = 0;
+let serverClockOffsetMs = 0;
 
 /* サーバーの時刻に合わせた「今」 */
-function derbyNow() {
-  return new Date(Date.now() + derbyClockOffsetMs);
+function syncedNow() {
+  return new Date(Date.now() + serverClockOffsetMs);
 }
 
 /* サーバーが返す Date ヘッダーとの差を測る（2秒以内の差は補正しない） */
-async function syncDerbyClock() {
+async function syncServerClock() {
   try {
     const sentAt = Date.now();
     const response = await fetch(`./manifest.json?clock=${sentAt}`, { method: "HEAD", cache: "no-store" });
@@ -4517,7 +4575,7 @@ async function syncDerbyClock() {
     if (!Number.isFinite(serverDate)) return;
     /* Date ヘッダーは秒単位なので +500ms、通信の往復の半分を足して推定する */
     const offset = serverDate + 500 + (receivedAt - sentAt) / 2 - receivedAt;
-    derbyClockOffsetMs = Math.abs(offset) > 2000 ? Math.round(offset) : 0;
+    serverClockOffsetMs = Math.abs(offset) > 2000 ? Math.round(offset) : 0;
   } catch (error) {
     console.warn("時刻の確認に失敗（端末の時計を使います）:", error);
   }
@@ -4528,7 +4586,7 @@ function toJstFields(date) {
   return new Date(date.getTime() + JST_OFFSET_MS);
 }
 
-function formatRaceId(date) {
+function formatDateId(date) {
   const jst = toJstFields(date);
   const year = jst.getUTCFullYear();
   const month = String(jst.getUTCMonth() + 1).padStart(2, "0");
@@ -4536,7 +4594,14 @@ function formatRaceId(date) {
   return `${year}-${month}-${day}`;
 }
 
-function getTodayRaceId() { return formatRaceId(derbyNow()); }
+function getTodayDateId() { return formatDateId(syncedNow()); }
+let serverClockTimer = null;
+/* 端末の時計がずれていても日付を正しく出すために、サーバーの時刻との差を、起動時と10分おきに測る */
+function startServerClockSync() {
+  syncServerClock();
+  if (!serverClockTimer) serverClockTimer = setInterval(syncServerClock, 10 * 60 * 1000);
+}
+//#if WEB
 
 /* raceId → 開催時刻（日本時間）。「YYYY-MM-DD」は 15:02、「YYYY-MM-DD-1130」は 11:30 */
 function isMorningRaceId(raceId) {
@@ -4582,13 +4647,13 @@ function getRaceContextsForDay(dayId) {
 
 /* 前日・当日・翌日のレース（開催時刻の早い順） */
 function getRaceContextsAround(now) {
-  return [-1, 0, 1].flatMap((offset) => getRaceContextsForDay(formatRaceId(new Date(now.getTime() + offset * DAY_MS))));
+  return [-1, 0, 1].flatMap((offset) => getRaceContextsForDay(formatDateId(new Date(now.getTime() + offset * DAY_MS))));
 }
 
 /* いま投票を受け付けているレース（開催時刻の早い順）。
    ・自動開催の回は、これまでどおり「締切前のいちばん早い回」の1つだけ（前の回の締切から受付）
    ・手動レースは、管理者が決めた受付開始〜受付終了のあいだだけ */
-function getOpenBettingRaceContexts(now = derbyNow()) {
+function getOpenBettingRaceContexts(now = syncedNow()) {
   const contexts = getRaceContextsAround(now);
   const nextAuto = contexts.find((c) => !c.manual && now < c.closeTime);
   const manualOpen = contexts.filter((c) => c.manual && now >= c.openTime && now < c.closeTime);
@@ -4601,19 +4666,19 @@ let selectedBetRaceId = null;
 /* 投票の対象：受付中のいちばん早いレース（受付中が複数あるときは選んだレース）。
    締切を過ぎたら、その瞬間から次の回（11:30→15:02→翌日11:30）が対象になる
    （1日のどこかの時間帯で投票が完全に止まることがないようにする） */
-function getActiveBettingRaceContext(now = derbyNow()) {
+function getActiveBettingRaceContext(now = syncedNow()) {
   const open = getOpenBettingRaceContexts(now);
   return open.find((c) => c.raceId === selectedBetRaceId) || open[0];
 }
 
 /* 直近に発走した（または、まさに発走中の）レース。演出・結果表示・精算の対象。 */
-function getLiveRaceContext(now = derbyNow()) {
+function getLiveRaceContext(now = syncedNow()) {
   const started = getRaceContextsAround(now).filter((c) => now >= c.raceTime);
   return started[started.length - 1];
 }
 
 /* 次に始まるレース（カウントダウンの対象）。締切ではなく開催時刻で切り替える */
-function getNextRaceStartContext(now = derbyNow()) {
+function getNextRaceStartContext(now = syncedNow()) {
   return getRaceContextsAround(now).find((c) => now < c.raceTime);
 }
 
@@ -4624,7 +4689,7 @@ function formatRaceLabel(raceId) {
 }
 
 /* 右上のカウントダウンの文字（レース中は「レース中」、それ以外は次のレースまでの残り） */
-function getDerbyCountdownText(now = derbyNow()) {
+function getDerbyCountdownText(now = syncedNow()) {
   const live = getLiveRaceContext(now);
   const sinceStart = now.getTime() - live.raceTime.getTime();
   const liveShow = live.raceId === getLiveRaceContext().raceId ? getLiveShow() : null;
@@ -4632,14 +4697,16 @@ function getDerbyCountdownText(now = derbyNow()) {
   if (sinceStart >= 0 && sinceStart < showSeconds * 1000) return "🏇 レース中";
 
   const next = getNextRaceStartContext(now);
-  const dayLabel = next.dayId === formatRaceId(now) ? "本日" : "明日";
+  const dayLabel = next.dayId === formatDateId(now) ? "本日" : "明日";
   return `${dayLabel} ${formatCountdown(next.raceTime.getTime() - now.getTime())}`;
 }
 
+//#endif
 function formatJstHourMinute(date) {
   const jst = toJstFields(date);
   return `${String(jst.getUTCHours()).padStart(2, "0")}:${String(jst.getUTCMinutes()).padStart(2, "0")}`;
 }
+//#if WEB
 
 
 function formatCountdown(ms) {
@@ -4653,6 +4720,7 @@ function formatCountdown(ms) {
 
 /* ----- ゆうcoin残高 ----- */
 
+//#endif
 function updateCoinDisplays(coins) {
   myCoins = coins;
   if (coinBalanceEl) coinBalanceEl.textContent = String(coins);
@@ -4671,7 +4739,7 @@ async function grantStartingCoinsIfNeeded() {
 /* 追加ボーナス500コイン：初期コイン（coins）が付いたあと、まだ受け取っていなければ1回だけ加算する。
    トランザクションの中で bonus500Granted を確かめてから加算するので、
    再読み込み・再ログイン・複数端末から同時に開いても二重には加算されない。
-   （ブラウザで受け取れなかった人の分は、ゆうダービー自動開催（derby-runner）でも同じ条件で配布する） */
+   （ブラウザで受け取れなかった人の分は、サーバーの自動処理でも同じ条件で配布する） */
 let bonusGrantInFlight = false;
 
 async function grantBonusCoinsIfNeeded() {
@@ -4724,6 +4792,7 @@ function listenMyCoins() {
   );
 }
 
+//#if WEB
 /* ----- オッズ（賭けられている金額から計算） ----- */
 
 function computeWinOdds(horseNumber) {
@@ -5108,7 +5177,7 @@ const settleWaitTimers = new Map();
 async function settleMyBets(raceId) {
   const session = appSessionSeq;
   if (!currentUser || !username) return;
-  const waitMs = parseRaceIdToDate(raceId).getTime() + RACE_SETTLE_DELAY_MS - derbyNow().getTime();
+  const waitMs = parseRaceIdToDate(raceId).getTime() + RACE_SETTLE_DELAY_MS - syncedNow().getTime();
   if (waitMs > 0) {
     if (!settleWaitTimers.has(raceId)) settleWaitTimers.set(raceId, setTimeout(() => { settleWaitTimers.delete(raceId); settleMyBets(raceId); }, waitMs + 1000));
     return;
@@ -5165,7 +5234,7 @@ async function catchUpMissedRaces(attempt = 1) {
 
       if (!raceSnap.exists()) {
         const scheduledTime = parseRaceIdToDate(raceId);
-        if (derbyNow() >= scheduledTime) {
+        if (syncedNow() >= scheduledTime) {
           await tryGenerateRaceResult(raceId);
           raceSnap = await getDoc(raceRef);
         }
@@ -5220,10 +5289,10 @@ const BET_QUERY_FALLBACK_CODES = new Set(["failed-precondition"]);
 const BET_STATS_FALLBACK_CODES = new Set(["failed-precondition", "unimplemented"]);
 
 function getRecentBetRaceIds() {
-  const now = derbyNow();
+  const now = syncedNow();
   const ids = new Set();
   for (let d = -1; d < BET_HISTORY_RECENT_DAYS; d++) {
-    const dayId = formatRaceId(new Date(now.getTime() - d * DAY_MS));
+    const dayId = formatDateId(new Date(now.getTime() - d * DAY_MS));
     getRaceContextsForDay(dayId).forEach((c) => ids.add(c.raceId));
   }
   /* 新しいレースを優先して、上限までにする */
@@ -5649,12 +5718,12 @@ function getLiveShow() {
   return liveShowCache.show;
 }
 
-function getLiveElapsedSeconds(now = derbyNow()) {
+function getLiveElapsedSeconds(now = syncedNow()) {
   return (now.getTime() - getLiveRaceContext(now).raceTime.getTime()) / 1000;
 }
 
 /* 全馬がゴールして「レース終了」になったか（それまでは結果・的中表示を出さない） */
-function isLiveRaceResultRevealed(now = derbyNow()) {
+function isLiveRaceResultRevealed(now = syncedNow()) {
   if (!liveRaceResult) return false;
   const show = getLiveShow();
   return getLiveElapsedSeconds(now) >= (show ? show.revealTime : RACE_DURATION_SECONDS);
@@ -5893,7 +5962,7 @@ function drawRaceStageFrame() {
     return;
   }
 
-  const now = derbyNow();
+  const now = syncedNow();
   const liveContext = getLiveRaceContext(now);
   const elapsed = getLiveElapsedSeconds(now);
   const show = getLiveShow();
@@ -5929,7 +5998,7 @@ function drawRaceStageFrame() {
     raceStage.render({ show, t: show.revealTime + 2, myHorses, snapCamera: raceStageSnapCamera });
     setStageOverlay("raceStageBadge", `🏁 ${escapeHTML(formatRaceLabel(liveContext.raceId))} レース終了`);
     setStageOverlay("raceStageTop3", "", false);
-    const dayLabel = next.dayId === formatRaceId(now) ? "本日" : "明日";
+    const dayLabel = next.dayId === formatDateId(now) ? "本日" : "明日";
     setStageOverlay("raceSubtitle", `次のレースは${dayLabel} ${formatJstHourMinute(next.raceTime)} 発走`);
     clearRaceExtras();
   }
@@ -5938,7 +6007,7 @@ function drawRaceStageFrame() {
 
 /* ----- 前回のレースを再生（閲覧専用。結果を読み込むだけで、何も書き込まない） ----- */
 
-function getPreviousRaceForReplay(now = derbyNow()) {
+function getPreviousRaceForReplay(now = syncedNow()) {
   const live = getLiveRaceContext(now);
   const liveId = live.raceId;
   if (liveRaceResult && Array.isArray(liveRaceResult.resultOrder) && isLiveRaceResultRevealed(now)) {
@@ -6097,8 +6166,8 @@ function renderRaceInfo() {
   ensureDerbyLiveStructure();
 
   const activeContext = getActiveBettingRaceContext();
-  const now = derbyNow();
-  const isToday = formatRaceId(now) === activeContext.dayId;
+  const now = syncedNow();
+  const isToday = formatDateId(now) === activeContext.dayId;
 
   const scheduleLine = document.getElementById("raceScheduleLine");
   if (scheduleLine) {
@@ -6276,7 +6345,7 @@ let lastRaceInfoRenderAt = -999;
 function tickDerbyCountdown() {
   refreshDerbySubscriptionsIfNeeded();
 
-  const now = derbyNow();
+  const now = syncedNow();
   const liveContext = getLiveRaceContext(now);
   const elapsed = (now.getTime() - liveContext.raceTime.getTime()) / 1000;
 
@@ -6362,21 +6431,21 @@ let derbyClockSyncTimer = null;
 
 function initializeSafeRace() {
   derbyReplay = null;
-  syncDerbyClock();
-  if (!derbyClockSyncTimer) derbyClockSyncTimer = setInterval(syncDerbyClock, 10 * 60 * 1000);
+  syncServerClock();
+  if (!derbyClockSyncTimer) derbyClockSyncTimer = setInterval(syncServerClock, 10 * 60 * 1000);
   resetBetHorsesSelection();
   updateBetFormEnabled();
   tickDerbyCountdown();
   if (raceCountdownTimer) clearInterval(raceCountdownTimer);
   raceCountdownTimer = setInterval(tickDerbyCountdown, 150);
 }
-
+//#endif
 /* =========================================================
-   管理者（ゆうダービー管理）
+   管理者
    ・管理者は Firebase Authentication の UID だけで判定する（メールアドレスや名前では判定しない）
    ・管理者以外には管理画面・管理ボタンを表示しない
    ・Firestore のルール（firestore.rules）でも同じ UID を確かめていて、
-     管理者以外が手動レースを直接書き換えようとしても拒否される
+     管理者以外が管理用のデータを直接書き換えようとしても拒否される
 ========================================================= */
 
 const ADMIN_UID = "g51wzTvJFsZiYEfre5aDuDckJXY2";
@@ -6387,11 +6456,15 @@ function isAdminUser() {
 
 function updateAdminVisibility() {
   const admin = isAdminUser();
+//#if WEB
   document.getElementById("derbyAdminPanel")?.classList.toggle("hidden", !admin);
+//#endif
   document.getElementById("announcementAdminPanel")?.classList.toggle("hidden", !admin);
   updateUserManageVisibility();
   loadYurealConfig();
+//#if WEB
   if (admin) renderManualRaceAdminList();
+//#endif
 }
 
 /* =========================================================
@@ -6468,7 +6541,9 @@ async function promptAdminRename(oldName) {
     /* 自分自身の名前を変えたときは、新しい名前で読み込み直す */
     if (targetUid && targetUid === currentUser?.uid) { location.reload(); return; }
     loadCoinRanking();
+//#if WEB
     if (isDerbyViewActive()) loadDerbyCoinRanking();
+//#endif
   } catch (error) {
     const messages = { USER_NOT_FOUND: "そのユーザーは見つかりませんでした（すでに名前が変わった可能性があります）。", NAME_TAKEN: "その名前はすでに使われています。", NOT_ADMIN: "管理者だけが変更できます。" };
     if (!messages[error.message]) console.error("管理者の名前変更エラー:", error);
@@ -6579,7 +6654,9 @@ function describeAdminError(error) {
   const code = error?.code || "";
   if (code === "blocked") {
     const blockers = error.detail?.blockers || [];
+//#if WEB
     if (blockers.includes("unsettled_bets")) return `未精算のゆうダービーの馬券が ${error.detail?.counts?.raceBetsUnsettled || 1} 件あるため、削除できません。精算されてから削除してください。`;
+//#endif
     if (blockers.includes("admin")) return ADMIN_ERROR_MESSAGES.cannot_target_admin;
     return "削除できない理由があります。";
   }
@@ -6590,7 +6667,7 @@ function describeAdminError(error) {
   return `処理できませんでした（${code || "不明なエラー"}）。`;
 }
 
-/* 💰 ゆう経済・🏇 ゆうダービー：本人の操作を Worker（残高・締切・結果・払い戻しをサーバーで検証）に頼む。
+/* 💰 ゆう経済：本人の操作を Worker（残高・締切・結果などをサーバーで検証）に頼む。
    ログインしていない・ネットワークエラーのときは code を付けた Error を投げる */
 async function callEconomyApi(action, payload = {}) {
   if (!currentUser || !username) throw economyError("NOT_LOGGED_IN");
@@ -6692,7 +6769,9 @@ function umBadges(entry) {
 async function openUserManageView() {
   if (!isAdminUser()) { switchView("chat"); return; }
   transferOpenAdmin();
-  kakuWinnersOpen();
+//#if WEB
+  adminWinnersOpen();
+//#endif
   keshiEnrollOpen();
   economyAdminOpen();
   if (!userManageData && !userManageLoading) await loadUserManageList();
@@ -6845,6 +6924,7 @@ function renderUserManageDetail(info) {
       <p id="umCoinError" class="admin-form-error"></p>
     </section>` : "";
 
+//#if WEB
   /* 確変チケットを1人に渡す（確認のあと Worker に頼む。grantId が同じ操作は、Worker が2回目から何もしない） */
 async function runUserManageKakuTicket(info) {
   if (userManageBusy) return;
@@ -6865,9 +6945,11 @@ async function runUserManageKakuTicket(info) {
     userManageBusy = false;
   }
 }
+//#endif
 
+//#if WEB
 /* 宝くじの購入の取り消し・全額返金（本人から頼まれたとき。いま販売中の回の分だけ） */
-  const lotteryHtml = hasUserDoc && info.user && !deleting ? `
+  const extraHtmlA = hasUserDoc && info.user && !deleting ? `
     <section class="um-coins" aria-label="宝くじの取り消し">
       <div class="um-coins-balance">🎟 宝くじ</div>
       <div class="um-coins-row"><button type="button" class="secondary" data-um-lottery-refund>購入を取り消して全額返金…</button></div>
@@ -6876,7 +6958,7 @@ async function runUserManageKakuTicket(info) {
     </section>` : "";
 
   /* 確変チケット（1回ぶん）を渡す。使い方・期限（60日）は、ゆう番くじ D賞と同じ */
-  const kakuTicketHtml = hasUserDoc && info.user && !deleting ? `
+  const extraHtmlB = hasUserDoc && info.user && !deleting ? `
     <section class="um-coins" aria-label="確変チケットを渡す">
       <div class="um-coins-balance">🌈 確変チケット</div>
       <div class="um-coins-row">
@@ -6886,6 +6968,10 @@ async function runUserManageKakuTicket(info) {
       <p class="um-note">1枚で、確変台の枠を1回、予約できます（有効期限：渡してから60日）。ゆうマートでは売れません。</p>
       <p id="umKakuTicketError" class="admin-form-error"></p>
     </section>` : "";
+//#else
+//@   const extraHtmlA = "";
+//@   const extraHtmlB = "";
+//#endif
 
   /* ⭐ サポーター：お金なしで、サポーターにする／やめさせる（管理者だけ） */
   const supporterHtml = info.userDocNames.length >= 1 && !deleting ? `
@@ -6917,8 +7003,8 @@ async function runUserManageKakuTicket(info) {
     <h3>👤 ${escapeHTML(info.name || "ログイン情報だけのアカウント")}</h3>
     <dl class="um-detail">${rows.map(([k, v]) => `<dt>${escapeHTML(k)}</dt><dd>${escapeHTML(v)}</dd>`).join("")}</dl>
     ${coinHtml}
-    ${lotteryHtml}
-    ${kakuTicketHtml}
+    ${extraHtmlA}
+    ${extraHtmlB}
     ${supporterHtml}
     ${assetHtml}
     ${info.isAdmin ? `<p class="um-note">管理者のアカウントは停止・削除できません。</p>` : `<p class="um-note">サブアカウントかどうか確信がないときは、まず「停止」を使ってください（あとで解除できます）。完全削除は取り消せません。</p>`}
@@ -6931,8 +7017,10 @@ async function runUserManageKakuTicket(info) {
   modalEl.querySelector('[data-um-action="delete"]')?.addEventListener("click", () => renderUserManageDelete(info));
   modalEl.querySelector('[data-um-action="deleteAuthOnly"]')?.addEventListener("click", () => renderUserManageDeleteAuthOnly(info));
   modalEl.querySelectorAll("[data-um-coin]").forEach((button) => button.addEventListener("click", () => runUserManageAdjustCoins(info, button.dataset.umCoin)));
+//#if WEB
   modalEl.querySelector("[data-um-lottery-refund]")?.addEventListener("click", () => runUserManageLotteryRefund(info));
   modalEl.querySelector("[data-um-kaku-ticket]")?.addEventListener("click", () => runUserManageKakuTicket(info));
+//#endif
   modalEl.querySelectorAll("[data-um-supporter]").forEach((button) => button.addEventListener("click", () => runUserManageSupporter(info, button.dataset.umSupporter === "on")));
   if (supporterHtml) loadUserManageSupporter(info);
   modalEl.querySelectorAll("[data-um-asset]").forEach((button) => button.addEventListener("click", () => previewUserManageAssets(info, button.dataset.umAsset)));
@@ -7140,6 +7228,7 @@ async function runUserManageAdjustCoins(info, direction) {
   }
 }
 
+//#if WEB
 /* 宝くじの購入の取り消し・全額返金：まず何枚・いくらかを Worker に確かめて、確認してから実行する */
 async function runUserManageLotteryRefund(info) {
   if (userManageBusy) return;
@@ -7163,6 +7252,7 @@ async function runUserManageLotteryRefund(info) {
     userManageBusy = false;
   }
 }
+//#endif
 
 /* 読み間違えにくい文字だけで、ランダムなパスワードを作る */
 function generateAdminPassword(length = 12) {
@@ -7287,14 +7377,18 @@ function describeDeletionPlan(plan) {
     : g.action === "delete"
       ? `<li class="del">グループ「${escapeHTML(g.name)}」：ほかにメンバーがいないので、グループとそのメッセージを削除</li>`
       : `<li class="change">グループ「${escapeHTML(g.name)}」：メンバーから外す</li>`).join("");
+//#if WEB
+  const betLines = `${line("ゆうダービーの精算済みの馬券（削除）", c.raceBetsSettled)}${c.raceBetsUnsettled ? line("ゆうダービーの未精算の馬券（あるため削除できません）", c.raceBetsUnsettled, "block") : ""}`;
+//#else
+//@   const betLines = "";
+//#endif
   return `
     <ul class="um-plan">
       ${line("1対1のメッセージ（削除）", c.friendMessages)}
       ${line("フレンド関係（削除）", c.friends)}
       ${groupLines}
       ${line("グループで送ったメッセージ（残す）", c.groupMessagesKept, "keep")}
-      ${line("ゆうダービーの精算済みの馬券（削除）", c.raceBetsSettled)}
-      ${c.raceBetsUnsettled ? line("ゆうダービーの未精算の馬券（あるため削除できません）", c.raceBetsUnsettled, "block") : ""}
+      ${betLines}
       ${c.gameRoomsDelete + c.gameRoomsLeave ? line("ゲームルーム（作ったものは削除・参加中は退出）", c.gameRoomsDelete + c.gameRoomsLeave, "change") : ""}
       ${c.gameInvites + c.gameRoomOwners ? line("ゲームの招待・ルームの記録（削除）", c.gameInvites + c.gameRoomOwners) : ""}
       ${c.fcmTokens ? line("通知を受け取る端末の登録（削除）", c.fcmTokens) : ""}
@@ -7385,7 +7479,7 @@ function renderUserManageDeleteAuthOnly(info) {
   });
 }
 
-document.getElementById("userManageRefreshButton")?.addEventListener("click", () => { loadUserManageList(); transferOpenAdmin(); kakuWinnersOpen(); });
+document.getElementById("userManageRefreshButton")?.addEventListener("click", () => { loadUserManageList(); transferOpenAdmin(); adminWinnersOpen(); });
 userManageSearchInput?.addEventListener("input", renderUserManageList);
 userManageSortSelect?.addEventListener("change", renderUserManageList);
 userManageView?.addEventListener("click", (event) => {
@@ -7411,7 +7505,7 @@ function parseJstDateTimeInput(dateText, timeText) {
   if (mo < 1 || mo > 12 || d < 1 || d > 31 || h > 23 || mi > 59) return null;
   const date = new Date(Date.UTC(y, mo - 1, d, h, mi, 0, 0) - JST_OFFSET_MS);
   /* 2/30 などの存在しない日付は弾く */
-  if (formatRaceId(date) !== `${dm[1]}-${dm[2]}-${dm[3]}`) return null;
+  if (formatDateId(date) !== `${dm[1]}-${dm[2]}-${dm[3]}`) return null;
   return date;
 }
 
@@ -7421,12 +7515,13 @@ function formatJstDateTime(date) {
   return `${jst.getUTCMonth() + 1}/${jst.getUTCDate()} ${formatJstHourMinute(date)}`;
 }
 
+//#if WEB
 /* ----- ゆうダービー：手動レース（特別レース） ----- */
 
 function listenManualRaces() {
   startAdminListsRefresh();
   if (unsubscribeManualRaces) { unsubscribeManualRaces(); unsubscribeManualRaces = null; }
-  const since = new Date(derbyNow().getTime() - 2 * DAY_MS);
+  const since = new Date(syncedNow().getTime() - 2 * DAY_MS);
   unsubscribeManualRaces = onSnapshot(
     query(collection(db, "derbyManualRaces"), where("raceAt", ">=", since)),
     (snap) => {
@@ -7449,7 +7544,7 @@ function listenManualRaces() {
   );
 }
 
-function getManualRaceStatusText(race, now = derbyNow()) {
+function getManualRaceStatusText(race, now = syncedNow()) {
   if (race.status === "cancelled") return "キャンセル済み";
   if (now < race.openTime) return "受付前";
   if (now < race.closeTime) return "投票受付中";
@@ -7460,7 +7555,7 @@ function getManualRaceStatusText(race, now = derbyNow()) {
 function renderManualRaceAdminList() {
   const el = document.getElementById("manualRaceAdminList");
   if (!el || !isAdminUser()) return;
-  const now = derbyNow();
+  const now = syncedNow();
   const races = [...manualRaces.values()].sort((a, b) => b.raceTime - a.raceTime);
   if (races.length === 0) {
     el.innerHTML = `<div class="empty-state">まだ手動レースはありません</div>`;
@@ -7486,8 +7581,8 @@ function validateManualRaceInput(dateText, openText, closeText, startText) {
   const openTime = parseJstDateTimeInput(dateText, openText);
   const closeTime = parseJstDateTimeInput(dateText, closeText);
   if (!raceTime || !openTime || !closeTime) return { error: "開催日と時刻を正しく入力してください。" };
-  const now = derbyNow();
-  if (dateText < formatRaceId(now)) return { error: "開催日が過去の日付です。" };
+  const now = syncedNow();
+  if (dateText < formatDateId(now)) return { error: "開催日が過去の日付です。" };
   if (raceTime <= now) return { error: "レース開催の日時が過去です。" };
   if (openTime >= closeTime) return { error: "投票受付開始は、投票受付終了より前の時刻にしてください。" };
   if (closeTime >= raceTime) return { error: "投票受付終了は、レース開催より前の時刻にしてください。" };
@@ -7562,7 +7657,7 @@ document.getElementById("manualRaceAdminList")?.addEventListener("click", async 
       const snap = await transaction.get(ref);
       if (!snap.exists() || snap.data().status === "cancelled") throw new Error("ALREADY_CANCELLED");
       if (Number(snap.data().betCount || 0) > 0) throw new Error("HAS_BETS");
-      if (derbyNow() >= toDateValue(snap.data().raceAt)) throw new Error("ALREADY_STARTED");
+      if (syncedNow() >= toDateValue(snap.data().raceAt)) throw new Error("ALREADY_STARTED");
       transaction.update(ref, { status: "cancelled", cancelledAt: serverTimestamp(), cancelledByUid: currentUser.uid });
     });
     showAppToast("🏇 ゆうダービー管理", `${formatRaceLabel(raceId)} のレースをキャンセルしました`);
@@ -7582,7 +7677,7 @@ function renderBetRaceSelect() {
   const select = document.getElementById("betRaceSelect");
   const label = document.getElementById("betRaceLabel");
   if (!select) return;
-  const now = derbyNow();
+  const now = syncedNow();
   const open = getOpenBettingRaceContexts(now);
   const active = getActiveBettingRaceContext(now);
   const multiple = open.length > 1;
@@ -7592,7 +7687,7 @@ function renderBetRaceSelect() {
   if (select.dataset.key !== key) {
     select.dataset.key = key;
     select.innerHTML = open.map((c) => {
-      const day = c.dayId === formatRaceId(now) ? "本日" : (c.raceTime > now ? "明日" : "");
+      const day = c.dayId === formatDateId(now) ? "本日" : (c.raceTime > now ? "明日" : "");
       return `<option value="${escapeHTML(c.raceId)}">${escapeHTML(`${day} ${formatJstHourMinute(c.raceTime)}${c.manual ? " 特別レース" : ""}（締切 ${formatJstHourMinute(c.closeTime)}）`)}</option>`;
     }).join("");
   }
@@ -7611,10 +7706,10 @@ document.getElementById("betRaceSelect")?.addEventListener("change", (event) => 
 function renderUpcomingRacesLine() {
   const el = document.getElementById("raceUpcomingLine");
   if (!el) return;
-  const now = derbyNow();
+  const now = syncedNow();
   const upcoming = getRaceContextsAround(now).filter((c) => c.raceTime > now).slice(0, 4);
   const text = upcoming.map((c) => {
-    const day = c.dayId === formatRaceId(now) ? "本日" : "明日";
+    const day = c.dayId === formatDateId(now) ? "本日" : "明日";
     return `${day} ${formatJstHourMinute(c.raceTime)}${c.manual ? `（特別・受付 ${formatJstHourMinute(c.openTime)}〜${formatJstHourMinute(c.closeTime)}）` : ""}`;
   }).join(" ／ ");
   const html = text ? `今後のレース：${escapeHTML(text)}` : "";
@@ -7631,6 +7726,7 @@ function startAdminListsRefresh() {
     if (derbyView?.classList.contains("active")) renderManualRaceAdminList();
   }, 15000);
 }
+//#endif
 
 /* =========================================================
    📢 お知らせ
@@ -7660,9 +7756,20 @@ function normalizeAnnouncement(snap) {
     body: String(data.body || ""),
     createdAt: toDateValue(data.createdAt),
     updatedAt: toDateValue(data.updatedAt),
-    createdByName: String(data.createdByName || "")
+    createdByName: String(data.createdByName || ""),
+    scope: String(data.scope || "")
   };
 }
+
+/* 「サイトだけ」のお知らせは、アプリ版では表示しない */
+function isShownAnnouncement(a) { return a.scope !== "web"; }
+//#if WEB
+/* 公開するお知らせが、賭けに関係する話のときは「サイトだけ」の印を付ける（サーバーの isWebOnlyAnnouncement と同じ言葉） */
+const WEB_ONLY_ANNOUNCE_WORDS = /ダービー|競馬|馬券|オッズ|スロット|ゆうスロ|宝くじ|番くじ|くじ|確変|ジャックポット|賭け/i;
+function announcementScopeFields(title, body) { return WEB_ONLY_ANNOUNCE_WORDS.test(`${title}\n${body}`) ? { scope: "web" } : {}; }
+//#else
+//@ function announcementScopeFields() { return {}; }
+//#endif
 
 function getAnnouncementReadAt() {
   const stored = toDateValue(myLatestUserData?.lastAnnouncementReadAt);
@@ -7686,9 +7793,9 @@ function updateAnnouncementUnreadMark() {
 async function checkLatestAnnouncement() {
   const session = appSessionSeq;
   try {
-    const snap = await getDocs(query(collection(db, "announcements"), orderBy("createdAt", "desc"), limit(1)));
+    const snap = await getDocs(query(collection(db, "announcements"), orderBy("createdAt", "desc"), limit(5)));
     if (session !== appSessionSeq) return;
-    latestAnnouncementAt = snap.empty ? null : normalizeAnnouncement(snap.docs[0]).createdAt;
+    latestAnnouncementAt = snap.docs.map(normalizeAnnouncement).find(isShownAnnouncement)?.createdAt || null;
     updateAnnouncementUnreadMark();
   } catch (error) {
     console.error("お知らせの確認エラー:", error);
@@ -7701,7 +7808,7 @@ function openAnnouncementsView() {
   unsubscribeAnnouncements = onSnapshot(
     query(collection(db, "announcements"), orderBy("createdAt", "desc"), limit(ANNOUNCEMENT_LIST_LIMIT)),
     (snap) => {
-      announcements = snap.docs.map(normalizeAnnouncement).filter((a) => a.createdAt);
+      announcements = snap.docs.map(normalizeAnnouncement).filter((a) => a.createdAt && isShownAnnouncement(a));
       latestAnnouncementAt = announcements[0]?.createdAt || null;
       updateAnnouncementUnreadMark();
       renderAnnouncements();
@@ -7851,12 +7958,12 @@ document.getElementById("announcementForm")?.addEventListener("submit", async (e
   if (button) button.disabled = true;
   try {
     if (editingAnnouncementId) {
-      await updateDoc(doc(db, "announcements", editingAnnouncementId), { title, body, updatedAt: serverTimestamp() });
+      await updateDoc(doc(db, "announcements", editingAnnouncementId), { title, body, ...announcementScopeFields(title, body), updatedAt: serverTimestamp() });
     } else {
       /* ID は Firestore の自動ID（端末側で作る・衝突しない） */
       const ref = doc(collection(db, "announcements"));
       await setDoc(ref, {
-        title, body,
+        title, body, ...announcementScopeFields(title, body),
         createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
         createdByUid: currentUser.uid, createdByName: username || ""
       });
@@ -7883,6 +7990,18 @@ async function notifyNewAnnouncementToAll(announcementId) {
 }
 
 document.getElementById("announcementEditCancelButton")?.addEventListener("click", resetAnnouncementForm);
+//#if WEB
+document.getElementById("announcementTagButton")?.addEventListener("click", async (event) => {
+  const button = event.currentTarget, errorEl = document.getElementById("announcementFormError");
+  button.disabled = true;
+  try {
+    const result = await callAdminApi("tagAnnouncements");
+    if (errorEl) errorEl.textContent = `${result.tagged ?? 0} 件を「サイトだけ」にしました（全${result.total ?? 0}件）。`;
+  } catch (error) {
+    if (errorEl) errorEl.textContent = "できませんでした。もう一度お試しください。";
+  } finally { button.disabled = false; }
+});
+//#endif
 
 document.getElementById("announcementAdminList")?.addEventListener("click", async (event) => {
   if (!isAdminUser()) return;
@@ -10363,11 +10482,11 @@ async function passDaifugoTurn(roomId) {
    Firestore の使い方（無料枠を圧迫しないように）
    ・自分の銀行・株・ログインボーナスは users/{名前} の bank / stocks / lastLoginBonusDate に持つ。
      画面は、すでに常時購読している自分の users（listenMyCoins）から受け取る（新しい常時購読は作らない）
-   ・株価は market/current、総資産ランキングは rankings/assets の1件ずつ。毎日 13:00 に自動処理（derby-runner）だけが書く。
+   ・株価は market/current、総資産ランキングは rankings/assets の1件ずつ。毎日 13:00 に自動処理（GitHub Actions）だけが書く。
      画面を開いたときに1回読み、次の 13:00 の更新までは読み直さない
    ・売買・預け入れ・引き出し・借入・返済は、自分の users だけを書き換えるトランザクション1回
-   ・株価の更新・利息・返済期限切れの自動返済・ランキングの集計は、ブラウザでは行わない（derby-runner が1日1回）
-   会社・銀行の設定は derby-runner/economy.mjs と同じにすること
+   ・株価の更新・利息・返済期限切れの自動返済・ランキングの集計は、ブラウザでは行わない（GitHub Actions の自動処理が1日1回）
+   会社・銀行の設定は、自動処理（economy.mjs）と同じにすること
 ========================================================= */
 
 const STOCK_COMPANIES = [
@@ -10404,10 +10523,10 @@ function formatEconomyDate(dateText) {
 }
 
 /* いま表示されているべき株価・ランキングの日付（13:00 より前なら前日の分） */
-function expectedEconomyDate(now = derbyNow()) {
+function expectedEconomyDate(now = syncedNow()) {
   const jst = toJstFields(now);
   const beforeUpdate = jst.getUTCHours() < ECONOMY_UPDATE_HOUR;
-  return formatRaceId(beforeUpdate ? new Date(now.getTime() - 24 * 3600 * 1000) : now);
+  return formatDateId(beforeUpdate ? new Date(now.getTime() - 24 * 3600 * 1000) : now);
 }
 
 function economyCacheIsFresh(cache) {
@@ -10419,7 +10538,7 @@ function economyCacheIsFresh(cache) {
 /* 総資産ランキングは 9:00〜16:59 に1時間おきに更新される。その時間帯は20分たったら読み直す（読み取りは1回ぶん）。それ以外は次の13:00 の更新まで使い回す */
 function rankingCacheIsFresh() {
   if (!rankingCache) return false;
-  const hour = toJstFields(derbyNow()).getUTCHours();
+  const hour = toJstFields(syncedNow()).getUTCHours();
   if (hour >= 9 && hour < 17) return Date.now() - rankingCache.fetchedAt < 20 * 60 * 1000;
   return economyCacheIsFresh(rankingCache);
 }
@@ -10490,7 +10609,7 @@ function computeMyAssets(data, market) {
   return { coins, deposit: bank.deposit, stockValue, loan: bank.loan, total: coins + bank.deposit + stockValue - bank.loan };
 }
 
-function isLoanOverdue(bank, now = derbyNow()) {
+function isLoanOverdue(bank, now = syncedNow()) {
   const due = toDateValue(bank.loanDueAt);
   return bank.loan > 0 && (bank.overdue === true || (due && due <= now));
 }
@@ -10507,7 +10626,7 @@ function resetLoginBonusState() {
 }
 
 async function grantLoginBonusIfNeeded(data) {
-  const today = getTodayRaceId();
+  const today = getTodayDateId();
   if (!username || !currentUser || loginBonusInFlight || loginBonusCheckedDate === today) return;
   if (!data || typeof data.coins !== "number" || data.lastLoginBonusDate === today) return;
   loginBonusInFlight = true;
@@ -10636,7 +10755,7 @@ function renderEconomyView() {
   const bank = normalizeBankData(data.bank);
   const stocks = normalizeStocksData(data.stocks);
   const assets = computeMyAssets(data, market);
-  const now = derbyNow();
+  const now = syncedNow();
   const disabled = economyBusy ? "disabled" : "";
   const ranking = rankingCache?.data;
   const myRank = ranking?.users?.find?.((u) => u.name === username);
@@ -10680,7 +10799,7 @@ function renderEconomyView() {
   } else {
     const canBorrow = assets.coins <= BANK_LOAN_MAX_COINS;
     /* 13:00 の自動返済で完済した場合も、直近（7日以内）の自動返済の結果を表示する（bank.lastAutoRepay。新しい読み取りは無い） */
-    const autoAge = auto?.date ? (Date.parse(`${getTodayRaceId()}T00:00:00Z`) - Date.parse(`${auto.date}T00:00:00Z`)) / 86400000 : null;
+    const autoAge = auto?.date ? (Date.parse(`${getTodayDateId()}T00:00:00Z`) - Date.parse(`${auto.date}T00:00:00Z`)) / 86400000 : null;
     const paidOffNotice = auto && Number(auto.amount) > 0 && autoAge !== null && autoAge >= 0 && autoAge <= 7
       ? `<div class="econ-paid-off" role="status">
           <strong>✅ ${escapeHTML(formatEconomyDate(auto.date))} 13:00に自動返済：${formatCoins(auto.amount)}コイン（預金${formatCoins(auto.fromDeposit)}・手持ち${formatCoins(auto.fromCoins)}）</strong>
@@ -10818,7 +10937,7 @@ function theftSummaryText(last) {
 }
 
 function renderGuardCard(data, assets, now) {
-  const today = getTodayRaceId();
+  const today = getTodayDateId();
   const thisWeek = weekStartOf(today), nextWeek = nextWeekStartOf(today);
   const dow = new Date(now.getTime() + 9 * 3600000).getUTCDay();
   const canNext = dow === 5 || dow === 6 || dow === 0;
@@ -10874,7 +10993,7 @@ async function loadFundInfo() {
 function renderFundCard(data) {
   const info = fundInfoCache?.data;
   const g = data.fundGrant;
-  const age = g?.date ? (Date.parse(`${getTodayRaceId()}T00:00:00Z`) - Date.parse(`${g.date}T00:00:00Z`)) / 86400000 : null;
+  const age = g?.date ? (Date.parse(`${getTodayDateId()}T00:00:00Z`) - Date.parse(`${g.date}T00:00:00Z`)) / 86400000 : null;
   const recent = g && Number(g.amount) > 0 && age !== null && age >= 0 && age <= 7 ? g : null;
   return `
     <section class="econ-card econ-fund" aria-label="ゆう基金">
@@ -10895,7 +11014,7 @@ function notifyFundIfNew(data) {
   try { seen = localStorage.getItem(key) || ""; } catch { /* 覚えられなくても動く */ }
   if (seen === g.date) return;
   try { localStorage.setItem(key, g.date); } catch { /* 同上 */ }
-  const age = (Date.parse(`${getTodayRaceId()}T00:00:00Z`) - Date.parse(`${g.date}T00:00:00Z`)) / 86400000;
+  const age = (Date.parse(`${getTodayDateId()}T00:00:00Z`) - Date.parse(`${g.date}T00:00:00Z`)) / 86400000;
   if (age > 2 || fundModalShown) return;
   fundModalShown = true;
   const overlay = document.createElement("div");
@@ -10922,7 +11041,7 @@ function notifyTheftIfNew(data) {
   try { seen = localStorage.getItem(key) || ""; } catch { /* 覚えられなくても動く */ }
   if (seen === last.date) return;
   try { localStorage.setItem(key, last.date); } catch { /* 同上 */ }
-  const age = (Date.parse(`${getTodayRaceId()}T00:00:00Z`) - Date.parse(`${last.date}T00:00:00Z`)) / 86400000;
+  const age = (Date.parse(`${getTodayDateId()}T00:00:00Z`) - Date.parse(`${last.date}T00:00:00Z`)) / 86400000;
   if (age > 2 || theftModalShown) return;
   theftModalShown = true;
   const repelled = last.repelled === true;

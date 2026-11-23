@@ -62,6 +62,7 @@ export const CHAT_BACKGROUNDS = {
   stars: { label: "星空", css: "background:radial-gradient(#ffffff 1px,transparent 1.5px) 0 0/40px 40px,radial-gradient(#9fb2ff 1px,transparent 1.5px) 20px 20px/60px 60px,#141b33;" }
 };
 
+//#if WEB
 /* 確変台の見た目：{ label, vars（CSS 変数。style.css の [data-kk-theme] が使う）, swatch（候補の見本の色） } */
 export const KAKU_THEMES = {
   default: { label: "ふつう", swatch: "linear-gradient(90deg,#ff2d78,#ffe14a,#17b6ff,#b14cff)" },
@@ -82,14 +83,17 @@ export const KAKU_EFFECTS = {
   coins: { label: "コイン", emoji: ["🪙", "💰"] },
   hearts: { label: "ハート", emoji: ["💖", "💗", "💕"] }
 };
+//#endif
 
 /* 種類ごとの候補の id（Worker の SUPPORTER_PRESETS と同じ。テストで確かめる） */
 export const PRESET_IDS = {
   nameColor: Object.keys(NAME_COLORS),
   bubbleColor: Object.keys(BUBBLE_COLORS),
-  chatBg: Object.keys(CHAT_BACKGROUNDS),
-  kakuTheme: Object.keys(KAKU_THEMES),
+  chatBg: Object.keys(CHAT_BACKGROUNDS)
+//#if WEB
+  ,kakuTheme: Object.keys(KAKU_THEMES),
   kakuFx: Object.keys(KAKU_EFFECTS)
+//#endif
 };
 
 /* ---------- いまの状態（画面全体で1つ） ---------- */
@@ -147,6 +151,7 @@ export function applyChatBackground(el) {
   el.classList.toggle("sup-bg-dark", id === "night" || id === "stars");
 }
 
+//#if WEB
 /* ---------- ゆうスロの確変台：見た目と当たり演出（自分の画面だけ） ---------- */
 export function applyKakuTheme(el, on) {
   if (!el) return;
@@ -169,6 +174,7 @@ export function playKakuEffect() {
     setTimeout(() => s.remove(), 2400);
   }
 }
+//#endif
 
 /* 新しい機能を、サポーターが先に遊べるか。featureId の公開日時（ミリ秒）を渡す：
    サポーターは公開日時から、そうでない人は、さらに EARLY_ACCESS_MS（1週間）あとから遊べる */

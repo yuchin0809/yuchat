@@ -4,8 +4,8 @@
      このファイルは、画面（3Dの消しゴム・強さ・パーツの一覧）を描いて、「買う」「付ける」を頼むだけ。
    ・ゆうワールド（yuworld.js）から renderKeshi({ root, api, esc, openRooms, leagueFirst, onBack }) で開く。
 ========================================================= */
-import { keshiStatsView, keshiPunchView, keshiLeaguePhase, eraserIcon } from "./yukeshi-core.js?v=20261123-fix1";
-import { createEraserStage, SLEEVE_COLORS, sleeveCss } from "./yukeshi3d.js?v=20261123-fix1";
+import { keshiStatsView, keshiPunchView, keshiLeaguePhase, eraserIcon } from "./yukeshi-core.js?v=20261123-app1";
+import { createEraserStage, SLEEVE_COLORS, sleeveCss } from "./yukeshi3d.js?v=20261123-app1";
 
 const SLOT_NAMES = { body: "本体", edge: "ふち", sole: "そこ", weight: "おもり" };
 const STAT_NAMES = [["m", "重さ"], ["s", "すべり"], ["b", "反発"], ["z", "大きさ"]];
@@ -102,7 +102,7 @@ async function openBelt() {
   if (busy) return;
   const my = token;
   stopKeshi();
-  try { belt = belt || await import("./yukeshi-belt.js?v=20261123-fix1"); }
+  try { belt = belt || await import("./yukeshi-belt.js?v=20261123-app1"); }
   catch (_) { alert("読み込めませんでした。通信環境をご確認のうえ、もう一度お試しください。"); drawShell(); return; }
   if (token !== my + 1) return;
   belt.renderBelt({ root: ctx.root, esc: ctx.esc, api: ctx.api, table, st, onBack: () => renderKeshi(ctx) });
@@ -111,7 +111,7 @@ async function openPractice() {
   if (busy) return;
   const pl = plan(), eq = previewEq(), color = st.color, my = token;
   stopKeshi();
-  try { practice = practice || await import("./yukeshi-practice.js?v=20261123-fix1"); }
+  try { practice = practice || await import("./yukeshi-practice.js?v=20261123-app1"); }
   catch (_) { alert("試し打ちを開けませんでした。通信環境をご確認のうえ、もう一度お試しください。"); drawShell(); return; }
   if (token !== my + 1) return;
   practice.renderPractice({ root: ctx.root, esc: ctx.esc, table, eq, color, name: st.name || "", title: pl.slots.length ? `選んでいるパーツ：${pl.slots.map((slot) => pl.part(slot).name).join("・")}（まだ買っていないものも試せます）` : "いま付けているパーツ", onBack: () => drawShell() });
@@ -192,7 +192,7 @@ async function apply() {
   if (r && r.bought) { ctx.root.querySelector("#ykCoins")?.classList.add("pop"); setTimeout(() => ctx.root.querySelector("#ykCoins")?.classList.remove("pop"), 600); }
 }
 function errorMsg(code) {
-  const m = { ng_word: "使えない言葉が入っています。", bad_request: "名前は、10文字までです。", insufficient_coins: "コインが足りません。", seated: "ゆうスロの席に着いているあいだは買えません。席を立ってから、もう一度お試しください。", busy: "通信が重なりました。もう一度お試しください。", already_owned: "そのパーツはすでに持っています。", not_published: "消しバトは、ただいま非公開になりました。" };
+  const m = { ng_word: "使えない言葉が入っています。", bad_request: "名前は、10文字までです。", insufficient_coins: "コインが足りません。", seated: "席に着いているあいだは買えません。席を立ってから、もう一度お試しください。", busy: "通信が重なりました。もう一度お試しください。", already_owned: "そのパーツはすでに持っています。", not_published: "消しバトは、ただいま非公開になりました。" };
   alert(m[code] || "うまくいきませんでした（" + (code || "エラー") + "）。もう一度お試しください。");
   if (code === "busy" || code === "already_owned") load(token);
 }
