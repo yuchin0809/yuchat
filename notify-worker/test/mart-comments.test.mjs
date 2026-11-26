@@ -117,7 +117,7 @@ test("NPC のコメント：値段の段階（安い・ふつう・ちょっと�
 });
 
 test("プレイヤーのコメント：書ける・80文字まで・URL/メール/電話番号/NG は送れない・10秒に1回・1商品10件・最大30件。書いた人の名前が付く", async () => {
-  const t = setup({ owned }); const id = await listed(t, titanRef);
+  const t = setup({ owned }); const id = await listed(t, Math.round(titanRef * 1.5));   // 定価の1.1倍以下だと、NPC が30分以内に買って出品が消えるので、それより高くする
   const r = await t.act(1, { action: "martCommentPost", id, text: "これ気になる！" });
   assert.equal(r.ok, true);
   assert.equal(r.comments.find((c) => c.mine).n, "u1");
