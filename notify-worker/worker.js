@@ -6850,9 +6850,10 @@ async function keshiEquip(deps, uid, body) {
 export const MART = {
   feePct: 10, maxOpen: 10, listMs: 3 * 86400000, offerMs: 24 * 3600000, maxListings: 1500, maxJson: 900000,
   usedMarket: 0.75,        // 中古の相場＝ショップの値段 × 0.75
-  npcMaxPay: 4000,         // NPC が1件に払う（値下げ依頼・買い取り）上限
+  npcMaxPay: Number.MAX_SAFE_INTEGER,   // NPC が1件に払う上限：パーツは上限なし（定価の1.1倍まで買う）
+  npcPrizeMaxPay: 4000,    // 番くじ景品だけは、コインが増えすぎないように 4000 まで
   npcSlots: 14, npcPeriodsH: [4, 6, 8, 12],
-  npcBuyMax: 1.05, npcBuyChance: 0.9, npcOfferChance: 0.85,   // 買い取りの確率 0.55→0.9／値下げ依頼の確率 0.7→0.85
+  npcBuyMax: 1.1, npcBuyChance: 1, npcOfferChance: 0.85,   // パーツ：定価の1.1倍までなら、必ず買う（出品から30分以内）
   highPrice: 3000, highRatio: 3, repeatPair: 3, logMax: 120, doneMax: 60,
   kakuLeadMs: 10 * 60000,   // 確変枠：枠の始まりの何ミリ秒前まで出品できるか（出品の期限もここまで）
   kakuMaxPerDay: 3,         // 確変枠：1人が1日に持てる枠（買って増やせる上限）
@@ -6917,13 +6918,13 @@ function martNpcPlan(L) {
   if (L.k === "kaku" || L.au) return null;   // 確変枠・オークションは、NPC は固定価格で買わない（オークションは入札で参加する）
   const ref = martRefOf(L);
   if (!ref) return null;
-  const P = L.k === "prize" ? MART.prizeNpc : { buyMax: MART.npcBuyMax, lo: 0.8, span: 0.2 };
-  if (L.price <= Math.floor(ref * P.buyMax) && L.price <= MART.npcMaxPay) {
+  const P = L.k === "prize" ? MART.prizeNpc : { buyMax: MART.npcBuyMax, lo: 0.8, span: 0.2 }, maxPay = L.k === "prize" ? MART.npcPrizeMaxPay : MART.npcMaxPay;
+  if (L.price <= Math.floor(ref * P.buyMax) && L.price <= maxPay) {
     if (martUnit(L.i, 11) >= MART.npcBuyChance) return null;
-    return { type: "buy", at: L.t + 3 * 60000 + Math.floor(martUnit(L.i, 21) * 42 * 60000), q: L.price, name: martNpcName(L.i, 31) };
+    return { type: "buy", at: L.t + 60000 + Math.floor(martUnit(L.i, 21) * 29 * 60000), q: L.price, name: martNpcName(L.i, 31) };
   }
   if (martUnit(L.i, 12) >= MART.npcOfferChance) return null;
-  const q = Math.min(MART.npcMaxPay, Math.max(10, Math.round((ref * (P.lo + P.span * martUnit(L.i, 13))) / 10) * 10));
+  const q = Math.min(maxPay, Math.max(10, Math.round((ref * (P.lo + P.span * martUnit(L.i, 13))) / 10) * 10));
   if (q >= L.price) return null;
   const at = L.t + 10 * 60000 + Math.floor(martUnit(L.i, 22) * 3 * 3600000);
   return { type: "offer", at, until: at + MART.offerMs, q, name: martNpcName(L.i, 32) };
@@ -7320,7 +7321,7 @@ function martAucPlayerNpc(L) {
   if (L.k === "kaku") return { ev: [], cap: 0 };
   const ref = martRefOf(L);
   if (!ref || martUnit(L.i, 41) >= MART.auc.npcOnPlayer) return { ev: [], cap: 0 };
-  const cap = L.k === "prize" ? Math.min(MART.npcMaxPay, Math.round((ref * (MART.prizeNpc.lo + MART.prizeNpc.span)) / 10) * 10) : Math.min(MART.npcMaxPay, Math.round((ref * MART.auc.npcOnPlayerCap) / 10) * 10);
+  const cap = L.k === "prize" ? Math.min(MART.npcPrizeMaxPay, Math.round((ref * (MART.prizeNpc.lo + MART.prizeNpc.span)) / 10) * 10) : Math.min(MART.npcMaxPay, Math.round((ref * MART.auc.npcOnPlayerCap) / 10) * 10);
   const n = martUnit(L.i, 42) < 0.5 ? 2 : 1;
   return { ev: martAucTimes(L.t, L.au.e0, n, L.i, 43).map((t, k) => ({ t, name: martNpcName(L.i, 44 + k) })), cap };
 }

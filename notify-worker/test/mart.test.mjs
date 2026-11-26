@@ -210,7 +210,7 @@ test("NPC の出品：いつも14件ほど。値段は相場（ショップの�
   assert.equal(later.listings.filter((x) => x.npc && !x.au).length, MART.npcSlots, "時間がたつと入れ替わる");
 });
 
-test("NPC の買い取り：相場の1.05倍以下の出品は約半分が買われる。受け取るのは売値−手数料。精算は出品者が開いたとき", async () => {
+test("NPC の買い取り：相場の1.1倍以下の出品は、30分以内に必ず買われる。受け取るのは売値−手数料。精算は出品者が開いたとき", async () => {
   const t = setup({ owned: ALL_OWNED });
   const items = ALL_OWNED.slice(0, MART.maxOpen).map((o) => o.split(":"));
   const ids = [];
@@ -220,12 +220,12 @@ test("NPC の買い取り：相場の1.05倍以下の出品は約半分が買わ
     assert.equal(r.ok, true); ids.push(r.id);
   }
   const before = t.coinsOf(0), totalBefore = t.total();
-  t.state.now += 95 * MIN;
+  t.state.now += 31 * MIN;
   const st = await t.act(1, { action: "martStatus" });
   const stillOpen = ids.filter((id) => st.listings.some((x) => x.id === id));
   const mine = await t.act(0, { action: "martMine" });
   const soldN = ids.length - mine.listings.length;
-  assert.ok(soldN >= 1 && soldN < ids.length, `約半分が NPC に売れる（${soldN}/${ids.length}）`);
+  assert.equal(soldN, ids.length, `30分以内に、すべて NPC に売れる（${soldN}/${ids.length}）`);
   assert.equal(mine.done.filter((d) => d.npc).length, soldN);
   assert.equal(stillOpen.length, mine.listings.length, "買われた出品は、一覧からも消えている");
   const gain = mine.done.reduce((a, d) => a + d.q - d.fee, 0);
@@ -844,4 +844,17 @@ test("ベルトコンベアのパーツ（レア・ミューテーション付�
   const lp = await t.act(0, { action: "martList", slot: "weight", part: "platinum", price: 5000 });
   assert.equal((await t.act(0, { action: "martCancel", id: lp.id })).ok, true);
   assert.ok(t.ownedOf(0).includes("weight:platinum"), "新品のまま戻る");
+});
+
+test("NPC の買い取り：上限なし（高いパーツも定価の1.1倍まで買う）。1.1倍を超える出品は、30分たっても買わない", async () => {
+  const t = setup({ owned: ALL_OWNED });
+  const [slot, part] = ALL_OWNED.map((o) => o.split(":")).sort((a, b) => KESHI_PARTS[b[0]].find((p) => p.id === b[1]).price - KESHI_PARTS[a[0]].find((p) => p.id === a[1]).price)[0];
+  const ref = Math.round(KESHI_PARTS[slot].find((p) => p.id === part).price * 0.75);
+  const hi = Math.floor(ref * 1.1);
+  const r = await t.act(0, { action: "martList", slot, part, price: hi });
+  assert.equal(r.ok, true);
+  t.state.now += 31 * MIN;
+  const mine = await t.act(0, { action: "martMine" });
+  assert.equal(mine.listings.length, 0, `定価の1.1倍（${hi}）でも30分以内に売れる`);
+  assert.ok(mine.done.some((d) => d.npc && d.q === hi));
 });
