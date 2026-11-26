@@ -6852,7 +6852,7 @@ export const MART = {
   usedMarket: 0.75,        // 中古の相場＝ショップの値段 × 0.75
   npcMaxPay: 4000,         // NPC が1件に払う（値下げ依頼・買い取り）上限
   npcSlots: 14, npcPeriodsH: [4, 6, 8, 12],
-  npcBuyMax: 1.05, npcBuyChance: 0.55, npcOfferChance: 0.7,
+  npcBuyMax: 1.05, npcBuyChance: 0.9, npcOfferChance: 0.85,   // 買い取りの確率 0.55→0.9／値下げ依頼の確率 0.7→0.85
   highPrice: 3000, highRatio: 3, repeatPair: 3, logMax: 120, doneMax: 60,
   kakuLeadMs: 10 * 60000,   // 確変枠：枠の始まりの何ミリ秒前まで出品できるか（出品の期限もここまで）
   kakuMaxPerDay: 3,         // 確変枠：1人が1日に持てる枠（買って増やせる上限）
@@ -6920,7 +6920,7 @@ function martNpcPlan(L) {
   const P = L.k === "prize" ? MART.prizeNpc : { buyMax: MART.npcBuyMax, lo: 0.8, span: 0.2 };
   if (L.price <= Math.floor(ref * P.buyMax) && L.price <= MART.npcMaxPay) {
     if (martUnit(L.i, 11) >= MART.npcBuyChance) return null;
-    return { type: "buy", at: L.t + 5 * 60000 + Math.floor(martUnit(L.i, 21) * 85 * 60000), q: L.price, name: martNpcName(L.i, 31) };
+    return { type: "buy", at: L.t + 3 * 60000 + Math.floor(martUnit(L.i, 21) * 42 * 60000), q: L.price, name: martNpcName(L.i, 31) };
   }
   if (martUnit(L.i, 12) >= MART.npcOfferChance) return null;
   const q = Math.min(MART.npcMaxPay, Math.max(10, Math.round((ref * (P.lo + P.span * martUnit(L.i, 13))) / 10) * 10));
