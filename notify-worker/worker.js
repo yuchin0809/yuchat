@@ -6853,7 +6853,7 @@ export const MART = {
   npcMaxPay: Number.MAX_SAFE_INTEGER,   // NPC が1件に払う上限：パーツは上限なし（定価の1.1倍まで買う）
   npcPrizeMaxPay: 4000,    // 番くじ景品だけは、コインが増えすぎないように 4000 まで
   npcSlots: 14, npcPeriodsH: [4, 6, 8, 12],
-  npcBuyMax: 1.1, npcBuyChance: 1, npcOfferChance: 0.85,   // パーツ：定価の1.1倍までなら、必ず買う（出品から30分以内）
+  npcBuyMax: 1.1, npcBuyChance: 1, npcOfferChance: 1,   // パーツ：定価の1.1倍までなら、必ず買う（出品から30分以内）
   highPrice: 3000, highRatio: 3, repeatPair: 3, logMax: 120, doneMax: 60,
   kakuLeadMs: 10 * 60000,   // 確変枠：枠の始まりの何ミリ秒前まで出品できるか（出品の期限もここまで）
   kakuMaxPerDay: 3,         // 確変枠：1人が1日に持てる枠（買って増やせる上限）
@@ -6913,24 +6913,33 @@ function martNpcById(id, now, sold) {
   return martNpcListing(j, e, startMs, endMs);
 }
 
-/* NPC が、人の出品にどうするか（すべて出品の id と時刻だけで決まる）。買い取り：buyAt を過ぎたら売れる。値下げ依頼：offerAt〜offerAt+24時間に出る */
-function martNpcPlan(L) {
+/* NPC が、人の出品にどうするか（すべて出品の id と時刻だけで決まる）。
+   ・値下げ交渉：どの出品にも、出品の直後（30秒後）から、NPC が値下げの依頼を出す。受ける・断るは出品者しだい（24時間）。
+   ・買い取り：定価の1.1倍以下（景品は相場の0.7倍以下）なら、出品の5〜30分後に、値下げしなくても出品の値段のまま必ず買う。 */
+function martNpcParams(L) {
   if (L.k === "kaku" || L.au) return null;   // 確変枠・オークションは、NPC は固定価格で買わない（オークションは入札で参加する）
   const ref = martRefOf(L);
   if (!ref) return null;
   const P = L.k === "prize" ? MART.prizeNpc : { buyMax: MART.npcBuyMax, lo: 0.8, span: 0.2 }, maxPay = L.k === "prize" ? MART.npcPrizeMaxPay : MART.npcMaxPay;
-  if (L.price <= Math.floor(ref * P.buyMax) && L.price <= maxPay) {
-    if (martUnit(L.i, 11) >= MART.npcBuyChance) return null;
-    return { type: "buy", at: L.t + 60000 + Math.floor(martUnit(L.i, 21) * 29 * 60000), q: L.price, name: martNpcName(L.i, 31) };
-  }
-  if (martUnit(L.i, 12) >= MART.npcOfferChance) return null;
-  const q = Math.min(maxPay, Math.max(10, Math.round((ref * (P.lo + P.span * martUnit(L.i, 13))) / 10) * 10));
+  return { ref, P, maxPay, buyOk: L.price <= Math.floor(ref * P.buyMax) && L.price <= maxPay };
+}
+function martNpcBuyPlan(L) {
+  const c = martNpcParams(L);
+  if (!c || !c.buyOk || martUnit(L.i, 11) >= MART.npcBuyChance) return null;
+  return { type: "buy", at: L.t + 5 * 60000 + Math.floor(martUnit(L.i, 21) * 25 * 60000), q: L.price, name: martNpcName(L.i, 31) };
+}
+function martNpcOfferPlan(L) {
+  const c = martNpcParams(L);
+  if (!c || martUnit(L.i, 12) >= MART.npcOfferChance) return null;
+  // 買い取りの対象の出品は、出品の値段の85〜95%（値下げ交渉）。それより高い出品は、相場の80〜100%（景品は相場の50〜65%）
+  const base = c.buyOk ? L.price * (0.85 + 0.1 * martUnit(L.i, 13)) : c.ref * (c.P.lo + c.P.span * martUnit(L.i, 13));
+  const q = Math.min(c.maxPay, Math.max(10, Math.round(base / 10) * 10));
   if (q >= L.price) return null;
-  const at = L.t + 10 * 60000 + Math.floor(martUnit(L.i, 22) * 3 * 3600000);
+  const at = L.t + 30000;
   return { type: "offer", at, until: at + MART.offerMs, q, name: martNpcName(L.i, 32) };
 }
-const martNpcBought = (L, now) => { const p = martNpcPlan(L); return p && p.type === "buy" && now >= p.at && p.at < L.e ? p : null; };
-const martNpcOffer = (L, now) => { const p = martNpcPlan(L); return p && p.type === "offer" && now >= p.at && now < p.until && now < L.e && !(L.dn || []).includes("npc") ? p : null; };
+const martNpcBought = (L, now) => { const p = martNpcBuyPlan(L); return p && now >= p.at && p.at < L.e ? p : null; };
+const martNpcOffer = (L, now) => { const p = martNpcOfferPlan(L); return p && now >= p.at && now < p.until && now < L.e && !(L.dn || []).includes("npc") ? p : null; };
 
 /* ----- 保存（martIndex/open） ----- */
 let martCache = { at: 0, cur: null };

@@ -858,3 +858,26 @@ test("NPC の買い取り：上限なし（高いパーツも定価の1.1倍ま�
   assert.equal(mine.listings.length, 0, `定価の1.1倍（${hi}）でも30分以内に売れる`);
   assert.ok(mine.done.some((d) => d.npc && d.q === hi));
 });
+
+test("NPC の値下げ交渉：出品の直後に必ず来る。受ければその額で売れ、断っても（無視しても）値下げなしで30分以内に買われる", async () => {
+  const t = setup({ owned: ALL_OWNED });
+  const [slot, part] = ALL_OWNED[0].split(":");
+  const ref = Math.round(KESHI_PARTS[slot].find((p) => p.id === part).price * 0.75);
+  const a = await t.act(0, { action: "martList", slot, part, price: ref });
+  const [slot2, part2] = ALL_OWNED[1].split(":");
+  const ref2 = Math.round(KESHI_PARTS[slot2].find((p) => p.id === part2).price * 0.75);
+  const b = await t.act(0, { action: "martList", slot: slot2, part: part2, price: ref2 });
+  t.state.now += MIN;   // 出品の1分後
+  const mine = await t.act(0, { action: "martMine" });
+  const A = mine.listings.find((x) => x.id === a.id), B = mine.listings.find((x) => x.id === b.id);
+  assert.ok(A && B, "まだ買われていない");
+  assert.ok(A.npcOffer && A.npcOffer.q < ref, "出品の直後に、値下げの依頼が来る");
+  assert.ok(B.npcOffer && B.npcOffer.q < ref2);
+  const acc = await t.act(0, { action: "martAnswer", id: a.id, who: "npc", accept: true });
+  assert.equal(acc.ok, true); assert.equal(acc.price, A.npcOffer.q, "受けたら、その額で売れる");
+  assert.equal((await t.act(0, { action: "martAnswer", id: b.id, who: "npc", accept: false })).ok, true);
+  t.state.now += 31 * MIN;
+  const after = await t.act(0, { action: "martMine" });
+  assert.equal(after.listings.some((x) => x.id === b.id), false, "断っても、30分以内に買われる");
+  assert.ok(after.done.some((d) => d.npc && d.q === ref2), "値下げなし（出品の値段のまま）で売れる");
+});
